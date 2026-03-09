@@ -2,8 +2,19 @@
 
 import json
 import subprocess
+from pathlib import Path
 
 from gapp.sdk.config import load_solutions
+
+
+def _display_path(path: str | None) -> str | None:
+    """Shorten home-relative paths to ~/..."""
+    if not path:
+        return path
+    home = str(Path.home())
+    if path.startswith(home):
+        return "~" + path[len(home):]
+    return path
 
 
 def list_solutions(include_remote: bool = False) -> list[dict]:
@@ -19,7 +30,7 @@ def list_solutions(include_remote: bool = False) -> list[dict]:
         results.append({
             "name": name,
             "project_id": entry.get("project_id"),
-            "repo_path": entry.get("repo_path"),
+            "repo_path": _display_path(entry.get("repo_path")),
             "source": "local",
         })
 

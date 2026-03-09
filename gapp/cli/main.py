@@ -37,8 +37,31 @@ def init():
 @click.argument("project_id", required=False)
 def setup_cmd(project_id):
     """GCP foundation: enable APIs, create solution bucket, label project."""
-    click.echo("  setup is not yet implemented.")
-    raise SystemExit(1)
+    from gapp.sdk.setup import setup_solution
+
+    try:
+        result = setup_solution(project_id)
+    except RuntimeError as e:
+        click.echo(f"  Error: {e}", err=True)
+        raise SystemExit(1)
+
+    click.echo()
+    click.echo(f"  {result['name']} \u2192 {result['project_id']}")
+    click.echo()
+
+    if result["apis"]:
+        for api in result["apis"]:
+            click.echo(f"    API {api} enabled \u2713")
+    else:
+        click.echo("    No APIs required")
+
+    click.echo(f"    Bucket gs://{result['bucket']} {result['bucket_status']} \u2713")
+    click.echo(f"    Project label gapp-{result['name']} {result['label_status']} \u2713")
+    click.echo(f"    Saved to solutions.yaml \u2713")
+    click.echo()
+
+    click.echo("  Next: gapp secret list (check prerequisites)")
+    click.echo("    or: gapp deploy (if no secrets needed)")
 
 
 @main.command()
