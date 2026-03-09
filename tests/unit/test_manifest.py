@@ -3,8 +3,10 @@
 from pathlib import Path
 
 from gapp.sdk.manifest import (
+    get_entrypoint,
     get_prerequisite_secrets,
     get_required_apis,
+    get_service_config,
     get_solution_name,
     load_manifest,
 )
@@ -57,3 +59,38 @@ def test_required_apis():
 
 def test_required_apis_empty():
     assert get_required_apis({}) == []
+
+
+def test_entrypoint():
+    manifest = {"service": {"entrypoint": "my_app.mcp.server:mcp_app"}}
+    assert get_entrypoint(manifest) == "my_app.mcp.server:mcp_app"
+
+
+def test_entrypoint_missing():
+    assert get_entrypoint({}) is None
+
+
+def test_service_config_defaults():
+    manifest = {"service": {"entrypoint": "app:main"}}
+    config = get_service_config(manifest)
+    assert config["entrypoint"] == "app:main"
+    assert config["port"] == 8080
+    assert config["memory"] == "512Mi"
+    assert config["cpu"] == "1"
+    assert config["max_instances"] == 1
+    assert config["public"] is False
+    assert config["env"] == {}
+
+
+def test_service_config_overrides():
+    manifest = {"service": {
+        "entrypoint": "app:main",
+        "memory": "1Gi",
+        "public": True,
+        "env": {"FOO": "bar"},
+    }}
+    config = get_service_config(manifest)
+    assert config["port"] == 8080
+    assert config["memory"] == "1Gi"
+    assert config["public"] is True
+    assert config["env"] == {"FOO": "bar"}

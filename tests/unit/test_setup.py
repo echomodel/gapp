@@ -19,10 +19,8 @@ def _make_solution(tmp_path, monkeypatch, name="my-app"):
     deploy = repo / "deploy"
     deploy.mkdir()
     (deploy / "manifest.yaml").write_text(
-        "prerequisites:\n"
-        "  apis:\n"
-        "    - run.googleapis.com\n"
-        "    - secretmanager.googleapis.com\n"
+        "service:\n"
+        "  entrypoint: my_app.mcp.server:mcp_app\n"
     )
 
     save_solutions({name: {"repo_path": str(repo)}})
@@ -40,13 +38,16 @@ def test_setup_with_explicit_project(mock_api, mock_bucket, mock_label, tmp_path
 
     assert result["name"] == "my-app"
     assert result["project_id"] == "my-project"
-    assert result["apis"] == ["run.googleapis.com", "secretmanager.googleapis.com"]
+    assert "run.googleapis.com" in result["apis"]
+    assert "secretmanager.googleapis.com" in result["apis"]
+    assert "artifactregistry.googleapis.com" in result["apis"]
+    assert "cloudbuild.googleapis.com" in result["apis"]
     assert result["bucket"] == "gapp-my-app-my-project"
     assert result["bucket_status"] == "created"
     assert result["label_status"] == "added"
 
     mock_api.assert_any_call("my-project", "run.googleapis.com")
-    mock_api.assert_any_call("my-project", "secretmanager.googleapis.com")
+    mock_api.assert_any_call("my-project", "artifactregistry.googleapis.com")
     mock_bucket.assert_called_once_with("my-project", "gapp-my-app-my-project")
     mock_label.assert_called_once_with("my-project", "my-app")
 

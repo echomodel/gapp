@@ -7,6 +7,14 @@ from gapp.sdk.config import load_solutions, save_solutions
 from gapp.sdk.context import get_git_root, resolve_solution
 from gapp.sdk.manifest import get_required_apis, load_manifest
 
+# APIs that every gapp solution needs — enabled automatically
+_FOUNDATION_APIS = [
+    "run.googleapis.com",
+    "secretmanager.googleapis.com",
+    "artifactregistry.googleapis.com",
+    "cloudbuild.googleapis.com",
+]
+
 
 def setup_solution(project_id: str | None = None) -> dict:
     """Set up GCP foundation for the current solution.
@@ -50,11 +58,12 @@ def setup_solution(project_id: str | None = None) -> dict:
         "label_status": None,
     }
 
-    # Enable APIs
+    # Enable APIs (foundation + any solution-specific extras)
     from pathlib import Path
     git_root = Path(git_root) if git_root else None
     manifest = load_manifest(git_root) if git_root else {}
-    apis = get_required_apis(manifest)
+    extra_apis = get_required_apis(manifest)
+    apis = list(dict.fromkeys(_FOUNDATION_APIS + extra_apis))  # deduplicate, preserve order
     for api in apis:
         _enable_api(project_id, api)
     result["apis"] = apis

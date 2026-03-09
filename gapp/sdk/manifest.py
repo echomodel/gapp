@@ -28,3 +28,22 @@ def get_prerequisite_secrets(manifest: dict) -> dict:
 def get_required_apis(manifest: dict) -> list:
     """Return required GCP APIs from the manifest."""
     return manifest.get("prerequisites", {}).get("apis", [])
+
+
+def get_entrypoint(manifest: dict) -> str | None:
+    """Return the service entrypoint from the manifest."""
+    return manifest.get("service", {}).get("entrypoint")
+
+
+def get_service_config(manifest: dict) -> dict:
+    """Return service configuration with defaults."""
+    service = manifest.get("service", {})
+    return {
+        "entrypoint": service.get("entrypoint"),
+        "port": 8080,
+        "memory": service.get("memory", "512Mi"),
+        "cpu": service.get("cpu", "1"),
+        "max_instances": service.get("max_instances", 1),
+        "public": service.get("public", False),
+        "env": service.get("env", {}),
+    }

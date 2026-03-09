@@ -65,10 +65,23 @@ def setup_cmd(project_id):
 
 
 @main.command()
-def deploy():
+@click.option("--yes", "-y", is_flag=True, help="Auto-approve terraform apply.")
+def deploy(yes):
     """Build + terraform apply (requires setup + prerequisites)."""
-    click.echo("  deploy is not yet implemented.")
-    raise SystemExit(1)
+    from gapp.sdk.deploy import deploy_solution
+
+    try:
+        result = deploy_solution(auto_approve=yes)
+    except RuntimeError as e:
+        click.echo(f"  Error: {e}", err=True)
+        raise SystemExit(1)
+
+    click.echo()
+    click.echo(f"  {result['name']} deployed to {result['project_id']}")
+    click.echo(f"    Image: {result['image']}")
+    if result.get("service_url"):
+        click.echo(f"    URL:   {result['service_url']}")
+    click.echo()
 
 
 @main.command()

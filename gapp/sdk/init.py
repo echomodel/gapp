@@ -33,11 +33,8 @@ def init_solution(repo_path: Path | None = None) -> dict:
     else:
         manifest_path.parent.mkdir(parents=True, exist_ok=True)
         manifest_path.write_text(
-            "prerequisites:\n"
-            "  secrets: {}\n"
-            "  apis:\n"
-            "    - run.googleapis.com\n"
-            "    - secretmanager.googleapis.com\n"
+            "service:\n"
+            "  entrypoint: PACKAGE.mcp.server:mcp_app  # REQUIRED: update this\n"
         )
         result["manifest_status"] = "created"
 
