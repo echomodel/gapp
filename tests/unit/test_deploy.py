@@ -1,10 +1,10 @@
 """Tests for gapp.sdk.deploy — build and tfvars logic."""
 
-from gapp.sdk.deploy import _build_tfvars, _get_dockerfile_template, _secret_name_to_env_var
+from gapp.sdk.deploy import _build_tfvars, _get_template, _secret_name_to_env_var
 
 
 def test_dockerfile_template_exists():
-    path = _get_dockerfile_template()
+    path = _get_template("Dockerfile")
     assert path.exists()
     content = path.read_text()
     assert "ARG ENTRYPOINT" in content

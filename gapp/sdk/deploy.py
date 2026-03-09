@@ -192,9 +192,9 @@ def _image_exists(
     return tag in result.stdout
 
 
-def _get_dockerfile_template() -> Path:
-    """Get the path to gapp's standard Dockerfile template."""
-    return Path(__file__).resolve().parent.parent / "templates" / "Dockerfile"
+def _get_template(name: str) -> Path:
+    """Get the path to a gapp template file."""
+    return Path(__file__).resolve().parent.parent / "templates" / name
 
 
 def _build_and_push(
@@ -219,14 +219,15 @@ def _build_and_push(
         )
         archive.wait()
 
-        # Copy gapp's Dockerfile template (overwrites any repo Dockerfile)
-        shutil.copy2(_get_dockerfile_template(), Path(build_dir) / "Dockerfile")
+        # Copy gapp's Dockerfile and cloudbuild config
+        shutil.copy2(_get_template("Dockerfile"), Path(build_dir) / "Dockerfile")
+        shutil.copy2(_get_template("cloudbuild.yaml"), Path(build_dir) / "cloudbuild.yaml")
 
-        # Submit to Cloud Build
+        # Submit to Cloud Build with substitutions for build arg
         result = subprocess.run(
             ["gcloud", "builds", "submit",
-             "--tag", image,
-             "--build-arg", f"ENTRYPOINT={entrypoint}",
+             "--config", f"{build_dir}/cloudbuild.yaml",
+             "--substitutions", f"_ENTRYPOINT={entrypoint},_IMAGE={image}",
              "--project", project_id,
              build_dir],
             text=True,
