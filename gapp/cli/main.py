@@ -25,6 +25,7 @@ def init():
     click.echo()
     click.echo(f"  Initialized gapp solution: {result['name']}")
     click.echo(f"    gapp.yaml {result['manifest_status']} \u2713")
+    click.echo(f"    Dockerfile {result['dockerfile_status']} \u2713")
     click.echo(f"    GitHub topic 'gapp-solution' {result['topic_status']} \u2713")
     click.echo(f"    Registered in solutions.yaml \u2713")
     click.echo()
@@ -78,7 +79,8 @@ def deploy(yes):
 
     click.echo()
     click.echo(f"  {result['name']} deployed to {result['project_id']}")
-    click.echo(f"    Image: {result['image']}")
+    build_msg = "already exists, skipped build" if result.get("build_status") == "skipped" else "built"
+    click.echo(f"    Image: {result['image']} ({build_msg})")
     if result.get("service_url"):
         click.echo(f"    URL:   {result['service_url']}")
     click.echo()

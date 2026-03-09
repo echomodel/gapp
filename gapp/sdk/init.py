@@ -7,6 +7,29 @@ from gapp.sdk.config import load_solutions, save_solutions
 from gapp.sdk.context import get_git_root
 from gapp.sdk.manifest import get_solution_name, load_manifest
 
+_DOCKERFILE_TEMPLATE = """\
+FROM python:3.11-slim-bookworm
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh \\
+    && mv /root/.local/bin/uv /usr/local/bin/uv
+
+COPY . /app
+
+RUN uv pip install --system "mcp[cli]" uvicorn \\
+    && uv pip install --system -e .
+
+ARG ENTRYPOINT
+ENV ENTRYPOINT=${ENTRYPOINT}
+
+EXPOSE 8080
+
+CMD ["sh", "-c", "uvicorn ${ENTRYPOINT} --host 0.0.0.0 --port 8080"]
+"""
+
 
 def init_solution(repo_path: Path | None = None) -> dict:
     """Initialize a gapp solution in the current repo.
@@ -36,6 +59,14 @@ def init_solution(repo_path: Path | None = None) -> dict:
             "  entrypoint: PACKAGE.mcp.server:mcp_app  # REQUIRED: update this\n"
         )
         result["manifest_status"] = "created"
+
+    # Ensure Dockerfile exists
+    dockerfile_path = git_root / "Dockerfile"
+    if dockerfile_path.exists():
+        result["dockerfile_status"] = "exists"
+    else:
+        dockerfile_path.write_text(_DOCKERFILE_TEMPLATE)
+        result["dockerfile_status"] = "created"
 
     manifest = load_manifest(git_root)
     solution_name = get_solution_name(manifest, git_root)

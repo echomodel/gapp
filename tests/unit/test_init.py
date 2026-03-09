@@ -27,24 +27,33 @@ def _make_git_repo(path: Path) -> Path:
 
 
 @patch("gapp.sdk.init._add_github_topic", return_value="skipped")
-def test_init_creates_manifest(mock_topic, tmp_path):
+def test_init_creates_manifest_and_dockerfile(mock_topic, tmp_path):
     repo = _make_git_repo(tmp_path / "my-app")
     result = init_solution(repo_path=repo)
 
     assert result["name"] == "my-app"
     assert result["manifest_status"] == "created"
+    assert result["dockerfile_status"] == "created"
     assert (repo / "gapp.yaml").exists()
+    assert (repo / "Dockerfile").exists()
+    dockerfile = (repo / "Dockerfile").read_text()
+    assert "ARG ENTRYPOINT" in dockerfile
+    assert "uvicorn" in dockerfile
 
 
 @patch("gapp.sdk.init._add_github_topic", return_value="skipped")
-def test_init_existing_manifest(mock_topic, tmp_path):
+def test_init_existing_manifest_and_dockerfile(mock_topic, tmp_path):
     repo = _make_git_repo(tmp_path / "my-app")
     (repo / "gapp.yaml").write_text("solution:\n  name: custom\n")
+    (repo / "Dockerfile").write_text("FROM custom:image\n")
 
     result = init_solution(repo_path=repo)
 
     assert result["name"] == "custom"
     assert result["manifest_status"] == "exists"
+    assert result["dockerfile_status"] == "exists"
+    # Should not overwrite existing Dockerfile
+    assert (repo / "Dockerfile").read_text() == "FROM custom:image\n"
 
 
 @patch("gapp.sdk.init._add_github_topic", return_value="skipped")

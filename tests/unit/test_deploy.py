@@ -1,23 +1,11 @@
-"""Tests for gapp.sdk.deploy — Dockerfile generation and tfvars building."""
+"""Tests for gapp.sdk.deploy — build and tfvars logic."""
 
-from gapp.sdk.deploy import _generate_dockerfile, _build_tfvars, _secret_name_to_env_var
-
-
-def test_generate_dockerfile():
-    config = {
-        "entrypoint": "monarch.mcp.server:mcp_app",
-        "port": 8080,
-    }
-    dockerfile = _generate_dockerfile(config)
-    assert "FROM python:3.11-slim-bookworm" in dockerfile
-    assert "EXPOSE 8080" in dockerfile
-    assert '"monarch.mcp.server:mcp_app"' in dockerfile
-    assert '"8080"' in dockerfile
+from gapp.sdk.deploy import _build_tfvars, _secret_name_to_env_var
 
 
 def test_secret_name_to_env_var():
-    assert _secret_name_to_env_var("monarch-token") == "MONARCH_TOKEN"
-    assert _secret_name_to_env_var("gemini-api-key") == "GEMINI_API_KEY"
+    assert _secret_name_to_env_var("api-token") == "API_TOKEN"
+    assert _secret_name_to_env_var("some-api-key") == "SOME_API_KEY"
 
 
 def test_build_tfvars():
@@ -30,10 +18,10 @@ def test_build_tfvars():
         "public": False,
         "env": {},
     }
-    tfvars = _build_tfvars("my-app", "my-project", "img:latest", config)
+    tfvars = _build_tfvars("my-app", "my-project", "img:abc123", config)
     assert tfvars["project_id"] == "my-project"
     assert tfvars["service_name"] == "my-app"
-    assert tfvars["image"] == "img:latest"
+    assert tfvars["image"] == "img:abc123"
     assert tfvars["public"] is False
     assert tfvars["secrets"] == {}
 
@@ -48,9 +36,9 @@ def test_build_tfvars_with_secrets():
         "public": False,
         "env": {},
     }
-    secrets = {"monarch-token": {"description": "Auth token"}}
-    tfvars = _build_tfvars("my-app", "proj", "img:latest", config, secrets)
-    assert tfvars["secrets"] == {"MONARCH_TOKEN": "monarch-token"}
+    secrets = {"api-token": {"description": "Auth token"}}
+    tfvars = _build_tfvars("my-app", "proj", "img:abc123", config, secrets)
+    assert tfvars["secrets"] == {"API_TOKEN": "api-token"}
 
 
 def test_build_tfvars_with_env():
@@ -63,6 +51,6 @@ def test_build_tfvars_with_env():
         "public": True,
         "env": {"DB_HOST": "localhost"},
     }
-    tfvars = _build_tfvars("my-app", "proj", "img:latest", config)
+    tfvars = _build_tfvars("my-app", "proj", "img:abc123", config)
     assert tfvars["env"] == {"DB_HOST": "localhost"}
     assert tfvars["public"] is True

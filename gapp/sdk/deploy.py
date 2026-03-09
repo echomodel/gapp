@@ -4,7 +4,6 @@ import json
 import os
 import shutil
 import subprocess
-from importlib import resources
 from pathlib import Path
 
 from gapp.sdk.context import resolve_solution
@@ -21,12 +20,10 @@ def deploy_solution(auto_approve: bool = False) -> dict:
 
     Steps:
     1. Resolve solution context and load manifest
-    2. Validate entrypoint is configured
-    3. Generate Dockerfile from manifest
-    4. Enable Artifact Registry + create repo
-    5. Build and push container image via Cloud Build
-    6. Stage static Terraform + write tfvars.json
-    7. Terraform init with GCS backend + apply
+    2. Validate entrypoint and clean git tree
+    3. Build container via Cloud Build (git archive, skip if image:sha exists)
+    4. Stage static Terraform + write tfvars.json
+    5. Terraform init with GCS backend + apply
 
     Returns dict describing what was done.
     """
@@ -62,10 +59,15 @@ def deploy_solution(auto_approve: bool = False) -> dict:
     service_config = get_service_config(manifest)
     secrets = get_prerequisite_secrets(manifest)
 
+    # Block if working tree is dirty
+    head_sha = _get_head_sha(repo_path)
+    _check_dirty_tree(repo_path)
+
     result = {
         "name": solution_name,
         "project_id": project_id,
         "image": None,
+        "build_status": None,
         "terraform_status": None,
         "service_url": None,
     }
@@ -77,9 +79,13 @@ def deploy_solution(auto_approve: bool = False) -> dict:
     region = "us-central1"
     _ensure_artifact_registry(project_id, region)
 
-    # Generate Dockerfile and build
-    image = f"{region}-docker.pkg.dev/{project_id}/gapp/{solution_name}:latest"
-    _generate_and_build(project_id, repo_path, image, service_config)
+    # Build and push container image (skip if image:sha already exists)
+    image = f"{region}-docker.pkg.dev/{project_id}/gapp/{solution_name}:{head_sha}"
+    if _image_exists(project_id, region, solution_name, head_sha):
+        result["build_status"] = "skipped"
+    else:
+        _build_and_push(project_id, repo_path, image, service_config["entrypoint"])
+        result["build_status"] = "built"
     result["image"] = image
 
     # Stage Terraform and apply
@@ -142,62 +148,70 @@ def _ensure_artifact_registry(project_id: str, region: str) -> None:
         raise RuntimeError(f"Failed to create Artifact Registry repo: {result.stderr.strip()}")
 
 
-def _generate_dockerfile(service_config: dict) -> str:
-    """Generate a Dockerfile from the service config."""
-    entrypoint = service_config["entrypoint"]
-    port = service_config["port"]
-
-    return (
-        "FROM python:3.11-slim-bookworm\n"
-        "\n"
-        "WORKDIR /app\n"
-        "\n"
-        "RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*\n"
-        "\n"
-        "RUN curl -LsSf https://astral.sh/uv/install.sh | sh \\\n"
-        "    && mv /root/.local/bin/uv /usr/local/bin/uv\n"
-        "\n"
-        "COPY . /app\n"
-        "\n"
-        'RUN uv pip install --system "mcp[cli]" uvicorn \\\n'
-        "    && uv pip install --system -e .\n"
-        "\n"
-        f"EXPOSE {port}\n"
-        "\n"
-        f'CMD ["uvicorn", "{entrypoint}", "--host", "0.0.0.0", "--port", "{port}"]\n'
+def _get_head_sha(repo_path: Path) -> str:
+    """Get short SHA of HEAD commit."""
+    result = subprocess.run(
+        ["git", "rev-parse", "--short=12", "HEAD"],
+        capture_output=True,
+        text=True,
+        cwd=repo_path,
     )
+    if result.returncode != 0:
+        raise RuntimeError("Failed to get HEAD SHA. Is this a git repo with commits?")
+    return result.stdout.strip()
 
 
-def _generate_and_build(
-    project_id: str, repo_path: Path, image: str, service_config: dict,
-) -> None:
-    """Generate Dockerfile and build via Cloud Build."""
-    dockerfile_content = _generate_dockerfile(service_config)
-    dockerfile_path = repo_path / "Dockerfile"
-
-    # Write generated Dockerfile (Cloud Build needs it in the repo root)
-    existing_dockerfile = None
-    if dockerfile_path.exists():
-        existing_dockerfile = dockerfile_path.read_text()
-
-    try:
-        dockerfile_path.write_text(dockerfile_content)
-
-        result = subprocess.run(
-            ["gcloud", "builds", "submit",
-             "--tag", image,
-             "--project", project_id],
-            cwd=repo_path,
-            text=True,
+def _check_dirty_tree(repo_path: Path) -> None:
+    """Block deploy if working tree has uncommitted changes."""
+    result = subprocess.run(
+        ["git", "status", "--porcelain"],
+        capture_output=True,
+        text=True,
+        cwd=repo_path,
+    )
+    if result.stdout.strip():
+        raise RuntimeError(
+            "Working tree has uncommitted changes. Commit or stash before deploying."
         )
-        if result.returncode != 0:
-            raise RuntimeError("Cloud Build failed. Check the build logs above.")
-    finally:
-        # Restore original Dockerfile if there was one, otherwise clean up
-        if existing_dockerfile is not None:
-            dockerfile_path.write_text(existing_dockerfile)
-        else:
-            dockerfile_path.unlink(missing_ok=True)
+
+
+def _image_exists(
+    project_id: str, region: str, solution_name: str, tag: str,
+) -> bool:
+    """Check if image:tag already exists in Artifact Registry."""
+    result = subprocess.run(
+        ["gcloud", "artifacts", "docker", "images", "list",
+         f"{region}-docker.pkg.dev/{project_id}/gapp/{solution_name}",
+         "--filter", f"tags:{tag}",
+         "--format", "value(tags)",
+         "--project", project_id],
+        capture_output=True,
+        text=True,
+    )
+    return tag in result.stdout
+
+
+def _build_and_push(
+    project_id: str, repo_path: Path, image: str, entrypoint: str,
+) -> None:
+    """Build container via Cloud Build using git archive for source integrity."""
+    archive = subprocess.Popen(
+        ["git", "archive", "--format=tar.gz", "HEAD"],
+        stdout=subprocess.PIPE,
+        cwd=repo_path,
+    )
+    build = subprocess.run(
+        ["gcloud", "builds", "submit",
+         "--tag", image,
+         "--build-arg", f"ENTRYPOINT={entrypoint}",
+         "--project", project_id,
+         "-"],
+        stdin=archive.stdout,
+        text=True,
+    )
+    archive.wait()
+    if build.returncode != 0:
+        raise RuntimeError("Cloud Build failed. Check the build logs above.")
 
 
 def _secret_name_to_env_var(name: str) -> str:
