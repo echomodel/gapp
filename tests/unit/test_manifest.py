@@ -13,15 +13,13 @@ from gapp.sdk.manifest import (
 
 
 def test_load_manifest_missing(tmp_path):
-    """No deploy/manifest.yaml returns empty dict."""
+    """No gapp.yaml returns empty dict."""
     result = load_manifest(tmp_path)
     assert result == {}
 
 
 def test_load_manifest_exists(tmp_path):
-    deploy = tmp_path / "deploy"
-    deploy.mkdir()
-    (deploy / "manifest.yaml").write_text(
+    (tmp_path / "gapp.yaml").write_text(
         "solution:\n"
         "  name: my-app\n"
         "prerequisites:\n"

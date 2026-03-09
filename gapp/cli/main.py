@@ -24,7 +24,7 @@ def init():
 
     click.echo()
     click.echo(f"  Initialized gapp solution: {result['name']}")
-    click.echo(f"    deploy/manifest.yaml {result['manifest_status']} \u2713")
+    click.echo(f"    gapp.yaml {result['manifest_status']} \u2713")
     click.echo(f"    GitHub topic 'gapp-solution' {result['topic_status']} \u2713")
     click.echo(f"    Registered in solutions.yaml \u2713")
     click.echo()
@@ -159,13 +159,40 @@ def secret():
 @secret.command("list")
 def secret_list():
     """Show prerequisite secrets and status."""
-    click.echo("  secret list is not yet implemented.")
-    raise SystemExit(1)
+    from gapp.sdk.secrets import list_secrets
+
+    try:
+        result = list_secrets()
+    except RuntimeError as e:
+        click.echo(f"  Error: {e}", err=True)
+        raise SystemExit(1)
+
+    click.echo()
+    click.echo(f"  {result['name']} secrets")
+    click.echo()
+
+    if not result["secrets"]:
+        click.echo("  No secrets required.")
+        return
+
+    for s in result["secrets"]:
+        marker = "\u2713" if s["status"] == "set" else "\u2717"
+        click.echo(f"    {s['name']:<30} {s['status']:<12} {marker}  {s['description']}")
+    click.echo()
 
 
 @secret.command("set")
 @click.argument("name")
 def secret_set(name):
-    """Guided secret value entry."""
-    click.echo("  secret set is not yet implemented.")
-    raise SystemExit(1)
+    """Store a secret value in Secret Manager."""
+    from gapp.sdk.secrets import set_secret
+
+    value = click.prompt(f"  Enter value for {name}", hide_input=True)
+
+    try:
+        result = set_secret(name, value)
+    except RuntimeError as e:
+        click.echo(f"  Error: {e}", err=True)
+        raise SystemExit(1)
+
+    click.echo(f"  Secret {result['name']} {result['secret_status']} \u2713")

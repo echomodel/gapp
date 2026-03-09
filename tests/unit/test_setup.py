@@ -11,14 +11,12 @@ from gapp.sdk.setup import setup_solution
 
 
 def _make_solution(tmp_path, monkeypatch, name="my-app"):
-    """Create a minimal git repo with deploy/manifest.yaml and register it."""
+    """Create a minimal git repo with gapp.yaml and register it."""
     repo = tmp_path / name
     repo.mkdir()
     subprocess.run(["git", "init", str(repo)], capture_output=True)
 
-    deploy = repo / "deploy"
-    deploy.mkdir()
-    (deploy / "manifest.yaml").write_text(
+    (repo / "gapp.yaml").write_text(
         "service:\n"
         "  entrypoint: my_app.mcp.server:mcp_app\n"
     )

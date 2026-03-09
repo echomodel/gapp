@@ -1,6 +1,6 @@
-"""Tests for gapp.sdk.deploy — Dockerfile and Terraform generation."""
+"""Tests for gapp.sdk.deploy — Dockerfile generation and tfvars building."""
 
-from gapp.sdk.deploy import _generate_dockerfile, _generate_terraform
+from gapp.sdk.deploy import _generate_dockerfile, _build_tfvars, _secret_name_to_env_var
 
 
 def test_generate_dockerfile():
@@ -15,7 +15,12 @@ def test_generate_dockerfile():
     assert '"8080"' in dockerfile
 
 
-def test_generate_terraform():
+def test_secret_name_to_env_var():
+    assert _secret_name_to_env_var("monarch-token") == "MONARCH_TOKEN"
+    assert _secret_name_to_env_var("gemini-api-key") == "GEMINI_API_KEY"
+
+
+def test_build_tfvars():
     config = {
         "entrypoint": "app:main",
         "port": 8080,
@@ -25,15 +30,30 @@ def test_generate_terraform():
         "public": False,
         "env": {},
     }
-    tf = _generate_terraform("my-app", "my-project", "us-docker.pkg.dev/my-project/gapp/my-app:latest", config)
-    assert 'backend "gcs" {}' in tf
-    assert 'service_name = "my-app"' in tf
-    assert 'project_id   = "my-project"' in tf
-    assert "public       = false" in tf
-    assert 'output "service_url"' in tf
+    tfvars = _build_tfvars("my-app", "my-project", "img:latest", config)
+    assert tfvars["project_id"] == "my-project"
+    assert tfvars["service_name"] == "my-app"
+    assert tfvars["image"] == "img:latest"
+    assert tfvars["public"] is False
+    assert tfvars["secrets"] == {}
 
 
-def test_generate_terraform_with_env():
+def test_build_tfvars_with_secrets():
+    config = {
+        "entrypoint": "app:main",
+        "port": 8080,
+        "memory": "512Mi",
+        "cpu": "1",
+        "max_instances": 1,
+        "public": False,
+        "env": {},
+    }
+    secrets = {"monarch-token": {"description": "Auth token"}}
+    tfvars = _build_tfvars("my-app", "proj", "img:latest", config, secrets)
+    assert tfvars["secrets"] == {"MONARCH_TOKEN": "monarch-token"}
+
+
+def test_build_tfvars_with_env():
     config = {
         "entrypoint": "app:main",
         "port": 8080,
@@ -41,9 +61,8 @@ def test_generate_terraform_with_env():
         "cpu": "1",
         "max_instances": 1,
         "public": True,
-        "env": {"DB_HOST": "localhost", "DEBUG": "true"},
+        "env": {"DB_HOST": "localhost"},
     }
-    tf = _generate_terraform("my-app", "proj", "img:latest", config)
-    assert "public       = true" in tf
-    assert 'DB_HOST = "localhost"' in tf
-    assert 'DEBUG = "true"' in tf
+    tfvars = _build_tfvars("my-app", "proj", "img:latest", config)
+    assert tfvars["env"] == {"DB_HOST": "localhost"}
+    assert tfvars["public"] is True

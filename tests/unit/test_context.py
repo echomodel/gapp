@@ -39,8 +39,7 @@ def test_resolve_by_name_unknown():
 
 def test_resolve_from_cwd(tmp_path, monkeypatch):
     repo = _make_git_repo(tmp_path / "my-app")
-    (repo / "deploy").mkdir()
-    (repo / "deploy" / "manifest.yaml").write_text("solution:\n  name: my-app\n")
+    (repo / "gapp.yaml").write_text("solution:\n  name: my-app\n")
     monkeypatch.chdir(repo)
 
     ctx = resolve_solution()

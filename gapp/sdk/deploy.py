@@ -1,12 +1,19 @@
 """gapp deploy — build container and terraform apply."""
 
+import json
 import os
+import shutil
 import subprocess
-import tempfile
+from importlib import resources
 from pathlib import Path
 
 from gapp.sdk.context import resolve_solution
-from gapp.sdk.manifest import get_entrypoint, get_service_config, load_manifest
+from gapp.sdk.manifest import (
+    get_entrypoint,
+    get_prerequisite_secrets,
+    get_service_config,
+    load_manifest,
+)
 
 
 def deploy_solution(auto_approve: bool = False) -> dict:
@@ -18,7 +25,7 @@ def deploy_solution(auto_approve: bool = False) -> dict:
     3. Generate Dockerfile from manifest
     4. Enable Artifact Registry + create repo
     5. Build and push container image via Cloud Build
-    6. Generate Terraform config from manifest
+    6. Stage static Terraform + write tfvars.json
     7. Terraform init with GCS backend + apply
 
     Returns dict describing what was done.
@@ -46,13 +53,14 @@ def deploy_solution(auto_approve: bool = False) -> dict:
 
     if not entrypoint:
         raise RuntimeError(
-            "No service entrypoint in deploy/manifest.yaml.\n"
+            "No service entrypoint in gapp.yaml.\n"
             "  Add:\n"
             "    service:\n"
             "      entrypoint: your_package.mcp.server:mcp_app"
         )
 
     service_config = get_service_config(manifest)
+    secrets = get_prerequisite_secrets(manifest)
 
     result = {
         "name": solution_name,
@@ -74,14 +82,15 @@ def deploy_solution(auto_approve: bool = False) -> dict:
     _generate_and_build(project_id, repo_path, image, service_config)
     result["image"] = image
 
-    # Generate Terraform and apply
+    # Stage Terraform and apply
     bucket_name = f"gapp-{solution_name}-{project_id}"
-    tf_result = _generate_and_apply(
+    tf_result = _stage_and_apply(
         solution_name=solution_name,
         project_id=project_id,
         image=image,
         bucket_name=bucket_name,
         service_config=service_config,
+        secrets=secrets,
         token=token,
         auto_approve=auto_approve,
     )
@@ -191,106 +200,115 @@ def _generate_and_build(
             dockerfile_path.unlink(missing_ok=True)
 
 
-def _generate_terraform(
+def _secret_name_to_env_var(name: str) -> str:
+    """Convert kebab-case secret name to UPPER_SNAKE env var name."""
+    return name.upper().replace("-", "_")
+
+
+def _get_tf_source_dir() -> Path:
+    """Get the path to gapp's static Terraform files."""
+    # Walk up from this file to find the repo root's terraform/ directory
+    return Path(__file__).resolve().parent.parent.parent / "terraform"
+
+
+def _build_tfvars(
     solution_name: str,
     project_id: str,
     image: str,
     service_config: dict,
-) -> str:
-    """Generate Terraform configuration from the service config."""
-    env_block = ""
-    if service_config.get("env"):
-        env_entries = "\n".join(
-            f'    {k} = "{v}"' for k, v in service_config["env"].items()
-        )
-        env_block = f"\n  env = {{\n{env_entries}\n  }}\n"
-
-    return (
-        'terraform {\n'
-        '  required_providers {\n'
-        '    google = {\n'
-        '      source  = "hashicorp/google"\n'
-        '      version = ">= 5.0"\n'
-        '    }\n'
-        '  }\n'
-        '  backend "gcs" {}\n'
-        '}\n'
-        '\n'
-        'module "service" {\n'
-        f'  source       = "github.com/krisrowe/gapp//modules/cloud-run-service"\n'
-        f'  project_id   = "{project_id}"\n'
-        f'  service_name = "{solution_name}"\n'
-        f'  image        = "{image}"\n'
-        f'  memory       = "{service_config["memory"]}"\n'
-        f'  cpu          = "{service_config["cpu"]}"\n'
-        f'  max_instances = {service_config["max_instances"]}\n'
-        f'  public       = {str(service_config["public"]).lower()}\n'
-        f'{env_block}'
-        '}\n'
-        '\n'
-        'output "service_url" {\n'
-        '  value = module.service.service_url\n'
-        '}\n'
-    )
+    secrets: dict | None = None,
+) -> dict:
+    """Build the tfvars dict from manifest config."""
+    tfvars = {
+        "project_id": project_id,
+        "service_name": solution_name,
+        "image": image,
+        "memory": service_config["memory"],
+        "cpu": service_config["cpu"],
+        "max_instances": service_config["max_instances"],
+        "public": service_config["public"],
+        "env": service_config.get("env", {}),
+        "secrets": {
+            _secret_name_to_env_var(name): name
+            for name in (secrets or {})
+        },
+    }
+    return tfvars
 
 
-def _generate_and_apply(
+def _get_staging_dir(solution_name: str) -> Path:
+    """Get the staging directory for a solution's Terraform files."""
+    cache_base = os.environ.get("XDG_CACHE_HOME", os.path.expanduser("~/.cache"))
+    return Path(cache_base) / "gapp" / solution_name / "terraform"
+
+
+def _stage_and_apply(
     solution_name: str,
     project_id: str,
     image: str,
     bucket_name: str,
     service_config: dict,
-    token: str,
+    secrets: dict | None = None,
+    token: str = "",
     auto_approve: bool = False,
 ) -> dict:
-    """Generate Terraform config in a temp dir and apply."""
+    """Copy static TF files to staging dir, write tfvars.json, and apply."""
     env = {**os.environ, "GOOGLE_OAUTH_ACCESS_TOKEN": token}
-    tf_content = _generate_terraform(solution_name, project_id, image, service_config)
 
-    with tempfile.TemporaryDirectory(prefix="gapp-tf-") as tf_dir:
-        tf_path = Path(tf_dir) / "main.tf"
-        tf_path.write_text(tf_content)
+    # Stage: wipe and copy static TF files
+    staging_dir = _get_staging_dir(solution_name)
+    if staging_dir.exists():
+        shutil.rmtree(staging_dir)
+    staging_dir.mkdir(parents=True)
 
-        # Terraform init with GCS backend
-        init_result = subprocess.run(
-            ["terraform", "init",
-             f"-backend-config=bucket={bucket_name}",
-             "-backend-config=prefix=terraform/state",
-             "-input=false"],
-            cwd=tf_dir,
-            env=env,
-            text=True,
-        )
-        if init_result.returncode != 0:
-            raise RuntimeError("Terraform init failed. Check output above.")
+    tf_source = _get_tf_source_dir()
+    for tf_file in tf_source.glob("*.tf"):
+        shutil.copy2(tf_file, staging_dir)
 
-        # Terraform apply
-        apply_cmd = [
-            "terraform", "apply",
-            "-input=false",
-        ]
-        if auto_approve:
-            apply_cmd.append("-auto-approve")
+    # Write tfvars.json
+    tfvars = _build_tfvars(solution_name, project_id, image, service_config, secrets)
+    (staging_dir / "terraform.tfvars.json").write_text(json.dumps(tfvars, indent=2))
 
-        apply_result = subprocess.run(
-            apply_cmd,
-            cwd=tf_dir,
-            env=env,
-            text=True,
-        )
-        if apply_result.returncode != 0:
-            raise RuntimeError("Terraform apply failed. Check output above.")
+    # Terraform init with GCS backend
+    init_result = subprocess.run(
+        ["terraform", "init",
+         f"-backend-config=bucket={bucket_name}",
+         "-backend-config=prefix=terraform/state",
+         "-input=false"],
+        cwd=staging_dir,
+        env=env,
+        text=True,
+    )
+    if init_result.returncode != 0:
+        raise RuntimeError("Terraform init failed. Check output above.")
 
-        # Get service URL
-        output_result = subprocess.run(
-            ["terraform", "output", "-raw", "service_url"],
-            cwd=tf_dir,
-            env=env,
-            capture_output=True,
-            text=True,
-        )
+    # Terraform apply
+    apply_cmd = [
+        "terraform", "apply",
+        "-input=false",
+    ]
+    if auto_approve:
+        apply_cmd.append("-auto-approve")
 
-        return {
-            "status": "applied",
-            "service_url": output_result.stdout.strip() if output_result.returncode == 0 else None,
-        }
+    apply_result = subprocess.run(
+        apply_cmd,
+        cwd=staging_dir,
+        env=env,
+        text=True,
+    )
+    if apply_result.returncode != 0:
+        raise RuntimeError("Terraform apply failed. Check output above.")
+
+    # Get service URL
+    output_result = subprocess.run(
+        ["terraform", "output", "-raw", "service_url"],
+        cwd=staging_dir,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    return {
+        "status": "applied",
+        "service_url": output_result.stdout.strip() if output_result.returncode == 0 else None,
+    }

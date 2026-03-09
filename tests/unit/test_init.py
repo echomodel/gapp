@@ -33,15 +33,13 @@ def test_init_creates_manifest(mock_topic, tmp_path):
 
     assert result["name"] == "my-app"
     assert result["manifest_status"] == "created"
-    assert (repo / "deploy" / "manifest.yaml").exists()
+    assert (repo / "gapp.yaml").exists()
 
 
 @patch("gapp.sdk.init._add_github_topic", return_value="skipped")
 def test_init_existing_manifest(mock_topic, tmp_path):
     repo = _make_git_repo(tmp_path / "my-app")
-    deploy = repo / "deploy"
-    deploy.mkdir()
-    (deploy / "manifest.yaml").write_text("solution:\n  name: custom\n")
+    (repo / "gapp.yaml").write_text("solution:\n  name: custom\n")
 
     result = init_solution(repo_path=repo)
 

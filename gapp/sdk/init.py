@@ -26,12 +26,11 @@ def init_solution(repo_path: Path | None = None) -> dict:
 
     result = {"name": None, "manifest_status": None, "topic_status": None, "registered": False}
 
-    # Ensure deploy/manifest.yaml exists
-    manifest_path = git_root / "deploy" / "manifest.yaml"
+    # Ensure gapp.yaml exists
+    manifest_path = git_root / "gapp.yaml"
     if manifest_path.exists():
         result["manifest_status"] = "exists"
     else:
-        manifest_path.parent.mkdir(parents=True, exist_ok=True)
         manifest_path.write_text(
             "service:\n"
             "  entrypoint: PACKAGE.mcp.server:mcp_app  # REQUIRED: update this\n"

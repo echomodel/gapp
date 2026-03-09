@@ -1,4 +1,4 @@
-"""Parse and validate deploy/manifest.yaml files."""
+"""Parse and validate gapp.yaml files."""
 
 from pathlib import Path
 
@@ -6,8 +6,8 @@ import yaml
 
 
 def load_manifest(repo_path: Path) -> dict:
-    """Load deploy/manifest.yaml from a repo. Returns empty dict if missing."""
-    manifest_path = repo_path / "deploy" / "manifest.yaml"
+    """Load gapp.yaml from a repo. Returns empty dict if missing."""
+    manifest_path = repo_path / "gapp.yaml"
     if not manifest_path.exists():
         return {}
     with open(manifest_path) as f:

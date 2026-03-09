@@ -48,3 +48,9 @@ variable "cpu" {
   type        = string
   default     = "1"
 }
+
+variable "secrets" {
+  description = "Map of env var name to Secret Manager secret ID"
+  type        = map(string)
+  default     = {}
+}

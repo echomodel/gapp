@@ -48,8 +48,29 @@ resource "google_cloud_run_v2_service" "service" {
           value = env.value
         }
       }
+
+      dynamic "env" {
+        for_each = var.secrets
+        content {
+          name = env.key
+          value_source {
+            secret_key_ref {
+              secret  = env.value
+              version = "latest"
+            }
+          }
+        }
+      }
     }
   }
+}
+
+# Grant service account access to secrets
+resource "google_project_iam_member" "secret_accessor" {
+  count   = length(var.secrets) > 0 ? 1 : 0
+  project = var.project_id
+  role    = "roles/secretmanager.secretAccessor"
+  member  = "serviceAccount:${google_service_account.service.email}"
 }
 
 # Public access (if enabled)
