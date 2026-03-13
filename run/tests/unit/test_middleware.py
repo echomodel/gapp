@@ -3,6 +3,7 @@
 import hashlib
 import json
 import time
+from unittest.mock import MagicMock, patch
 
 import jwt
 import pytest
@@ -212,3 +213,153 @@ class TestAuthMiddleware:
 
         assert len(calls) == 1
         assert calls[0]["type"] == "lifespan"
+
+
+class TestGoogleOAuth2Mediation:
+    """Full ASGI middleware chain with google_oauth2 credentials.
+
+    Mocks only the Google HTTP refresh call — everything else (JWT validation,
+    file I/O, strategy resolution, header rewrite) runs for real.
+    """
+
+    @pytest.fixture
+    def auth_mount(self, tmp_path):
+        return str(tmp_path)
+
+    @pytest.fixture
+    def write_credential(self, auth_mount):
+        def _write(email, credential_data):
+            email_hash = hashlib.sha256(email.encode()).hexdigest()
+            path = f"{auth_mount}/{email_hash}.json"
+            with open(path, "w") as f:
+                json.dump(credential_data, f)
+            return email_hash
+        return _write
+
+    def _make_middleware(self, auth_mount):
+        calls = []
+
+        async def inner_app(scope, receive, send):
+            calls.append(scope)
+            body = b'{"ok": true}'
+            await send({
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [(b"content-type", b"application/json")],
+            })
+            await send({"type": "http.response.body", "body": body})
+
+        mw = AuthMiddleware(inner_app, signing_key=SIGNING_KEY, auth_mount=auth_mount)
+        return mw, calls
+
+    async def _call(self, mw, scope):
+        responses = []
+
+        async def receive():
+            return {"type": "http.request", "body": b""}
+
+        async def send(msg):
+            responses.append(msg)
+
+        await mw(scope, receive, send)
+        return responses
+
+    @pytest.mark.asyncio
+    @patch("google.auth.transport.requests.Request")
+    @patch("google.oauth2.credentials.Credentials")
+    async def test_oauth2_token_profile_mediates(
+        self, mock_creds_cls, mock_request_cls, auth_mount, write_credential,
+    ):
+        """Token profile (custom OAuth client) — valid token forwarded."""
+        mock_creds = MagicMock()
+        mock_creds.valid = True
+        mock_creds.token = "upstream-access-token"
+        mock_creds_cls.from_authorized_user_info.return_value = mock_creds
+
+        write_credential("user@example.com", {
+            "strategy": "google_oauth2",
+            "type": "authorized_user",
+            "token": "stale-token",
+            "refresh_token": "test-refresh-token",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "client_id": "test-client-id",
+            "client_secret": "test-client-secret",
+        })
+
+        mw, calls = self._make_middleware(auth_mount)
+        token = _make_jwt("user@example.com")
+        responses = await self._call(mw, _make_scope(token=token))
+
+        assert responses[0]["status"] == 200
+        assert len(calls) == 1
+        forwarded_auth = dict(calls[0]["headers"])[b"authorization"]
+        assert forwarded_auth == b"Bearer upstream-access-token"
+
+    @pytest.mark.asyncio
+    @patch("google.auth.transport.requests.Request")
+    @patch("google.oauth2.credentials.Credentials")
+    async def test_oauth2_adc_profile_with_quota_project_mediates(
+        self, mock_creds_cls, mock_request_cls, auth_mount, write_credential,
+    ):
+        """ADC profile (gcloud client + quota_project_id) — works identically."""
+        mock_creds = MagicMock()
+        mock_creds.valid = True
+        mock_creds.token = "upstream-adc-token"
+        mock_creds_cls.from_authorized_user_info.return_value = mock_creds
+
+        write_credential("user@example.com", {
+            "strategy": "google_oauth2",
+            "type": "authorized_user",
+            "token": "stale-adc-token",
+            "refresh_token": "test-refresh-token",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "client_id": "gcloud-builtin-client-id",
+            "client_secret": "gcloud-builtin-client-secret",
+            "quota_project_id": "test-gcp-project",
+        })
+
+        mw, calls = self._make_middleware(auth_mount)
+        token = _make_jwt("user@example.com")
+        responses = await self._call(mw, _make_scope(token=token))
+
+        assert responses[0]["status"] == 200
+        assert len(calls) == 1
+        forwarded_auth = dict(calls[0]["headers"])[b"authorization"]
+        assert forwarded_auth == b"Bearer upstream-adc-token"
+
+    @pytest.mark.asyncio
+    @patch("google.auth.transport.requests.Request")
+    @patch("google.oauth2.credentials.Credentials")
+    async def test_oauth2_refresh_writes_back_and_forwards(
+        self, mock_creds_cls, mock_request_cls, auth_mount, write_credential,
+    ):
+        """Expired token triggers refresh; refreshed token forwarded to solution."""
+        mock_creds = MagicMock()
+        mock_creds.valid = False
+        mock_creds.refresh_token = "test-refresh-token"
+        mock_creds.token = "freshly-refreshed"
+        mock_creds.expiry = None
+        mock_creds_cls.from_authorized_user_info.return_value = mock_creds
+
+        email_hash = write_credential("user@example.com", {
+            "strategy": "google_oauth2",
+            "type": "authorized_user",
+            "token": "expired-token",
+            "refresh_token": "test-refresh-token",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "client_id": "test-client-id",
+            "client_secret": "test-client-secret",
+        })
+
+        mw, calls = self._make_middleware(auth_mount)
+        token = _make_jwt("user@example.com")
+        responses = await self._call(mw, _make_scope(token=token))
+
+        assert responses[0]["status"] == 200
+        forwarded_auth = dict(calls[0]["headers"])[b"authorization"]
+        assert forwarded_auth == b"Bearer freshly-refreshed"
+        mock_creds.refresh.assert_called_once()
+
+        # Verify write-back to FUSE
+        written = json.loads(open(f"{auth_mount}/{email_hash}.json").read())
+        assert written["token"] == "freshly-refreshed"
