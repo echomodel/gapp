@@ -62,25 +62,35 @@ service:
   public: false         # default
   env:                  # default: {}
     LOG_LEVEL: "INFO"
+  runtime: <gapp-git-ref>  # required when auth enabled; gapp_run version
+  mcp_path: /mcp          # MCP endpoint path (enables gapp mcp commands)
   auth:
     enabled: true
-    strategy: bearer    # default; or google_oauth2
+    strategy: bearer      # default; or google_oauth2
 ```
 
 ## Additional Commands
 
 ```
-gapp status [name]                 Show solution health across all phases
-gapp plan                          Terraform plan (preview changes)
-gapp solutions list [--available]  List local (and optionally GitHub) solutions
-gapp solutions restore <name>     Clone from GitHub + find GCP project
-gapp secret list                   Show prerequisite secrets and status
-gapp users register <email> <credential>  Register a user with upstream credential
-gapp users list [--limit] [--start-index]  List registered users
-gapp users update <email> [options]        Update credential or set revoke_before
-gapp users revoke <email>                  Delete user's credential file
-gapp tokens create <email> [--duration]    Create a PAT (JWT) for a user
-gapp tokens revoke <email>                 Invalidate all PATs for a user
+gapp status [name] [--json]          Infrastructure health check with guided next steps
+gapp list [--available]              List registered solutions (--available for GitHub)
+gapp restore <name>                  Clone from GitHub + find GCP project
+gapp plan                            Terraform plan (preview changes)
+
+gapp mcp status [name] [--json]      MCP health + tool enumeration
+gapp mcp list [--json]               List solutions with MCP endpoints
+gapp mcp connect [name] [--json]     Client connection info (Claude Code, Gemini CLI, Claude.ai)
+  --user <email>                     Mint a real PAT for the connection commands
+  --claude <scope>                   Filter to Claude Code config (user/project)
+  --gemini <scope>                   Filter to Gemini CLI config (user/project)
+
+gapp secret list                     Show prerequisite secrets and status
+gapp users register <email> <cred>   Register a user with upstream credential
+gapp users list                      List registered users
+gapp users update <email> [options]  Update credential or set revoke_before
+gapp users revoke <email>            Delete user's credential file
+gapp tokens create <email>           Create a PAT (JWT) for a user
+gapp tokens revoke <email>           Invalidate all PATs for a user
 ```
 
 ## Key Concepts
@@ -127,6 +137,10 @@ gapp is an overlay, not a lock-in.
 ### Infrastructure You Don't Have to Think About
 
 gapp manages Terraform, IAM, API enablement, service accounts, secret references, and container builds behind four commands. You never write HCL, never enable a GCP API by hand, never create a service account or grant it roles. `gapp setup` handles the foundation, `gapp deploy` handles the rest. If the underlying Terraform modules evolve (new security controls, new resource types), all solutions benefit automatically on their next deploy.
+
+### Agent Wiring Made Easy
+
+Once deployed, `gapp mcp connect` generates ready-to-use connection commands for Claude Code, Gemini CLI, and Claude.ai — with the real service URL, MCP path, and credentials already filled in. No hunting for hostnames, no copy-pasting tokens into config files, no guessing the right CLI flags. It checks whether each client already has the service registered and shows the exact command to add it. With `--user`, it mints a real PAT inline so the output is immediately usable. For automation, `--json` returns a structured result that scripts or MCP tools can consume directly.
 
 ### Multi-User from Day One
 
