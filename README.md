@@ -132,6 +132,8 @@ gapp manages Terraform, IAM, API enablement, service accounts, secret references
 
 When auth is enabled, gapp injects a credential mediation wrapper at deploy time. Each user gets a long-lived personal access token (PAT) and their upstream API credential is stored server-side. The solution never sees PATs or credential files — it receives a standard bearer token on every request.
 
+PATs make deployed services portable across clients. Tools like Claude Code, Gemini CLI, and IDE extensions (Antigravity, etc.) authenticate with static headers or URL parameters loaded at startup — they have no way to manage token refresh or run an OAuth2 flow. Claude.ai supports OAuth2 but requires you to implement your own authorization server with a web-based consent flow, and you'd still need to mediate the upstream service's credentials behind it. With PATs, any client that can set an HTTP header or append a query parameter can authenticate — no OAuth2 infrastructure required. Meanwhile, the real upstream credentials — which often expire, rotate, or require refresh — are managed in one place on the server. When a backend token changes, you update it once with `gapp users update` and every device and agent keeps working.
+
 - **Register users** with `gapp users register` — one credential file per user in GCS
 - **Issue PATs** with `gapp tokens create` — signed JWTs, default 10-year duration
 - **Rotate credentials centrally** with `gapp users update` — all clients keep working, no PAT reissue needed
