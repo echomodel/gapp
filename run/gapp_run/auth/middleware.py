@@ -44,6 +44,10 @@ class AuthMiddleware:
         except jwt.InvalidTokenError:
             return await _send_error(send, 403, "Invalid token")
 
+        # Status tokens bypass credential mediation — pass request through as-is
+        if claims.get("scope") == "status":
+            return await self.app(scope, receive, send)
+
         email_hash = hashlib.sha256(claims["sub"].encode()).hexdigest()
 
         # Resolve upstream access token (also confirms user exists)

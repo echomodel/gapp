@@ -42,6 +42,24 @@ def _get_signing_key(project_id: str, solution_name: str) -> str:
     return result.stdout.strip()
 
 
+def create_status_token(solution_name: str, project_id: str) -> str:
+    """Create a short-lived JWT with scope=status for service probing.
+
+    No registered user required — the middleware skips credential
+    mediation for status-scoped tokens.
+    """
+    signing_key = _get_signing_key(project_id, solution_name)
+    now = int(time.time())
+    payload = {
+        "sub": "_gapp_status",
+        "aud": solution_name,
+        "scope": "status",
+        "iat": now,
+        "exp": now + 60,  # 1 minute
+    }
+    return jwt.encode(payload, signing_key, algorithm="HS256")
+
+
 def create_token(email: str, *, duration_days: int = DEFAULT_DURATION_DAYS) -> dict:
     """Create a signed JWT for a registered user.
 

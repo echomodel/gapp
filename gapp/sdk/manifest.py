@@ -53,6 +53,11 @@ def get_auth_config(manifest: dict) -> dict | None:
     }
 
 
+def get_mcp_path(manifest: dict) -> str | None:
+    """Return the MCP endpoint path if configured, else None."""
+    return manifest.get("service", {}).get("mcp_path")
+
+
 def get_service_config(manifest: dict) -> dict:
     """Return service configuration with defaults."""
     service = manifest.get("service", {})

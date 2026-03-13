@@ -96,24 +96,46 @@ def plan():
 @click.argument("name", required=False)
 def status(name):
     """Full health check across all phases."""
-    from gapp.sdk.context import resolve_solution
+    from gapp.sdk.status import get_status
 
-    ctx = resolve_solution(name)
-    if not ctx:
+    result = get_status(name)
+
+    if result.get("error") == "not_found":
         click.echo("  Not inside a gapp solution. Specify a name or cd into a repo.")
         click.echo("  Run: gapp solutions list")
         raise SystemExit(1)
 
     click.echo()
-    click.echo(f"  {ctx['name']} \u2192 {ctx['project_id'] or '(no project attached)'}")
+    click.echo(f"  {result['name']} \u2192 {result['project_id'] or '(no project attached)'}")
     click.echo()
 
-    if not ctx["project_id"]:
+    if not result["project_id"]:
         click.echo("  No GCP project attached.")
         click.echo("  Next: gapp setup <project-id>")
         return
 
-    click.echo("  status details are not yet implemented.")
+    if not result["deployed"]:
+        click.echo("  Not deployed (no Terraform state found).")
+        click.echo("  Next: gapp deploy")
+        return
+
+    for svc in result["services"]:
+        health = "\u2713 healthy" if svc["healthy"] else "\u2717 unhealthy"
+        click.echo(f"  {svc['name']}")
+        click.echo(f"    URL:    {svc['url']}")
+        click.echo(f"    Health: {health}")
+        if svc.get("auth_enabled"):
+            click.echo(f"    Auth:   enabled")
+
+        tools = svc.get("tools")
+        if tools is not None:
+            click.echo(f"    MCP:    {svc.get('mcp_path', '/mcp')} ({len(tools)} tools)")
+            for tool_name in sorted(tools):
+                click.echo(f"      \u2022 {tool_name}")
+        elif svc.get("mcp_path"):
+            click.echo(f"    MCP:    {svc['mcp_path']} (could not enumerate tools)")
+
+    click.echo()
 
 
 @main.group()
