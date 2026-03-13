@@ -1,6 +1,7 @@
 """ASGI middleware for JWT validation and credential mediation."""
 
 import hashlib
+import os
 from urllib.parse import parse_qs
 
 import jwt
@@ -38,7 +39,13 @@ class AuthMiddleware:
 
         # Validate JWT
         try:
-            claims = jwt.decode(token, self.signing_key, algorithms=["HS256"])
+            # K_SERVICE is set by Cloud Run to the service name,
+            # which matches the solution name used as the JWT audience.
+            audience = os.environ.get("K_SERVICE")
+            claims = jwt.decode(
+                token, self.signing_key, algorithms=["HS256"],
+                audience=audience,
+            )
         except jwt.ExpiredSignatureError:
             return await _send_error(send, 401, "Token expired")
         except jwt.InvalidTokenError:
