@@ -17,15 +17,22 @@ from gapp.sdk.manifest import (
 )
 
 
-def deploy_solution(auto_approve: bool = False) -> dict:
+def deploy_solution(auto_approve: bool = False, ref: str | None = None) -> dict:
     """Deploy the current solution.
 
     Steps:
     1. Resolve solution context and load manifest
-    2. Validate entrypoint and clean git tree
+    2. Validate entrypoint and clean git tree (skipped when ref is provided)
     3. Build container via Cloud Build (git archive, skip if image:sha exists)
     4. Stage static Terraform + write tfvars.json
     5. Terraform init with GCS backend + apply
+
+    Args:
+        auto_approve: Pass -auto-approve to terraform apply.
+        ref: Git ref (commit, tag, branch) to deploy. When provided, the dirty
+            tree check is skipped and the specified ref is used for both the
+            image tag and git archive source. When omitted, HEAD is used and
+            the working tree must be clean.
 
     Returns dict describing what was done.
     """
@@ -62,9 +69,14 @@ def deploy_solution(auto_approve: bool = False) -> dict:
     secrets = get_prerequisite_secrets(manifest)
     auth_config = get_auth_config(manifest)
 
-    # Block if working tree is dirty
-    head_sha = _get_head_sha(repo_path)
-    _check_dirty_tree(repo_path)
+    # Resolve git ref to a short SHA for image tagging
+    if ref:
+        deploy_sha = _resolve_ref(repo_path, ref)
+        deploy_ref = ref
+    else:
+        deploy_sha = _get_head_sha(repo_path)
+        deploy_ref = "HEAD"
+        _check_dirty_tree(repo_path)
 
     result = {
         "name": solution_name,
@@ -83,13 +95,14 @@ def deploy_solution(auto_approve: bool = False) -> dict:
     _ensure_artifact_registry(project_id, region)
 
     # Build and push container image (skip if image:sha already exists)
-    image = f"{region}-docker.pkg.dev/{project_id}/gapp/{solution_name}:{head_sha}"
-    if _image_exists(project_id, region, solution_name, head_sha):
+    image = f"{region}-docker.pkg.dev/{project_id}/gapp/{solution_name}:{deploy_sha}"
+    if _image_exists(project_id, region, solution_name, deploy_sha):
         result["build_status"] = "skipped"
     else:
         _build_and_push(
             project_id, repo_path, image,
             service_config["entrypoint"],
+            ref=deploy_ref,
             auth_config=auth_config,
         )
         result["build_status"] = "built"
@@ -156,17 +169,22 @@ def _ensure_artifact_registry(project_id: str, region: str) -> None:
         raise RuntimeError(f"Failed to create Artifact Registry repo: {result.stderr.strip()}")
 
 
-def _get_head_sha(repo_path: Path) -> str:
-    """Get short SHA of HEAD commit."""
+def _resolve_ref(repo_path: Path, ref: str) -> str:
+    """Resolve a git ref (commit, tag, branch) to a short SHA."""
     result = subprocess.run(
-        ["git", "rev-parse", "--short=12", "HEAD"],
+        ["git", "rev-parse", "--short=12", ref],
         capture_output=True,
         text=True,
         cwd=repo_path,
     )
     if result.returncode != 0:
-        raise RuntimeError("Failed to get HEAD SHA. Is this a git repo with commits?")
+        raise RuntimeError(f"Failed to resolve git ref '{ref}'. Is it a valid commit, tag, or branch?")
     return result.stdout.strip()
+
+
+def _get_head_sha(repo_path: Path) -> str:
+    """Get short SHA of HEAD commit."""
+    return _resolve_ref(repo_path, "HEAD")
 
 
 def _check_dirty_tree(repo_path: Path) -> None:
@@ -211,12 +229,12 @@ def _get_runtime_source_dir() -> Path:
 
 def _build_and_push(
     project_id: str, repo_path: Path, image: str, entrypoint: str,
-    *, auth_config: dict | None = None,
+    *, ref: str = "HEAD", auth_config: dict | None = None,
 ) -> None:
     """Build container via Cloud Build using git archive for source integrity.
 
-    Extracts git archive HEAD to a temp dir, copies gapp's Dockerfile
-    template into it, and submits to Cloud Build.
+    Extracts git archive of the specified ref to a temp dir, copies gapp's
+    Dockerfile template into it, and submits to Cloud Build.
 
     When auth is enabled, also copies the gapp_run runtime package into the
     build context and swaps the entrypoint to the wrapper.
@@ -224,7 +242,7 @@ def _build_and_push(
     with tempfile.TemporaryDirectory(prefix="gapp-build-") as build_dir:
         # Extract committed source into temp dir
         archive = subprocess.Popen(
-            ["git", "archive", "--format=tar", "HEAD"],
+            ["git", "archive", "--format=tar", ref],
             stdout=subprocess.PIPE,
             cwd=repo_path,
         )
@@ -348,12 +366,13 @@ def _stage_and_apply(
     )
     (staging_dir / "terraform.tfvars.json").write_text(json.dumps(tfvars, indent=2))
 
-    # Terraform init with GCS backend
+    # Terraform init with GCS backend (upgrade ensures latest module versions)
     init_result = subprocess.run(
         ["terraform", "init",
          f"-backend-config=bucket={bucket_name}",
          "-backend-config=prefix=terraform/state",
-         "-input=false"],
+         "-input=false",
+         "-upgrade"],
         cwd=staging_dir,
         env=env,
         text=True,

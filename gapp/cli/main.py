@@ -65,12 +65,13 @@ def setup_cmd(project_id):
 
 
 @main.command()
-def deploy():
+@click.option("--ref", default=None, help="Git ref (commit, tag, branch) to deploy. Skips dirty tree check.")
+def deploy(ref):
     """Build + terraform apply (requires setup + prerequisites)."""
     from gapp.sdk.deploy import deploy_solution
 
     try:
-        result = deploy_solution(auto_approve=True)
+        result = deploy_solution(auto_approve=True, ref=ref)
     except RuntimeError as e:
         click.echo(f"  Error: {e}", err=True)
         raise SystemExit(1)
