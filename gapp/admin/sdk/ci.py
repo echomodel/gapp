@@ -419,6 +419,8 @@ def _generate_workflow(solution_name: str, solution_repo: str,
                     "ref": "${{ inputs.ref }}",
                     "workload-identity-provider": wif_provider,
                     "service-account": sa_email,
+                    "gapp-repo": gapp_repo,
+                    "gapp-ref": gapp_ref,
                 },
                 "permissions": {
                     "id-token": "write",

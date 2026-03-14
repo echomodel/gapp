@@ -43,6 +43,14 @@ on:
         description: 'GCP service account email for deployment'
         required: true
         type: string
+      gapp-repo:
+        description: 'gapp repo (owner/name) for CLI installation'
+        required: true
+        type: string
+      gapp-ref:
+        description: 'gapp git ref for CLI installation'
+        required: true
+        type: string
 
 jobs:
   deploy:
@@ -71,7 +79,7 @@ jobs:
           ref: ${{ inputs.ref }}
 
       - name: Install gapp
-        run: pip install "gapp @ git+https://github.com/${{ github.action_repository }}.git@${{ github.action_ref }}"
+        run: pip install "gapp @ git+https://github.com/${{ inputs.gapp-repo }}.git@${{ inputs.gapp-ref }}"
 
       - name: Setup and deploy
         run: |
