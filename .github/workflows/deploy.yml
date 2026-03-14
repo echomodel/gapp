@@ -60,6 +60,12 @@ jobs:
       contents: read
 
     steps:
+      - name: Clone solution repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.solution-repo }}
+          ref: ${{ inputs.ref }}
+
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
@@ -71,12 +77,6 @@ jobs:
 
       - name: Install Terraform
         uses: hashicorp/setup-terraform@v3
-
-      - name: Clone solution repo
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ inputs.solution-repo }}
-          ref: ${{ inputs.ref }}
 
       - name: Install gapp
         run: pip install "gapp @ git+https://github.com/${{ inputs.gapp-repo }}.git@${{ inputs.gapp-ref }}"
