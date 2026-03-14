@@ -52,7 +52,13 @@ def deploy_solution(auto_approve: bool = False, ref: str | None = None, solution
             "No GCP project attached. Run 'gapp setup <project-id>' first."
         )
     if not repo_path:
-        raise RuntimeError("No repo path found for this solution.")
+        # Fall back to cwd if it has a gapp.yaml (e.g., CI runner with checkout)
+        from gapp.admin.sdk.context import get_git_root
+        git_root = get_git_root()
+        if git_root and (git_root / "gapp.yaml").is_file():
+            repo_path = str(git_root)
+        else:
+            raise RuntimeError("No repo path found for this solution.")
 
     repo_path = Path(repo_path)
     manifest = load_manifest(repo_path)
