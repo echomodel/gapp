@@ -64,6 +64,10 @@ def resolve_full_context(solution: str | None = None) -> dict:
     GCP labels and GitHub. Returns a dict with:
         name, project_id, repo_path, github_repo
     Any field may be None if it can't be resolved.
+
+    NOTE: This function queries GitHub and GCP APIs. Only CI commands
+    should use it. Non-CI commands (init, setup, deploy, status, etc.)
+    must use resolve_solution() which is purely local.
     """
     ctx = resolve_solution(solution)
     if not ctx and solution:
