@@ -404,6 +404,24 @@ Each tool calls the same SDK function the CLI uses and returns the same structur
 claude mcp add --scope user gapp-admin gapp-mcp
 ```
 
+### Current Limitation: gcloud Dependency
+
+The stdio admin MCP server and the CLI both shell out to `gcloud` for user management (GCS writes) and token creation (Secret Manager reads). This means they only work where gcloud is authenticated — a local workstation or a CI runner. Cloud-based agents like Claude.ai cannot use them directly.
+
+### Future: Wrapper-Hosted Admin
+
+The `gapp_run` ASGI wrapper already has everything needed for user and token management — GCS FUSE mount for credential files, the signing key in `GAPP_SIGNING_KEY`, and JWT validation. A natural evolution:
+
+**Admin endpoints on the wrapper.** The wrapper exposes `/admin/users/register`, `/admin/tokens/create`, etc., authenticated by a JWT with `scope: admin` (similar to how `scope: status` bypasses credential mediation today). The CLI and MCP tools call these HTTP endpoints instead of shelling out to gcloud. No GCP credentials needed on the caller's machine.
+
+**Per-solution admin MCP.** Each deployed solution's wrapper hosts its own admin MCP server at a dedicated path (e.g., `/admin/mcp`). The tools are scoped to that solution — `monarch-access` admin manages monarch-access users, `food-agent` admin manages food-agent users. This preserves per-solution isolation. Claude.ai registers each solution's admin endpoint as a separate MCP server.
+
+**Admin token bootstrap.** During one-time setup (`gapp ci setup` or the first local `gapp deploy`), gapp mints a long-lived admin-scoped JWT using the signing key from Secret Manager. This token is stored as a GitHub secret in the CI repo or provided to the operator. After that, all user management goes through the deployed service — no gcloud needed.
+
+**What this enables:** After one-time CI setup, an operator can manage everything — deployments, users, tokens, credential rotation — from Claude.ai, a phone, or any tool with HTTP access. No local workstation, no gcloud, no terraform.
+
+Not yet implemented. The current stdio MCP server and CLI work for workstation-based administration.
+
 ## CI/CD and Remote Deployment
 
 gapp is designed to work without a local machine. The three-layer model — tool (gapp), application (solution repo), and operator config (private repo) — enables deployment from GitHub Actions, Codespaces, or any stateless environment using Workload Identity Federation for keyless GCP authentication.
