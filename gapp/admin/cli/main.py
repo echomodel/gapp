@@ -479,13 +479,13 @@ def ci_init_cmd(repo, local_only):
 
 
 @ci.command("setup")
-@click.argument("repo")
-def ci_setup_cmd(repo):
-    """Wire a solution for CI/CD deployment (repo name or owner/name)."""
+@click.argument("name", required=False)
+def ci_setup_cmd(name):
+    """Wire a solution for CI/CD deployment."""
     from gapp.admin.sdk.ci import setup_ci
 
     try:
-        result = setup_ci(repo)
+        result = setup_ci(solution=name)
     except RuntimeError as e:
         click.echo(f"  Error: {e}", err=True)
         raise SystemExit(1)
