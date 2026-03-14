@@ -312,7 +312,7 @@ def _secret_name_to_env_var(name: str) -> str:
 def _get_tf_source_dir() -> Path:
     """Get the path to gapp's static Terraform files."""
     # Walk up from this file to find the repo root's terraform/ directory
-    return Path(__file__).resolve().parent.parent.parent.parent / "terraform"
+    return Path(__file__).resolve().parent.parent.parent / "terraform"
 
 
 def _build_tfvars(
