@@ -231,6 +231,7 @@ _DEPLOY_SA_NAME = "gapp-deploy"
 
 _DEPLOY_SA_ROLES = [
     "roles/cloudbuild.builds.editor",
+    "roles/logging.viewer",
     "roles/run.admin",
     "roles/artifactregistry.admin",
     "roles/secretmanager.admin",
@@ -320,28 +321,27 @@ def _ensure_deploy_sa(project_id: str) -> str:
     """Create deploy service account if it doesn't exist."""
     sa_email = f"{_DEPLOY_SA_NAME}@{project_id}.iam.gserviceaccount.com"
 
-    # Check if exists
+    # Create if needed
     check = subprocess.run(
         ["gcloud", "iam", "service-accounts", "describe", sa_email,
          "--project", project_id],
         capture_output=True,
         text=True,
     )
-    if check.returncode == 0:
-        return "exists"
+    status = "exists"
+    if check.returncode != 0:
+        result = subprocess.run(
+            ["gcloud", "iam", "service-accounts", "create", _DEPLOY_SA_NAME,
+             "--project", project_id,
+             "--display-name", "gapp CI/CD deploy"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"Failed to create service account: {result.stderr.strip()}")
+        status = "created"
 
-    # Create
-    result = subprocess.run(
-        ["gcloud", "iam", "service-accounts", "create", _DEPLOY_SA_NAME,
-         "--project", project_id,
-         "--display-name", "gapp CI/CD deploy"],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"Failed to create service account: {result.stderr.strip()}")
-
-    # Grant roles
+    # Always ensure roles (idempotent — add-iam-policy-binding is a no-op if already bound)
     for role in _DEPLOY_SA_ROLES:
         subprocess.run(
             ["gcloud", "projects", "add-iam-policy-binding", project_id,
@@ -352,7 +352,7 @@ def _ensure_deploy_sa(project_id: str) -> str:
             text=True,
         )
 
-    return "created"
+    return status
 
 
 def _ensure_wif_binding(project_id: str, ci_repo: str) -> str:
