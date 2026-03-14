@@ -139,9 +139,9 @@ on:
 
 jobs:
   deploy:
-    uses: krisrowe/gapp/.github/workflows/deploy.yml@<pinned-sha>
+    uses: <gapp-owner>/gapp/.github/workflows/deploy.yml@<pinned-sha>
     with:
-      repo: krisrowe/monarch-access
+      repo: <owner>/monarch-access
       ref: ${{ inputs.ref }}
       project-id: my-gcp-project-123
       workload-identity-provider: projects/123/locations/global/workloadIdentityPools/github/providers/github
@@ -233,7 +233,7 @@ gapp ci status                                    # optional: check CI state
 
 One-time setup per operator. Designates the CI repo — where deployment workflows live.
 
-The `<repo>` argument accepts a repo name or owner/name. If only a name is given, the owner defaults to the authenticated `gh` user. Examples: `personal-projects`, `krisrowe/personal-projects`.
+The `<repo>` argument accepts a repo name or owner/name. If only a name is given, the owner defaults to the authenticated `gh` user. Examples: `personal-projects`, `myuser/personal-projects`.
 
 What it does:
 1. Writes the CI repo name to local XDG config (`~/.config/gapp/ci.yaml` or a `ci` section in `solutions.yaml`). This is the authoritative local setting.
@@ -252,7 +252,7 @@ Prerequisites: `gh` CLI authenticated (unless `--local-only`).
 
 #### `gapp ci setup <repo>`
 
-Per-solution CI wiring. The `<repo>` argument is the solution repo to wire up — accepts repo name or owner/name. Since the solution repo may not be owned by the operator, owner/name is typical (e.g., `krisrowe/monarch-access`). If only a name is given, the owner defaults to the authenticated `gh` user.
+Per-solution CI wiring. The `<repo>` argument is the solution repo to wire up — accepts repo name or owner/name. Since the solution repo may not be owned by the operator, owner/name is typical (e.g., `someuser/monarch-access`). If only a name is given, the owner defaults to the authenticated `gh` user.
 
 Does everything needed to deploy this solution via CI:
 
