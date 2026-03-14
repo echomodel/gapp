@@ -71,7 +71,7 @@ jobs:
           ref: ${{ inputs.ref }}
 
       - name: Install gapp
-        run: pip install "gapp @ git+https://github.com/${{ github.repository }}.git@${{ github.sha }}"
+        run: pip install "gapp @ git+https://github.com/${{ github.action_repository }}.git@${{ github.action_ref }}"
 
       - name: Setup and deploy
         run: |

@@ -525,6 +525,27 @@ def ci_status_cmd():
     click.echo()
 
 
+@ci.command("trigger")
+@click.argument("name", required=False)
+@click.option("--ref", default="main", help="Git ref to deploy (default: main).")
+def ci_trigger_cmd(name, ref):
+    """Trigger a CI deployment for a solution."""
+    from gapp.admin.sdk.ci import trigger_ci
+
+    try:
+        result = trigger_ci(solution=name, ref=ref)
+    except RuntimeError as e:
+        click.echo(f"  Error: {e}", err=True)
+        raise SystemExit(1)
+
+    click.echo()
+    click.echo(f"  Triggered {result['solution']} deploy")
+    click.echo(f"    CI repo:   {result['ci_repo']}")
+    click.echo(f"    Workflow:  {result['workflow']}")
+    click.echo(f"    Ref:       {result['ref']}")
+    click.echo()
+
+
 # --- MCP (deployed solutions) ---
 
 @main.group()

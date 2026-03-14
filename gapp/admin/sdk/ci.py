@@ -176,6 +176,53 @@ def get_ci_repo() -> str | None:
     return status.get("repo")
 
 
+def trigger_ci(solution: str | None = None, *, ref: str = "main") -> dict:
+    """Trigger a CI deployment for a solution.
+
+    Dispatches the solution's workflow in the CI repo via gh CLI.
+    """
+    from gapp.admin.sdk.context import resolve_solution
+
+    ci_repo = get_ci_repo()
+    if not ci_repo:
+        raise RuntimeError(
+            "No CI repo configured. Run 'gapp ci init <repo-name>' first."
+        )
+
+    ctx = resolve_solution(solution)
+    if not ctx:
+        if not solution:
+            raise RuntimeError(
+                "No solution specified and not inside a solution repo.\n"
+                "  Run: gapp ci trigger <solution-name>"
+            )
+        ctx = {"name": solution}
+
+    solution_name = ctx["name"]
+    workflow_file = f"{solution_name}.yml"
+
+    result = subprocess.run(
+        ["gh", "workflow", "run", workflow_file,
+         "--repo", ci_repo,
+         "-f", f"ref={ref}"],
+        capture_output=True,
+        text=True,
+    )
+
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"Failed to trigger workflow {workflow_file} in {ci_repo}:\n"
+            f"  {result.stderr.strip()}"
+        )
+
+    return {
+        "solution": solution_name,
+        "ci_repo": ci_repo,
+        "workflow": workflow_file,
+        "ref": ref,
+    }
+
+
 # --- WIF and service account ---
 
 _WIF_POOL_ID = "github"
@@ -232,7 +279,7 @@ def _ensure_wif_pool(project_id: str) -> str:
     return "created"
 
 
-def _ensure_wif_provider(project_id: str) -> str:
+def _ensure_wif_provider(project_id: str, github_owner: str) -> str:
     """Create WIF OIDC provider for GitHub if it doesn't exist."""
     # Check if exists
     check = subprocess.run(
@@ -246,7 +293,7 @@ def _ensure_wif_provider(project_id: str) -> str:
     if check.returncode == 0:
         return "exists"
 
-    # Create
+    # Create — restrict to repos owned by the operator's GitHub account
     result = subprocess.run(
         ["gcloud", "iam", "workload-identity-pools", "providers", "create-oidc",
          _WIF_PROVIDER_ID,
@@ -259,7 +306,7 @@ def _ensure_wif_provider(project_id: str) -> str:
          "attribute.repository=assertion.repository,"
          "attribute.repository_owner=assertion.repository_owner",
          "--attribute-condition",
-         f"assertion.repository_owner == '{project_id}'",
+         f"assertion.repository_owner == '{github_owner}'",
          ],
         capture_output=True,
         text=True,
@@ -350,7 +397,7 @@ def _generate_workflow(solution_name: str, solution_repo: str,
         capture_output=True,
         text=True,
     )
-    gapp_ref = gapp_sha.stdout.strip()[:12] if gapp_sha.returncode == 0 else "main"
+    gapp_ref = gapp_sha.stdout.strip() if gapp_sha.returncode == 0 else "main"
 
     workflow = {
         "name": f"Deploy {solution_name}",
@@ -389,7 +436,8 @@ def _push_workflow_to_ci_repo(ci_repo: str, solution_name: str,
     import tempfile
     import os
 
-    with tempfile.TemporaryDirectory() as tmpdir:
+    with tempfile.TemporaryDirectory() as parent:
+        tmpdir = os.path.join(parent, "repo")
         # Clone the CI repo
         clone = subprocess.run(
             ["gh", "repo", "clone", ci_repo, tmpdir, "--", "--depth", "1"],
@@ -418,10 +466,13 @@ def _push_workflow_to_ci_repo(ci_repo: str, solution_name: str,
         if not status.stdout.strip():
             return "unchanged"
 
-        subprocess.run(
-            ["git", "commit", "-m", f"Add deploy workflow for {solution_name}"],
+        commit = subprocess.run(
+            ["git", "-c", "core.hooksPath=/dev/null", "commit",
+             "-m", f"Add deploy workflow for {solution_name}"],
             capture_output=True, text=True, cwd=tmpdir,
         )
+        if commit.returncode != 0:
+            raise RuntimeError(f"Failed to commit workflow: {commit.stderr.strip()}")
         push = subprocess.run(
             ["git", "push"],
             capture_output=True, text=True, cwd=tmpdir,
@@ -489,7 +540,8 @@ def setup_ci(solution: str | None = None) -> dict:
     result["wif_pool"] = _ensure_wif_pool(project_id)
 
     # 4. WIF provider
-    result["wif_provider"] = _ensure_wif_provider(project_id)
+    github_owner = ci_repo.split("/")[0] if "/" in ci_repo else ci_repo
+    result["wif_provider"] = _ensure_wif_provider(project_id, github_owner)
 
     # 5. Deploy SA
     result["service_account"] = _ensure_deploy_sa(project_id)
