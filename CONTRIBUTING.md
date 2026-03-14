@@ -403,3 +403,9 @@ Each tool calls the same SDK function the CLI uses and returns the same structur
 ```bash
 claude mcp add --scope user gapp-admin gapp-mcp
 ```
+
+## CI/CD and Remote Deployment
+
+gapp is designed to work without a local machine. The three-layer model — tool (gapp), application (solution repo), and operator config (private repo) — enables deployment from GitHub Actions, Codespaces, or any stateless environment using Workload Identity Federation for keyless GCP authentication.
+
+See [docs/CI.md](docs/CI.md) for the full design: authentication architecture, the operator repo pattern, CLI design decisions, and what changes are needed in gapp.
