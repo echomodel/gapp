@@ -1,0 +1,79 @@
+# Reusable workflow for deploying gapp solutions via GitHub Actions + WIF.
+#
+# This workflow is called from an operator's private CI repo, not from
+# the solution repo itself. The operator's workflow passes solution repo,
+# ref, and WIF credentials as inputs.
+#
+# Example caller workflow (in operator's CI repo):
+#
+#   on:
+#     workflow_dispatch:
+#       inputs:
+#         ref:
+#           description: 'Version/tag/SHA to deploy'
+#           default: 'main'
+#   jobs:
+#     deploy:
+#       uses: <gapp-owner>/gapp/.github/workflows/deploy.yml@<pinned-sha>
+#       with:
+#         solution-repo: <owner>/monarch-access
+#         ref: ${{ inputs.ref }}
+#         workload-identity-provider: projects/<number>/locations/global/workloadIdentityPools/github/providers/github
+#         service-account: gapp-deploy@<project-id>.iam.gserviceaccount.com
+
+name: Deploy gapp solution
+
+on:
+  workflow_call:
+    inputs:
+      solution-repo:
+        description: 'Solution repo (owner/name)'
+        required: true
+        type: string
+      ref:
+        description: 'Git ref to deploy (commit, tag, or branch)'
+        required: false
+        default: 'main'
+        type: string
+      workload-identity-provider:
+        description: 'Full WIF provider resource name'
+        required: true
+        type: string
+      service-account:
+        description: 'GCP service account email for deployment'
+        required: true
+        type: string
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ inputs.workload-identity-provider }}
+          service_account: ${{ inputs.service-account }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Clone solution repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.solution-repo }}
+          ref: ${{ inputs.ref }}
+
+      - name: Install gapp
+        run: pip install "gapp @ git+https://github.com/${{ github.repository }}.git@${{ github.sha }}"
+
+      - name: Setup and deploy
+        run: |
+          gapp setup
+          gapp deploy --ref ${{ inputs.ref }}

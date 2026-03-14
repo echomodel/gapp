@@ -83,7 +83,7 @@ One repo = one solution = one Cloud Run service. Multi-service solutions are sup
 
 Solutions are discovered via GitHub repos and topics, not GCP project configurations. GitHub is more durable and discoverable than GCP for this purpose — repos have READMEs, topics, and are browsable. GCP labels (`gapp-{name}=default`) are the secondary source, used to map a solution to its GCP project. Local config (`~/.config/gapp/solutions.yaml`) is a working registry reconstructable from GitHub + GCP.
 
-gapp is GitHub-flavored but not GitHub-locked: `gapp deploy` works with any local git repo (no GitHub API needed). `gapp list --available` requires GitHub for remote discovery. The runtime wrapper is installed from GitHub during container build.
+gapp is GitHub-flavored but not GitHub-locked. The core lifecycle — `gapp init`, `gapp setup`, `gapp secret set`, `gapp deploy` — works with any local git repo and requires no GitHub account, no GitHub API, and no GitHub Actions. GitHub is required only for optional features: remote discovery (`gapp list --available`), CI/CD automation (`gapp ci`), and installing the runtime wrapper during container build. The CI layer calls `gapp deploy` — not the other way around.
 
 ## Solution Lifecycle Phases
 
@@ -403,3 +403,9 @@ Each tool calls the same SDK function the CLI uses and returns the same structur
 ```bash
 claude mcp add --scope user gapp-admin gapp-mcp
 ```
+
+## CI/CD and Remote Deployment
+
+gapp is designed to work without a local machine. The three-layer model — tool (gapp), application (solution repo), and operator config (private repo) — enables deployment from GitHub Actions, Codespaces, or any stateless environment using Workload Identity Federation for keyless GCP authentication.
+
+See [docs/CI.md](docs/CI.md) for the full design: authentication architecture, the operator repo pattern, CLI design decisions, and what changes are needed in gapp.

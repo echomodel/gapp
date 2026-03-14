@@ -141,6 +141,8 @@ python -m pytest tests/unit/ -v
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for architecture and design principles.
 
+See [docs/CI.md](docs/CI.md) for deploying without a local machine — via GitHub Actions, Workload Identity Federation, and the operator repo pattern.
+
 ---
 
 ## Why gapp

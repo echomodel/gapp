@@ -18,7 +18,7 @@ from gapp.admin.sdk.manifest import (
 )
 
 
-def deploy_solution(auto_approve: bool = False, ref: str | None = None) -> dict:
+def deploy_solution(auto_approve: bool = False, ref: str | None = None, solution: str | None = None) -> dict:
     """Deploy the current solution.
 
     Steps:
@@ -37,7 +37,7 @@ def deploy_solution(auto_approve: bool = False, ref: str | None = None) -> dict:
 
     Returns dict describing what was done.
     """
-    ctx = resolve_solution()
+    ctx = resolve_solution(solution)
     if not ctx:
         raise RuntimeError(
             "Not inside a gapp solution. Run 'gapp init' first, or cd into a solution repo."
