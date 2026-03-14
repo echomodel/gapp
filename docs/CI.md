@@ -294,7 +294,7 @@ The `next_step` after `gapp deploy` can suggest: `"To enable CI/CD: gapp ci init
 
 ## Context Resolution in CI
 
-### How it works today
+### How project ID resolution works
 
 `resolve_solution()` resolves context in two ways:
 1. Explicit name → looks up `solutions.yaml` for project_id and repo_path
@@ -302,19 +302,37 @@ The `next_step` after `gapp deploy` can suggest: `"To enable CI/CD: gapp ci init
 
 `solutions.yaml` is local XDG config (`~/.config/gapp/solutions.yaml`). It's a cache populated by `gapp setup`, not a source of truth. The source of truth is GCP project labels (`gapp-{name}=default`).
 
-### How it works on a CI runner
-
-The runner has no `solutions.yaml`. The reusable workflow handles this by:
+On a CI runner, there's no `solutions.yaml`. The reusable workflow handles this by:
 
 1. Cloning the solution repo (restores cwd-based resolution — `gapp.yaml` is present)
 2. Running `gapp setup` (no project ID arg — discovers the project via GCP label query, populates `solutions.yaml` on the runner, all steps are idempotent no-ops if already done)
 3. Running `gapp deploy` (reads `solutions.yaml` populated by step 2, works as-is)
 
-No new CLI flags needed. `gapp setup` already has GCP label discovery (`_discover_project_from_label` in `setup.py`). Running it first on the runner bootstraps the local cache that all other commands depend on. This is the same thing you'd do on a new workstation.
+No `--project` flag needed. `gapp setup` already has GCP label discovery (`_discover_project_from_label` in `setup.py`). Running it first on the runner bootstraps the local cache that all other commands depend on. This is the same thing you'd do on a new workstation. If `gapp setup` has never been run for a project at all, `gapp deploy` errors with a clear message telling the operator to run setup first — that's existing behavior and it's fine.
 
-### Why no new flags
+### The `--solution` flag
 
-Existing commands work in CI without modification because the reusable workflow reconstructs the expected environment: clone the repo (provides cwd context), run setup (provides `solutions.yaml`). Adding `--project`, `--solution`, or other flags to existing CLI/MCP commands is unnecessary and would add complexity to the existing interface. New flags will only be added if an explicit need arises.
+The SDK's `resolve_solution(name)` supports explicit name lookup, but the CLI is inconsistent about exposing it:
+
+| Accepts solution name | Hardcoded to cwd (no name parameter) |
+|---|---|
+| `status [name]` (positional arg) | `deploy` |
+| `mcp status [name]` (positional arg) | `setup` |
+| `mcp connect [name]` (positional arg) | `secrets list/set/add/remove` |
+| `tokens create/revoke` (`--solution` option) | `users register/list/get/update/revoke` |
+
+There's also an inconsistency in how the name is passed — sometimes a positional argument, sometimes `--solution`. The `tokens` commands use `--solution` because they already have a required positional argument (`email`).
+
+The `--solution` flag (matching the existing `tokens` convention) should be added to commands that currently hardcode cwd:
+
+- `gapp deploy --solution <name>`
+- `gapp setup --solution <name>`
+- `gapp secrets list/set/add/remove --solution <name>`
+- `gapp users register/list/get/update/revoke --solution <name>`
+
+This is optional everywhere — cwd remains the default. The flag is a convenience locally (operate on a solution without cd'ing into it) and becomes relevant for `gapp ci` commands that run from the operator's repo, not the solution repo.
+
+For the commands that already use a positional `name` argument (`status`, `mcp status`, `mcp connect`), no change is needed — they already work.
 
 ## What Changes in gapp
 
@@ -324,6 +342,7 @@ Existing commands work in CI without modification because the reusable workflow 
 2. **`gapp ci status` command** — discover CI repo, report configuration state (SDK reused by `ci setup`)
 3. **`gapp ci setup` command** — create WIF pool/provider/service account in GCP, add IAM binding, generate and push workflow file to CI repo
 4. **Reusable workflow** — `.github/workflows/deploy.yml` in gapp repo
+5. **`--solution` flag** — add to `deploy`, `setup`, `secrets *`, and `users *` (the commands that currently hardcode cwd)
 
 ### No changes needed
 
