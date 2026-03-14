@@ -114,13 +114,22 @@ def _discover_project_from_label(solution_name: str) -> str | None:
 
 
 def _enable_api(project_id: str, api: str) -> None:
-    """Enable a GCP API on the project. Idempotent."""
-    subprocess.run(
+    """Enable a GCP API on the project. Idempotent, tolerant of permission errors."""
+    result = subprocess.run(
         ["gcloud", "services", "enable", api, "--project", project_id],
         capture_output=True,
         text=True,
-        check=True,
     )
+    if result.returncode != 0:
+        # Check if already enabled (common in CI where SA lacks serviceusage perms)
+        check = subprocess.run(
+            ["gcloud", "services", "list", "--project", project_id,
+             "--filter", f"config.name={api}", "--format", "value(config.name)"],
+            capture_output=True, text=True,
+        )
+        if check.returncode == 0 and api in check.stdout:
+            return  # Already enabled, safe to continue
+        raise RuntimeError(f"Failed to enable API {api}: {result.stderr.strip()}")
 
 
 def _create_bucket(project_id: str, bucket_name: str) -> str:

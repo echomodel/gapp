@@ -9,20 +9,47 @@ gapp handles the full lifecycle: infrastructure, secrets, container builds, mult
 ## Quick Start
 
 ```bash
-pip install -e .
+pipx install git+https://github.com/krisrowe/gapp.git
 ```
 
-From inside a git repo with a Python package:
+There are two paths to deploying a solution. Choose the one that fits your workflow.
+
+### Path A: Local Deploy
+
+Deploy directly from your workstation. Requires `gcloud` and `terraform` installed locally.
 
 ```bash
 gapp init                          # scaffold gapp.yaml, register locally
 gapp setup <gcp-project-id>       # enable APIs, create state bucket, label project
 gapp secret set <secret-name>     # populate secrets in Secret Manager
 gapp deploy                       # build container + terraform apply
+```
 
+### Path B: CI/CD (No Local Terraform)
+
+Set up once from your workstation, then deploy from anywhere — GitHub UI, Claude.ai, Claude Code on the web, your phone. No terraform or docker needed locally. After one-time setup, code changes and deployments are fully decoupled from your machine.
+
+```bash
+# One-time setup (requires gcloud + gh CLI):
+gapp init                          # scaffold gapp.yaml
+gapp setup <gcp-project-id>       # GCP foundation
+gapp secret set <secret-name>     # populate secrets
+gapp ci init <your-ci-repo>       # designate your private CI repo
+gapp ci setup <solution-name>     # create WIF, SA, push workflow
+
+# From now on, deploy from anywhere:
+gapp ci trigger <solution-name>   # trigger GitHub Actions deploy
+```
+
+After CI setup, any tool with GitHub access can deploy — push a commit, trigger the workflow from GitHub's web UI, or use `gh workflow run` from any device. Cloud-based agents like Claude.ai and Claude Code on the web can make code changes and trigger deployments without access to GCP credentials or a local development environment.
+
+### After Deploying (Both Paths)
+
+```bash
 # If auth enabled in gapp.yaml:
 gapp users register user@example.com <credential>   # register a user
-gapp tokens create user@example.com                  # create a personal access token (PAT)
+gapp tokens create user@example.com                  # create a PAT
+gapp mcp connect                                     # show client connection info
 ```
 
 Each command is idempotent and tells you what to do next.
@@ -35,7 +62,9 @@ Each command is idempotent and tells you what to do next.
 
 3. **`gapp secret set <name>`** — stores secret values in GCP Secret Manager, guided by metadata in `gapp.yaml`.
 
-4. **`gapp deploy`** — builds a container image via Cloud Build and deploys to Cloud Run via Terraform. Requires a clean git tree (no uncommitted changes). Skips the build if the image for the current commit already exists.
+4. **`gapp deploy`** (Path A) — builds a container image via Cloud Build and deploys to Cloud Run via Terraform. Requires a clean git tree (no uncommitted changes). Skips the build if the image for the current commit already exists.
+
+5. **`gapp ci trigger`** (Path B) — dispatches the solution's GitHub Actions workflow, which runs `gapp deploy` on a runner with WIF-authenticated GCP access. No local terraform or docker.
 
 ## The `gapp.yaml` File
 
@@ -127,10 +156,15 @@ gapp tokens revoke <email>           Invalidate all PATs for a user
 
 ## Prerequisites
 
+**Both paths:**
 - Python 3.10+
 - `gcloud` CLI (authenticated)
+- `gh` CLI (for GitHub integration)
+
+**Path A (local deploy) also requires:**
 - `terraform` CLI
-- `gh` CLI (for GitHub topic management)
+
+**Path B (CI/CD) does not require terraform or docker locally.** After one-time setup, all deployments run on GitHub Actions runners.
 
 ## Development
 
