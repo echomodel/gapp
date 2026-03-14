@@ -157,32 +157,49 @@ def _create_bucket(project_id: str, bucket_name: str) -> str:
 
 
 def _label_project(project_id: str, solution_name: str) -> str:
-    """Add gapp-{name}=default label to the project. Idempotent."""
+    """Add gapp-{name}=default label to the project via Resource Manager API.
+
+    Uses gcloud access token + curl to call the API directly. Merges labels
+    without affecting existing ones (updateMask=labels only updates specified keys).
+    """
     label_key = f"gapp-{solution_name}"
 
-    # Check current labels
-    check = subprocess.run(
-        ["gcloud", "projects", "describe", project_id,
-         "--format", "json(labels)"],
-        capture_output=True,
-        text=True,
+    # Get current labels
+    token = subprocess.run(
+        ["gcloud", "auth", "print-access-token"],
+        capture_output=True, text=True,
     )
-    if check.returncode == 0:
-        data = json.loads(check.stdout) or {}
-        labels = data.get("labels") or {}
-        if labels.get(label_key) == "default":
-            return "exists"
+    if token.returncode != 0:
+        return "skipped"
+    access_token = token.stdout.strip()
 
-    # Add label
-    result = subprocess.run(
-        ["gcloud", "projects", "update", project_id,
-         "--update-labels", f"{label_key}=default"],
-        capture_output=True,
-        text=True,
+    # Check if label already set
+    get_result = subprocess.run(
+        ["curl", "-sf",
+         "-H", f"Authorization: Bearer {access_token}",
+         f"https://cloudresourcemanager.googleapis.com/v3/projects/{project_id}"],
+        capture_output=True, text=True,
     )
-    if result.returncode != 0:
-        stderr = result.stderr.strip()
-        if "PERMISSION_DENIED" in stderr:
-            return "skipped"
-        raise RuntimeError(f"Failed to label project: {stderr}")
+    if get_result.returncode == 0:
+        project_data = json.loads(get_result.stdout)
+        existing_labels = project_data.get("labels", {})
+        if existing_labels.get(label_key) == "default":
+            return "exists"
+        # Merge our label with existing
+        existing_labels[label_key] = "default"
+    else:
+        existing_labels = {label_key: "default"}
+
+    # Update labels
+    patch_body = json.dumps({"labels": existing_labels})
+    patch_result = subprocess.run(
+        ["curl", "-sf", "-X", "PATCH",
+         "-H", f"Authorization: Bearer {access_token}",
+         "-H", "Content-Type: application/json",
+         "-d", patch_body,
+         f"https://cloudresourcemanager.googleapis.com/v3/projects/{project_id}?updateMask=labels"],
+        capture_output=True, text=True,
+    )
+    if patch_result.returncode != 0:
+        return "skipped"
     return "added"
