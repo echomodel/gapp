@@ -55,7 +55,7 @@ This is the key insight. There are three layers:
 | **Application** (solution repo) | Public product | Application code, `gapp.yaml` |
 | **Operator config** (private repo) | Private, per-operator | Project IDs, WIF references, workflow files that wire tool + application to infrastructure |
 
-The operator config is the only place where "deploy this specific solution to this specific GCP project" is expressed. This is the `personal-projects` repo pattern.
+The operator config is the only place where "deploy this specific solution to this specific GCP project" is expressed. This is the `personal-gapp-ci` repo pattern.
 
 ### The operator repo is not intellectual work
 
@@ -126,7 +126,7 @@ gapp needs `gcloud` on the runner because it shells out to `gcloud` for everythi
 
 ## The Operator's Private Repo
 
-The operator's private repo (e.g., `personal-projects`) is minimal. Per solution, it contains one workflow file:
+The operator's private repo (e.g., `personal-gapp-ci`) is minimal. Per solution, it contains one workflow file:
 
 ```yaml
 # .github/workflows/monarch-access.yml
@@ -233,7 +233,7 @@ gapp ci status                                    # optional: check CI state
 
 One-time setup per operator. Designates the CI repo — where deployment workflows live.
 
-The `<repo>` argument accepts a repo name or owner/name. If only a name is given, the owner defaults to the authenticated `gh` user. Examples: `personal-projects`, `myuser/personal-projects`.
+The `<repo>` argument accepts a repo name or owner/name. If only a name is given, the owner defaults to the authenticated `gh` user. Examples: `personal-gapp-ci`, `myuser/personal-gapp-ci`.
 
 What it does:
 1. Writes the CI repo name to local XDG config (`~/.config/gapp/ci.yaml` or a `ci` section in `solutions.yaml`). This is the authoritative local setting.
