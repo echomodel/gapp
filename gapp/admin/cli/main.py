@@ -531,12 +531,14 @@ def ci_status_cmd():
 @ci.command("trigger")
 @click.argument("name", required=False)
 @click.option("--ref", default="main", help="Git ref to deploy (default: main).")
-def ci_trigger_cmd(name, ref):
+@click.option("--no-wait", is_flag=True, help="Return immediately without watching.")
+def ci_trigger_cmd(name, ref, no_wait):
     """Trigger a CI deployment for a solution."""
     from gapp.admin.sdk.ci import trigger_ci
 
     try:
-        result = trigger_ci(solution=name, ref=ref)
+        watch = not no_wait
+        result = trigger_ci(solution=name, ref=ref, watch=watch)
     except RuntimeError as e:
         click.echo(f"  Error: {e}", err=True)
         raise SystemExit(1)
@@ -546,6 +548,38 @@ def ci_trigger_cmd(name, ref):
     click.echo(f"    CI repo:   {result['ci_repo']}")
     click.echo(f"    Workflow:  {result['workflow']}")
     click.echo(f"    Ref:       {result['ref']}")
+    if result.get("run_url"):
+        click.echo(f"    Run:       {result['run_url']}")
+
+    if result.get("watched"):
+        conclusion = result.get("conclusion", "unknown")
+        if conclusion == "success":
+            click.echo(f"\n  \u2713 Deploy succeeded")
+        else:
+            click.echo(f"\n  \u2717 Deploy {conclusion}")
+            raise SystemExit(1)
+    elif result.get("run_id"):
+        click.echo()
+        click.echo(f"  Watch: gapp ci watch {result['run_id']}")
+
+    click.echo()
+
+
+@ci.command("watch")
+@click.argument("run_id")
+def ci_watch_cmd(run_id):
+    """Watch a CI run to completion."""
+    from gapp.admin.sdk.ci import watch_ci
+
+    result = watch_ci(run_id)
+
+    click.echo()
+    conclusion = result.get("conclusion", "unknown")
+    if conclusion == "success":
+        click.echo(f"  \u2713 Run {result['run_id']} succeeded")
+    else:
+        click.echo(f"  \u2717 Run {result['run_id']} {conclusion}")
+        raise SystemExit(1)
     click.echo()
 
 

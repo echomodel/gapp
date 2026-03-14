@@ -176,11 +176,13 @@ def get_ci_repo() -> str | None:
     return status.get("repo")
 
 
-def trigger_ci(solution: str | None = None, *, ref: str = "main") -> dict:
+def trigger_ci(solution: str | None = None, *, ref: str = "main", watch: bool = True) -> dict:
     """Trigger a CI deployment for a solution.
 
     Dispatches the solution's workflow in the CI repo via gh CLI.
+    If watch=True (default), blocks and streams status until completion.
     """
+    import time
     from gapp.admin.sdk.context import resolve_solution
 
     ci_repo = get_ci_repo()
@@ -215,11 +217,72 @@ def trigger_ci(solution: str | None = None, *, ref: str = "main") -> dict:
             f"  {result.stderr.strip()}"
         )
 
-    return {
+    # Brief delay for GitHub to register the run
+    time.sleep(2)
+
+    # Find the run ID
+    run_id = None
+    list_result = subprocess.run(
+        ["gh", "api", f"repos/{ci_repo}/actions/runs",
+         "--jq", ".workflow_runs[0].id"],
+        capture_output=True, text=True,
+    )
+    if list_result.returncode == 0 and list_result.stdout.strip():
+        run_id = list_result.stdout.strip()
+
+    run_url = f"https://github.com/{ci_repo}/actions/runs/{run_id}" if run_id else None
+
+    trigger_result = {
         "solution": solution_name,
         "ci_repo": ci_repo,
         "workflow": workflow_file,
         "ref": ref,
+        "run_id": run_id,
+        "run_url": run_url,
+        "watched": False,
+        "conclusion": None,
+    }
+
+    if watch and run_id:
+        watch_result = subprocess.run(
+            ["gh", "run", "watch", run_id, "--repo", ci_repo],
+        )
+        trigger_result["watched"] = True
+        # Get conclusion
+        conclusion_result = subprocess.run(
+            ["gh", "api", f"repos/{ci_repo}/actions/runs/{run_id}",
+             "--jq", ".conclusion"],
+            capture_output=True, text=True,
+        )
+        if conclusion_result.returncode == 0:
+            trigger_result["conclusion"] = conclusion_result.stdout.strip()
+
+    return trigger_result
+
+
+def watch_ci(run_id: str) -> dict:
+    """Watch a CI run to completion.
+
+    Blocks and streams status until the run completes.
+    """
+    ci_repo = get_ci_repo()
+    if not ci_repo:
+        raise RuntimeError("No CI repo configured.")
+
+    subprocess.run(["gh", "run", "watch", run_id, "--repo", ci_repo])
+
+    # Get conclusion
+    result = subprocess.run(
+        ["gh", "api", f"repos/{ci_repo}/actions/runs/{run_id}",
+         "--jq", ".conclusion"],
+        capture_output=True, text=True,
+    )
+    conclusion = result.stdout.strip() if result.returncode == 0 else None
+
+    return {
+        "run_id": run_id,
+        "ci_repo": ci_repo,
+        "conclusion": conclusion,
     }
 
 
