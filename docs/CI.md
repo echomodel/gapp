@@ -239,11 +239,22 @@ gapp ci status                                    # optional: check CI state
 
 #### `gapp ci init <repo-name>`
 
-One-time setup per GitHub account. Creates or identifies the operator's CI repo and tags it with a `gapp-ci` GitHub topic (or similar). Ensures exactly one repo is tagged for the authenticated `gh` user. If a repo with the topic already exists and the name doesn't match, it errors — one CI repo per operator.
+One-time setup per operator. Designates the CI repo — where deployment workflows live.
 
-This is the prerequisite for all other `gapp ci` commands. It establishes "where do my deployment workflows live?" as a discoverable fact, the same way `gapp-solution` topics establish "which repos are solutions?"
+What it does:
+1. Writes the CI repo name to local XDG config (`~/.config/gapp/ci.yaml` or a `ci` section in `solutions.yaml`). This is the authoritative local setting.
+2. Tags the repo with a `gapp-ci` GitHub topic (for discoverability on other machines).
+3. Ensures exactly one repo is tagged for the authenticated `gh` user. If a repo with the topic already exists and the name doesn't match, it errors — one CI repo per operator.
 
-Prerequisites: `gh` CLI authenticated.
+**`--local-only`**: Skips the GitHub topic tagging. Only writes to XDG config. Useful when:
+- You don't want to modify topics on the repo
+- You're in a GitHub organization or enterprise where topic management is restricted
+- You want to work without `gh` CLI configured
+- You're testing or working across multiple GitHub accounts
+
+This is the prerequisite for all other `gapp ci` commands. It establishes "where do my deployment workflows live?" — locally via XDG config (always), and remotely via GitHub topic (optionally).
+
+Prerequisites: `gh` CLI authenticated (unless `--local-only`).
 
 #### `gapp ci setup <solution-repo-url>`
 
