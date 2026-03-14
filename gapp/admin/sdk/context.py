@@ -55,3 +55,69 @@ def resolve_solution(name: str | None = None) -> dict | None:
         }
 
     return None
+
+
+def resolve_full_context(solution: str | None = None) -> dict:
+    """Resolve solution context with remote fallbacks.
+
+    Like resolve_solution, but fills in missing fields by querying
+    GCP labels and GitHub. Returns a dict with:
+        name, project_id, repo_path, github_repo
+    Any field may be None if it can't be resolved.
+    """
+    ctx = resolve_solution(solution)
+    if not ctx and solution:
+        ctx = {"name": solution, "project_id": None, "repo_path": None}
+    if not ctx:
+        return {"name": None, "project_id": None, "repo_path": None, "github_repo": None}
+
+    result = {**ctx, "github_repo": None}
+
+    # Fill project_id from GCP labels if missing
+    if not result.get("project_id"):
+        from gapp.admin.sdk.setup import _discover_project_from_label
+        result["project_id"] = _discover_project_from_label(result["name"])
+
+    # Fill github_repo from local git remote
+    repo_path = result.get("repo_path")
+    if repo_path:
+        expanded = Path(repo_path).expanduser()
+        if expanded.exists():
+            try:
+                gh = subprocess.run(
+                    ["gh", "repo", "view", "--json", "nameWithOwner",
+                     "--jq", ".nameWithOwner"],
+                    capture_output=True, text=True, cwd=expanded,
+                )
+                if gh.returncode == 0 and gh.stdout.strip():
+                    result["github_repo"] = gh.stdout.strip()
+            except FileNotFoundError:
+                pass
+
+    # Fall back to GitHub topic search
+    if not result.get("github_repo"):
+        try:
+            gh = subprocess.run(
+                ["gh", "search", "repos", "--topic", "gapp-solution",
+                 "--owner", "@me", "--json", "fullName",
+                 "--jq", f'[.[] | select(.fullName | endswith("/{result["name"]}"))] | .[0].fullName'],
+                capture_output=True, text=True,
+            )
+            if gh.returncode == 0 and gh.stdout.strip():
+                result["github_repo"] = gh.stdout.strip()
+        except FileNotFoundError:
+            pass
+
+    # Last fallback: owner/name convention
+    if not result.get("github_repo"):
+        try:
+            gh = subprocess.run(
+                ["gh", "api", "user", "--jq", ".login"],
+                capture_output=True, text=True,
+            )
+            if gh.returncode == 0 and gh.stdout.strip():
+                result["github_repo"] = f"{gh.stdout.strip()}/{result['name']}"
+        except FileNotFoundError:
+            pass
+
+    return result
