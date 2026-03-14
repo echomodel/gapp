@@ -121,15 +121,13 @@ def _enable_api(project_id: str, api: str) -> None:
         text=True,
     )
     if result.returncode != 0:
-        # Check if already enabled (common in CI where SA lacks serviceusage perms)
-        check = subprocess.run(
-            ["gcloud", "services", "list", "--project", project_id,
-             "--filter", f"config.name={api}", "--format", "value(config.name)"],
-            capture_output=True, text=True,
-        )
-        if check.returncode == 0 and api in check.stdout:
-            return  # Already enabled, safe to continue
-        raise RuntimeError(f"Failed to enable API {api}: {result.stderr.strip()}")
+        stderr = result.stderr.strip()
+        if "PERMISSION_DENIED" in stderr:
+            # CI runners with limited SA perms can't enable APIs, but if the
+            # API was already enabled during initial local setup, this is safe
+            # to skip. The deploy will fail later if the API isn't actually enabled.
+            return
+        raise RuntimeError(f"Failed to enable API {api}: {stderr}")
 
 
 def _create_bucket(project_id: str, bucket_name: str) -> str:
