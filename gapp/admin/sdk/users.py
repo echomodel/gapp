@@ -14,9 +14,9 @@ def _get_bucket_name(ctx: dict) -> str:
     return f"gapp-{ctx['name']}-{ctx['project_id']}"
 
 
-def _require_context() -> dict:
+def _require_context(solution: str | None = None) -> dict:
     """Resolve solution context or raise."""
-    ctx = resolve_solution()
+    ctx = resolve_solution(solution)
     if not ctx:
         raise RuntimeError(
             "Not inside a gapp solution. Run 'gapp init' first, or cd into a solution repo."
@@ -50,13 +50,14 @@ def register_user(
     email: str,
     credential: str,
     strategy: str = "bearer",
+    solution: str | None = None,
 ) -> dict:
     """Register a new user by writing a credential file to GCS.
 
     Generates a PAT, writes the credential file, and returns the PAT.
     Raises RuntimeError if the user already exists.
     """
-    ctx = _require_context()
+    ctx = _require_context(solution)
     bucket = _get_bucket_name(ctx)
     eh = _email_hash(email)
     gcs_path = _gcs_path(bucket, eh)
@@ -82,12 +83,12 @@ def register_user(
     }
 
 
-def list_users(*, limit: int = 10, start_index: int = 0) -> dict:
+def list_users(*, limit: int = 10, start_index: int = 0, solution: str | None = None) -> dict:
     """List registered users from GCS object metadata (no file reads).
 
     Returns dict with solution info and list of users.
     """
-    ctx = _require_context()
+    ctx = _require_context(solution)
     bucket = _get_bucket_name(ctx)
     prefix = f"gs://{bucket}/auth/"
 
@@ -134,12 +135,12 @@ def list_users(*, limit: int = 10, start_index: int = 0) -> dict:
     }
 
 
-def get_user(identifier: str) -> dict:
+def get_user(identifier: str, solution: str | None = None) -> dict:
     """Get full user details by email or email hash.
 
     Reads the credential file contents (excluding the raw credential value).
     """
-    ctx = _require_context()
+    ctx = _require_context(solution)
     bucket = _get_bucket_name(ctx)
 
     # If it looks like an email, hash it
@@ -167,6 +168,7 @@ def update_user(
     *,
     credential: str | None = None,
     revoke_before: str | None = None,
+    solution: str | None = None,
 ) -> dict:
     """Update a user's credential file in GCS.
 
@@ -174,7 +176,7 @@ def update_user(
     revoke_before is an ISO 8601 timestamp — all JWTs with iat before
     this time will be rejected.
     """
-    ctx = _require_context()
+    ctx = _require_context(solution)
     bucket = _get_bucket_name(ctx)
     eh = _email_hash(email)
     gcs_path = _gcs_path(bucket, eh)
@@ -210,9 +212,9 @@ def update_user(
     }
 
 
-def revoke_user(email: str) -> dict:
+def revoke_user(email: str, solution: str | None = None) -> dict:
     """Revoke a user by deleting their credential file from GCS."""
-    ctx = _require_context()
+    ctx = _require_context(solution)
     bucket = _get_bucket_name(ctx)
     eh = _email_hash(email)
     gcs_path = _gcs_path(bucket, eh)

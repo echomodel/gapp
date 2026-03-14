@@ -16,7 +16,7 @@ _FOUNDATION_APIS = [
 ]
 
 
-def setup_solution(project_id: str | None = None) -> dict:
+def setup_solution(project_id: str | None = None, solution: str | None = None) -> dict:
     """Set up GCP foundation for the current solution.
 
     Steps (all idempotent):
@@ -29,7 +29,7 @@ def setup_solution(project_id: str | None = None) -> dict:
 
     Returns dict describing what was done.
     """
-    ctx = resolve_solution()
+    ctx = resolve_solution(solution)
     if not ctx:
         raise RuntimeError(
             "Not inside a gapp solution. Run 'gapp init' first, or cd into a solution repo."
