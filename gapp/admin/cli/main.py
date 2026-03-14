@@ -467,6 +467,33 @@ def ci_init_cmd(repo, local_only):
     click.echo("  Next: gapp ci setup <solution-repo>")
 
 
+@ci.command("setup")
+@click.argument("repo")
+def ci_setup_cmd(repo):
+    """Wire a solution for CI/CD deployment (repo name or owner/name)."""
+    from gapp.admin.sdk.ci import setup_ci
+
+    try:
+        result = setup_ci(repo)
+    except RuntimeError as e:
+        click.echo(f"  Error: {e}", err=True)
+        raise SystemExit(1)
+
+    click.echo()
+    click.echo(f"  {result['solution']} \u2192 CI/CD")
+    click.echo(f"    Solution repo:     {result['solution_repo']}")
+    click.echo(f"    GCP project:       {result['project_id']}")
+    click.echo(f"    CI repo:           {result['ci_repo']}")
+    click.echo()
+    click.echo(f"    WIF pool:          {result['wif_pool']} \u2713")
+    click.echo(f"    WIF provider:      {result['wif_provider']} \u2713")
+    click.echo(f"    Service account:   {result['service_account']} \u2713")
+    click.echo(f"    IAM binding:       {result['binding']} \u2713")
+    click.echo(f"    Workflow:          {result['workflow']} \u2713")
+    click.echo()
+    click.echo("  Next: trigger deployment from GitHub UI or 'gh workflow run'")
+
+
 @ci.command("status")
 def ci_status_cmd():
     """Show CI configuration state."""

@@ -10,6 +10,14 @@ Today, gapp requires a local machine with `gcloud auth login` configured. Every 
 
 This ties the operator to their laptop. You can't deploy from your phone, from Claude.ai, from a CI runner, or from a colleague's machine without first configuring gcloud credentials. For a tool whose philosophy is "four commands and you're deployed," this is an unnecessary anchor.
 
+## Core Philosophy: Workstation Once, Then Never
+
+The operator's local machine is needed exactly once — to run `gapp setup` and `gapp ci setup`, which require personal GCP and GitHub credentials. These are bootstrap commands that establish trust relationships (WIF, IAM bindings) and push configuration (workflow files). After that, the operator's workstation is never needed again for deployments. All subsequent deploys happen through GitHub Actions, triggered from any device — GitHub UI, mobile, `gh` CLI, or an API call. The local machine becomes optional for the entire deployment lifecycle.
+
+This mirrors how `gapp setup` already works for GCP foundation — you run it once to establish the project, then `gapp deploy` works forever after. CI extends that pattern: run `gapp ci setup` once per solution, then deployments are fully automated and decoupled from any specific machine.
+
+Once CI is configured, tools like Claude.ai, Claude mobile app, Claude Code on the web, or GitHub's web editor can make code changes to a solution repo, push them, and trigger deployment to GCP — all without access to GCP credentials or a local development environment. The code change and the deployment are fully decoupled from the operator's machine. The operator's role shifts from "person who deploys" to "person who configured the deployment pipeline once."
+
 ## Goals
 
 1. **Untether deployment from the local machine.** After one-time setup, an operator should never need their laptop to deploy. GitHub UI, `gh` CLI, Claude Code on the web, mobile — any trigger point should work.
