@@ -10,9 +10,23 @@ Today, gapp requires a local machine with `gcloud auth login` configured. Every 
 
 This ties the operator to their laptop. You can't deploy from your phone, from Claude.ai, from a CI runner, or from a colleague's machine without first configuring gcloud credentials. For a tool whose philosophy is "four commands and you're deployed," this is an unnecessary anchor.
 
-## The Goal
+## Goals
 
-Enable `gapp deploy` (and eventually other commands) to run in any environment where GCP credentials can be provided — without changing how gapp works locally.
+1. **Untether deployment from the local machine.** After one-time setup, an operator should never need their laptop to deploy. GitHub UI, `gh` CLI, Claude Code on the web, mobile — any trigger point should work.
+2. **Keep gapp a reusable product.** No personal config, no operator-specific values. gapp ships reusable assets (CLI, Terraform, workflows) that anyone can consume.
+3. **Keep solution repos as reusable products.** No deployment workflows, no CI/CD config, no GCP coupling. A solution repo is application code + `gapp.yaml`.
+4. **Make CI/CD copy/paste simple.** A new operator should be able to follow gapp's docs, copy an example workflow, fill in their project ID, and be running. No custom engineering.
+5. **Don't break local workflow.** `gapp deploy` from your laptop continues to work exactly as before. CI/CD is additive, not a replacement.
+6. **No stored credentials anywhere.** WIF eliminates JSON key files and stored secrets. The trust relationship is between GCP and a specific GitHub repo — no transferable artifacts.
+7. **Operator controls the blast radius.** The deploy identity has only the permissions needed for deployment. It cannot set up new projects, access other projects, or escalate.
+
+## Principles
+
+- **Public repos must not depend on private repos** (existing gapp principle #11). The test: "Can someone deploy this app to their own GCP project using only public repos?" Always yes.
+- **Don't hide reusable logic in private repos** (existing gapp principle #14). The CI/CD logic lives in gapp's reusable workflow. The private repo is just configuration.
+- **Derive, don't configure** (existing gapp principle #8). WIF pool names, service accounts, and workflow content are all derivable from convention. The only truly unique inputs are the GCP project ID and the operator's repo name.
+- **Each phase does one thing** (existing gapp principle). `gapp setup` handles GCP foundation (including WIF). `gapp ci init` handles GitHub wiring. They don't overlap.
+- **Security by scoping, not by obscurity.** Project IDs in a private repo aren't security — they're just configuration. Real security comes from WIF trust scoping, service account permissions, and workflow pinning.
 
 ## Constraints
 
@@ -41,6 +55,22 @@ This is the key insight. There are three layers:
 | **Operator config** (private repo) | Private, per-operator | Project IDs, WIF references, workflow files that wire tool + application to infrastructure |
 
 The operator config is the only place where "deploy this specific solution to this specific GCP project" is expressed. This is the `personal-projects` repo pattern.
+
+### The operator repo is not intellectual work
+
+The operator's private repo is an address book, not a product. It maps "solution X → GCP project Y." There's nothing reusable or interesting in it. The interesting parts are in gapp (the reusable workflow) and in the solution repos (the applications). The private repo is configuration — each file says something different (which solution, which project, which identity), so it's not boilerplate even though it looks repetitive.
+
+The repo could be public — project IDs aren't sensitive, and WIF means no credentials are stored. But it's not a product. It's a worked example at best.
+
+### Do you ever need the solution repo locally?
+
+Only for development — writing and testing the code. For deployment, never. The flow becomes:
+
+1. Write code anywhere (local, Codespaces, Claude Code on the web)
+2. Push to GitHub
+3. Deployment happens via CI (or manual `gapp deploy` if you prefer)
+
+After the one-time `gapp setup` + `gapp ci init`, your laptop is optional for the entire deployment lifecycle. gapp already builds from `git archive HEAD` via Cloud Build — it never needed local Docker. The only thing anchoring you locally was `gcloud auth`.
 
 ### Industry precedent
 
@@ -137,11 +167,19 @@ That's it. No boilerplate. Each file says something different — which solution
 The operator decides when deployment happens:
 
 - **`workflow_dispatch`** — manual trigger from GitHub UI, `gh` CLI, or API. Best for third-party solution repos you don't own.
-- **Push-triggered** — if the operator owns the solution repo (e.g., you own monarch-access), pushing to main triggers deployment. Safe because only you can merge to main.
+- **Push-triggered** — if the operator owns the solution repo (e.g., you own monarch-access), pushing to main triggers deployment. Safe because only you can merge to main via branch protection.
 - **Scheduled** — poll for new versions on a cron.
 - **`repository_dispatch`** — webhook-triggered from the solution repo.
 
-This is operator-level configuration, not a gapp concern.
+This is operator-level configuration, not a gapp concern. A push to a public third-party solution repo must NOT auto-trigger deployment to your project — that would let someone else's commit deploy to your infrastructure. But if you own the solution repo, auto-deploy on push to main is perfectly safe because only you control what gets merged. The same mechanism supports both — the operator just configures a different trigger.
+
+### What the operator does NOT want
+
+- Credentials or project IDs in any public repo — even if they're "just config," it doesn't serve as a reusable pattern
+- CI/CD boilerplate rebuilt per solution — the logic lives in gapp's reusable workflow, not in the operator repo
+- CI/CD boilerplate rebuilt per user of gapp — the pattern should be copy/paste from gapp's docs
+- A public repo that has their personal GCP secrets configured, even if only they can access them — because it stops being a reusable product at that point
+- Their local machine required for routine deployments after initial setup
 
 ### Security model
 
@@ -149,6 +187,8 @@ This is operator-level configuration, not a gapp concern.
 - **Service account scoping**: The deploy service account has only the permissions needed for deployment (Cloud Build, Cloud Run, Artifact Registry, specific secrets). It cannot run `gapp setup` or access other GCP projects.
 - **Workflow pinning**: The operator pins the reusable workflow to a specific SHA (`@abc123`), not `@main`. This prevents a compromised gapp repo from injecting malicious code into the deploy pipeline.
 - **GitHub token scoping**: The `GITHUB_TOKEN` in the workflow is scoped to the operator's repo by default. It can't access other repos.
+- **No setup permissions in CI**: The deploy service account should NOT have permissions to run `gapp setup`, create new WIF pools, access other GCP projects, or enable APIs. It can only deploy — build containers, apply Terraform, read secrets. This prevents a compromised workflow from bootstrapping access to other resources.
+- **No runaway automation**: The reusable workflow in gapp runs `gapp deploy`, not `gapp setup`. Even if malicious code were injected into the workflow, the service account's scoped permissions prevent it from accessing other projects, creating new trust relationships, or escalating privileges via `gh` (since the GitHub token is also scoped).
 
 ## gapp Ships a Reusable GitHub Workflow
 
@@ -195,7 +235,7 @@ gapp ci init --repo personal-projects  # optional: add workflow to operator repo
 - Deploy service account with scoped permissions (idempotent, always created)
 
 `gapp ci` is a new command group:
-- `gapp ci init --repo <repo>` — push workflow file to operator's repo for current solution
+- `gapp ci init --repo <repo>` — create the operator repo if it doesn't exist (via `gh`), configure WIF to trust it, and push the workflow file for the current solution. One command does the full GitHub-side wiring.
 - Future: `gapp ci status`, `gapp ci trigger`, `gapp ci logs`
 
 The `next_step` after `gapp deploy` can suggest: `"To enable CI/CD: gapp ci init --repo <your-repo>"`
