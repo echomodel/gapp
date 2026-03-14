@@ -162,7 +162,7 @@ def _label_project(project_id: str, solution_name: str) -> str:
 
     # Check current labels
     check = subprocess.run(
-        ["gcloud", "alpha", "projects", "describe", project_id,
+        ["gcloud", "projects", "describe", project_id,
          "--format", "json(labels)"],
         capture_output=True,
         text=True,
@@ -175,11 +175,14 @@ def _label_project(project_id: str, solution_name: str) -> str:
 
     # Add label
     result = subprocess.run(
-        ["gcloud", "alpha", "projects", "update", project_id,
+        ["gcloud", "projects", "update", project_id,
          "--update-labels", f"{label_key}=default"],
         capture_output=True,
         text=True,
     )
     if result.returncode != 0:
-        raise RuntimeError(f"Failed to label project: {result.stderr.strip()}")
+        stderr = result.stderr.strip()
+        if "PERMISSION_DENIED" in stderr:
+            return "skipped"
+        raise RuntimeError(f"Failed to label project: {stderr}")
     return "added"
