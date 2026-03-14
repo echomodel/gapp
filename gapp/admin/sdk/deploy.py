@@ -285,9 +285,23 @@ def _build_and_push(
              "--project", project_id,
              build_dir],
             text=True,
+            capture_output=True,
         )
         if result.returncode != 0:
-            raise RuntimeError("Cloud Build failed. Check the build logs above.")
+            # Cloud Build may succeed but gcloud fails to stream logs (e.g., CI
+            # runner lacks log bucket access). Check if the image was pushed.
+            check = subprocess.run(
+                ["gcloud", "artifacts", "docker", "images", "list",
+                 "--include-tags", "--filter", f"tags:{image.rsplit(':', 1)[-1]}",
+                 "--project", project_id,
+                 image.rsplit(":", 1)[0]],
+                capture_output=True, text=True,
+            )
+            if check.returncode == 0 and image.rsplit(":", 1)[-1] in check.stdout:
+                return  # Build succeeded despite log streaming failure
+            raise RuntimeError(
+                f"Cloud Build failed.\n  {result.stderr.strip() if result.stderr else 'Check Cloud Build logs in GCP Console.'}"
+            )
 
 
 def _secret_name_to_env_var(name: str) -> str:
