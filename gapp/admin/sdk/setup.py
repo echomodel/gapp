@@ -1,6 +1,7 @@
 """gapp setup — GCP foundation for a solution."""
 
 import json
+import os
 import subprocess
 
 from gapp.admin.sdk.config import load_solutions, save_solutions
@@ -38,11 +39,16 @@ def setup_solution(project_id: str | None = None, solution: str | None = None) -
     solution_name = ctx["name"]
     git_root = ctx.get("repo_path")
 
-    # Resolve project ID
+    # Resolve project ID: explicit arg → local config → GCP labels → env var
     if not project_id:
         project_id = ctx.get("project_id")
     if not project_id:
         project_id = _discover_project_from_label(solution_name)
+    if not project_id:
+        # GOOGLE_CLOUD_PROJECT is a standard GCP env var set by gcloud, Cloud Run,
+        # Cloud Shell, CI runners with WIF auth, and any GCP-aware environment.
+        # Not GitHub-specific — works in any context where gcloud is configured.
+        project_id = os.environ.get("GOOGLE_CLOUD_PROJECT")
     if not project_id:
         raise RuntimeError(
             "No GCP project specified and none found via labels.\n"
