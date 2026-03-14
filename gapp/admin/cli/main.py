@@ -502,7 +502,10 @@ def ci_setup_cmd(name):
     click.echo(f"    IAM binding:       {result['binding']} \u2713")
     click.echo(f"    Workflow:          {result['workflow']} \u2713")
     click.echo()
-    click.echo("  Next: trigger deployment from GitHub UI or 'gh workflow run'")
+    click.echo("  Next:")
+    click.echo("    \u2022 gapp ci trigger <solution-name>")
+    click.echo("    \u2022 GitHub UI: Actions \u2192 Deploy \u2192 Run workflow")
+    click.echo("    \u2022 gh workflow run <solution>.yml --repo <ci-repo>")
 
 
 @ci.command("status")
