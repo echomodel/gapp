@@ -37,12 +37,13 @@ def init():
 
 @main.command("setup")
 @click.argument("project_id", required=False)
-def setup_cmd(project_id):
+@click.option("--solution", default=None, help="Solution name (default: current directory).")
+def setup_cmd(project_id, solution):
     """GCP foundation: enable APIs, create solution bucket, label project."""
     from gapp.admin.sdk.setup import setup_solution
 
     try:
-        result = setup_solution(project_id)
+        result = setup_solution(project_id, solution=solution)
     except RuntimeError as e:
         click.echo(f"  Error: {e}", err=True)
         raise SystemExit(1)
@@ -68,12 +69,13 @@ def setup_cmd(project_id):
 
 @main.command()
 @click.option("--ref", default=None, help="Git ref (commit, tag, branch) to deploy. Skips dirty tree check.")
-def deploy(ref):
+@click.option("--solution", default=None, help="Solution name (default: current directory).")
+def deploy(ref, solution):
     """Build + terraform apply (requires setup + prerequisites)."""
     from gapp.admin.sdk.deploy import deploy_solution
 
     try:
-        result = deploy_solution(auto_approve=True, ref=ref)
+        result = deploy_solution(auto_approve=True, ref=ref, solution=solution)
     except RuntimeError as e:
         click.echo(f"  Error: {e}", err=True)
         raise SystemExit(1)
@@ -173,12 +175,13 @@ def secrets():
 
 
 @secrets.command("list")
-def secrets_list_cmd():
+@click.option("--solution", default=None, help="Solution name (default: current directory).")
+def secrets_list_cmd(solution):
     """Show prerequisite secrets and status."""
     from gapp.admin.sdk.secrets import list_secrets
 
     try:
-        result = list_secrets()
+        result = list_secrets(solution=solution)
     except RuntimeError as e:
         click.echo(f"  Error: {e}", err=True)
         raise SystemExit(1)
@@ -200,7 +203,8 @@ def secrets_list_cmd():
 @secrets.command("set")
 @click.argument("name")
 @click.argument("value", required=False)
-def secrets_set_cmd(name, value):
+@click.option("--solution", default=None, help="Solution name (default: current directory).")
+def secrets_set_cmd(name, value, solution):
     """Store a secret value in Secret Manager."""
     from gapp.admin.sdk.secrets import set_secret
 
@@ -208,7 +212,7 @@ def secrets_set_cmd(name, value):
         value = click.prompt(f"  Enter value for {name}", hide_input=True)
 
     try:
-        result = set_secret(name, value)
+        result = set_secret(name, value, solution=solution)
     except RuntimeError as e:
         click.echo(f"  Error: {e}", err=True)
         raise SystemExit(1)
@@ -220,12 +224,13 @@ def secrets_set_cmd(name, value):
 @click.argument("name")
 @click.argument("description")
 @click.argument("value", required=False)
-def secrets_add_cmd(name, description, value):
+@click.option("--solution", default=None, help="Solution name (default: current directory).")
+def secrets_add_cmd(name, description, value, solution):
     """Declare a secret in gapp.yaml and optionally set its value."""
     from gapp.admin.sdk.secrets import add_secret
 
     try:
-        result = add_secret(name, description, value)
+        result = add_secret(name, description, value, solution=solution)
     except RuntimeError as e:
         click.echo(f"  Error: {e}", err=True)
         raise SystemExit(1)
@@ -237,12 +242,13 @@ def secrets_add_cmd(name, description, value):
 
 @secrets.command("remove")
 @click.argument("name")
-def secrets_remove_cmd(name):
+@click.option("--solution", default=None, help="Solution name (default: current directory).")
+def secrets_remove_cmd(name, solution):
     """Remove a secret declaration from gapp.yaml."""
     from gapp.admin.sdk.secrets import remove_secret
 
     try:
-        result = remove_secret(name)
+        result = remove_secret(name, solution=solution)
     except RuntimeError as e:
         click.echo(f"  Error: {e}", err=True)
         raise SystemExit(1)
@@ -261,12 +267,13 @@ def users():
 @click.argument("email")
 @click.argument("credential")
 @click.option("--strategy", default="bearer", help="Credential strategy (default: bearer).")
-def users_register_cmd(email, credential, strategy):
+@click.option("--solution", default=None, help="Solution name (default: current directory).")
+def users_register_cmd(email, credential, strategy, solution):
     """Register a user and store their upstream credential (e.g., API token)."""
     from gapp.admin.sdk.users import register_user
 
     try:
-        result = register_user(email, credential, strategy)
+        result = register_user(email, credential, strategy, solution=solution)
     except RuntimeError as e:
         click.echo(f"  Error: {e}", err=True)
         raise SystemExit(1)
@@ -281,12 +288,13 @@ def users_register_cmd(email, credential, strategy):
 @users.command("list")
 @click.option("--limit", default=10, help="Maximum number of users to show.")
 @click.option("--start-index", default=0, help="Offset into the user list.")
-def users_list_cmd(limit, start_index):
+@click.option("--solution", default=None, help="Solution name (default: current directory).")
+def users_list_cmd(limit, start_index, solution):
     """List registered users."""
     from gapp.admin.sdk.users import list_users
 
     try:
-        result = list_users(limit=limit, start_index=start_index)
+        result = list_users(limit=limit, start_index=start_index, solution=solution)
     except RuntimeError as e:
         click.echo(f"  Error: {e}", err=True)
         raise SystemExit(1)
@@ -315,12 +323,13 @@ def users_list_cmd(limit, start_index):
 
 @users.command("get")
 @click.argument("identifier")
-def users_get_cmd(identifier):
+@click.option("--solution", default=None, help="Solution name (default: current directory).")
+def users_get_cmd(identifier, solution):
     """Get full user details by email or hash."""
     from gapp.admin.sdk.users import get_user
 
     try:
-        result = get_user(identifier)
+        result = get_user(identifier, solution=solution)
     except RuntimeError as e:
         click.echo(f"  Error: {e}", err=True)
         raise SystemExit(1)
@@ -339,12 +348,13 @@ def users_get_cmd(identifier):
 @click.argument("email")
 @click.option("--credential", default=None, help="New upstream credential value.")
 @click.option("--revoke-before", default=None, help="ISO 8601 timestamp — reject tokens issued before this time.")
-def users_update_cmd(email, credential, revoke_before):
+@click.option("--solution", default=None, help="Solution name (default: current directory).")
+def users_update_cmd(email, credential, revoke_before, solution):
     """Update a user's upstream credential or set revoke_before timestamp."""
     from gapp.admin.sdk.users import update_user
 
     try:
-        result = update_user(email, credential=credential, revoke_before=revoke_before)
+        result = update_user(email, credential=credential, revoke_before=revoke_before, solution=solution)
     except RuntimeError as e:
         click.echo(f"  Error: {e}", err=True)
         raise SystemExit(1)
@@ -354,12 +364,13 @@ def users_update_cmd(email, credential, revoke_before):
 
 @users.command("revoke")
 @click.argument("email")
-def users_revoke_cmd(email):
+@click.option("--solution", default=None, help="Solution name (default: current directory).")
+def users_revoke_cmd(email, solution):
     """Revoke a user by deleting their credential file."""
     from gapp.admin.sdk.users import revoke_user
 
     try:
-        result = revoke_user(email)
+        result = revoke_user(email, solution=solution)
     except RuntimeError as e:
         click.echo(f"  Error: {e}", err=True)
         raise SystemExit(1)

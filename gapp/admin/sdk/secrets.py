@@ -7,12 +7,12 @@ from gapp.admin.sdk.context import resolve_solution
 from gapp.admin.sdk.manifest import get_prerequisite_secrets, load_manifest, save_manifest
 
 
-def add_secret(secret_name: str, description: str, value: str | None = None) -> dict:
+def add_secret(secret_name: str, description: str, value: str | None = None, solution: str | None = None) -> dict:
     """Add a secret declaration to gapp.yaml and optionally set its value.
 
     Returns dict describing what was done.
     """
-    ctx = resolve_solution()
+    ctx = resolve_solution(solution)
     if not ctx:
         raise RuntimeError(
             "Not inside a gapp solution. Run 'gapp init' first, or cd into a solution repo."
@@ -54,12 +54,12 @@ def add_secret(secret_name: str, description: str, value: str | None = None) -> 
     return result
 
 
-def remove_secret(secret_name: str) -> dict:
+def remove_secret(secret_name: str, solution: str | None = None) -> dict:
     """Remove a secret declaration from gapp.yaml.
 
     Does NOT delete the secret from Secret Manager.
     """
-    ctx = resolve_solution()
+    ctx = resolve_solution(solution)
     if not ctx:
         raise RuntimeError(
             "Not inside a gapp solution. Run 'gapp init' first, or cd into a solution repo."
@@ -87,13 +87,13 @@ def remove_secret(secret_name: str) -> dict:
     return {"name": secret_name, "status": "removed"}
 
 
-def set_secret(secret_name: str, value: str) -> dict:
+def set_secret(secret_name: str, value: str, solution: str | None = None) -> dict:
     """Store a secret value in Secret Manager.
 
     Creates the secret if it doesn't exist, then adds a new version.
     Returns dict describing what was done.
     """
-    ctx = resolve_solution()
+    ctx = resolve_solution(solution)
     if not ctx:
         raise RuntimeError(
             "Not inside a gapp solution. Run 'gapp init' first, or cd into a solution repo."
@@ -126,12 +126,12 @@ def set_secret(secret_name: str, value: str) -> dict:
     }
 
 
-def list_secrets() -> dict:
+def list_secrets(solution: str | None = None) -> dict:
     """List prerequisite secrets and their status in Secret Manager.
 
     Returns dict with solution info and list of secrets with status.
     """
-    ctx = resolve_solution()
+    ctx = resolve_solution(solution)
     if not ctx:
         raise RuntimeError(
             "Not inside a gapp solution. Run 'gapp init' first, or cd into a solution repo."
