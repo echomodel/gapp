@@ -27,7 +27,7 @@ gapp-mcp = "gapp.admin.mcp.server:main"
 include = ["gapp*"]
 
 [tool.setuptools.package-data]
-gapp = ["templates/*"]
+gapp = ["templates/*", "terraform/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
