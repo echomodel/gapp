@@ -421,6 +421,7 @@ def _generate_workflow(solution_name: str, solution_repo: str,
                     "service-account": sa_email,
                     "gapp-repo": gapp_repo,
                     "gapp-ref": gapp_ref,
+                    "solution-name": solution_name,
                 },
                 "permissions": {
                     "id-token": "write",

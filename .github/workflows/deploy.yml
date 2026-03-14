@@ -51,6 +51,10 @@ on:
         description: 'gapp git ref for CLI installation'
         required: true
         type: string
+      solution-name:
+        description: 'Solution name (as registered in gapp)'
+        required: true
+        type: string
 
 jobs:
   deploy:
@@ -83,5 +87,5 @@ jobs:
 
       - name: Setup and deploy
         run: |
-          gapp setup
-          gapp deploy --ref ${{ inputs.ref }}
+          gapp setup --solution ${{ inputs.solution-name }}
+          gapp deploy --solution ${{ inputs.solution-name }} --ref ${{ inputs.ref }}
