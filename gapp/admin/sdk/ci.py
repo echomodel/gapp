@@ -203,6 +203,18 @@ def trigger_ci(solution: str | None = None, *, ref: str = "main", watch: bool = 
     solution_name = ctx["name"]
     workflow_file = f"{solution_name}.yml"
 
+    # Verify the workflow exists in the CI repo
+    check = subprocess.run(
+        ["gh", "api", f"repos/{ci_repo}/contents/.github/workflows/{workflow_file}",
+         "--jq", ".name"],
+        capture_output=True, text=True,
+    )
+    if check.returncode != 0 or not check.stdout.strip():
+        raise RuntimeError(
+            f"No CI workflow found for '{solution_name}'.\n"
+            f"  Run 'gapp ci setup {solution_name}' first to create the workflow."
+        )
+
     result = subprocess.run(
         ["gh", "workflow", "run", workflow_file,
          "--repo", ci_repo,
