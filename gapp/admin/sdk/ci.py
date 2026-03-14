@@ -434,19 +434,10 @@ def _push_workflow_to_ci_repo(ci_repo: str, solution_name: str,
 def setup_ci(solution: str | None = None) -> dict:
     """Wire a solution for CI/CD deployment.
 
-    1. Discover CI repo from local config or topic
-    2. Resolve solution (from arg, cwd, or GitHub discovery)
-    3. Discover GCP project from local config or GCP labels
-    4. Derive GitHub repo from local git remote or GitHub topic
-    5. Create WIF pool + provider (idempotent)
-    6. Create deploy service account (idempotent)
-    7. Add IAM binding for CI repo (idempotent)
-    8. Generate and push workflow file
-
-    No local clone of the solution repo is required.
+    No local clone of the solution repo is required. Resolves everything
+    from local config, GCP labels, and GitHub.
     """
-    from gapp.admin.sdk.context import resolve_solution
-    from gapp.admin.sdk.setup import _discover_project_from_label
+    from gapp.admin.sdk.context import resolve_full_context
 
     # 1. Find CI repo
     ci_repo = get_ci_repo()
@@ -455,23 +446,17 @@ def setup_ci(solution: str | None = None) -> dict:
             "No CI repo configured. Run 'gapp ci init <repo-name>' first."
         )
 
-    # 2. Resolve solution — try local context first, then by name
-    ctx = resolve_solution(solution)
-    if not ctx:
-        if not solution:
-            raise RuntimeError(
-                "No solution specified and not inside a solution repo.\n"
-                "  Run: gapp ci setup <solution-name>"
-            )
-        # No local context — create minimal context from name alone
-        ctx = {"name": solution, "project_id": None, "repo_path": None}
+    # 2. Resolve full context (name, project_id, github_repo)
+    ctx = resolve_full_context(solution)
 
-    solution_name = ctx["name"]
+    solution_name = ctx.get("name")
+    if not solution_name:
+        raise RuntimeError(
+            "No solution specified and not inside a solution repo.\n"
+            "  Run: gapp ci setup <solution-name>"
+        )
 
-    # 3. Resolve project_id — local config, then GCP label discovery
     project_id = ctx.get("project_id")
-    if not project_id:
-        project_id = _discover_project_from_label(solution_name)
     if not project_id:
         raise RuntimeError(
             f"No GCP project found for '{solution_name}'.\n"
@@ -479,10 +464,13 @@ def setup_ci(solution: str | None = None) -> dict:
             f"has label gapp-{solution_name}=default."
         )
 
-    # 4. Derive solution GitHub repo
-    full_solution_repo = _derive_solution_repo(solution_name, ctx.get("repo_path"))
+    full_solution_repo = ctx.get("github_repo")
+    if not full_solution_repo:
+        raise RuntimeError(
+            f"Could not determine GitHub repo for '{solution_name}'.\n"
+            f"  Ensure the solution repo exists on GitHub with the gapp-solution topic."
+        )
 
-    # 5. Determine gapp repo
     gapp_repo = _get_gapp_repo()
 
     result = {
@@ -517,48 +505,6 @@ def setup_ci(solution: str | None = None) -> dict:
 
     return result
 
-
-def _derive_solution_repo(solution_name: str, repo_path: str | None) -> str:
-    """Derive the GitHub owner/name for a solution repo.
-
-    Tries: local git remote (if repo_path available), then GitHub topic search.
-    """
-    from pathlib import Path
-
-    # Try local git remote
-    if repo_path:
-        expanded = Path(repo_path).expanduser()
-        if expanded.exists():
-            result = subprocess.run(
-                ["gh", "repo", "view", "--json", "nameWithOwner",
-                 "--jq", ".nameWithOwner"],
-                capture_output=True, text=True, cwd=expanded,
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                return result.stdout.strip()
-
-    # Try GitHub topic search
-    from gapp.admin.sdk.solutions import _discover_github_solutions
-    remote = _discover_github_solutions()
-    for s in remote:
-        if s.get("name") == solution_name:
-            url = s.get("url", "")
-            # Extract owner/name from URL
-            if "github.com/" in url:
-                return url.split("github.com/")[-1].strip("/")
-
-    # Fallback: assume owner/solution_name
-    owner_result = subprocess.run(
-        ["gh", "api", "user", "--jq", ".login"],
-        capture_output=True, text=True,
-    )
-    if owner_result.returncode == 0:
-        return f"{owner_result.stdout.strip()}/{solution_name}"
-
-    raise RuntimeError(
-        f"Could not determine GitHub repo for '{solution_name}'.\n"
-        f"  Ensure the solution repo exists on GitHub with the gapp-solution topic."
-    )
 
 
 def _get_gapp_repo() -> str:
