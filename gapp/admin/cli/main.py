@@ -437,6 +437,56 @@ def admin_install_cmd(client, scope):
         raise SystemExit(1)
 
 
+# --- CI/CD ---
+
+@main.group()
+def ci():
+    """CI/CD automation — deploy solutions via GitHub Actions."""
+
+
+@ci.command("init")
+@click.argument("repo")
+@click.option("--local-only", is_flag=True, help="Only write to local config, skip GitHub topic.")
+def ci_init_cmd(repo, local_only):
+    """Designate the operator's CI repo (repo name or owner/name)."""
+    from gapp.admin.sdk.ci import init_ci
+
+    try:
+        result = init_ci(repo, local_only=local_only)
+    except RuntimeError as e:
+        click.echo(f"  Error: {e}", err=True)
+        raise SystemExit(1)
+
+    click.echo()
+    click.echo(f"  CI repo: {result['repo']}")
+    click.echo(f"    Config: {result['config_status']} \u2713")
+    click.echo(f"    Topic:  {result['topic_status']} \u2713")
+    if result.get("repo_created"):
+        click.echo(f"    Repo created (private) \u2713")
+    click.echo()
+    click.echo("  Next: gapp ci setup <solution-repo>")
+
+
+@ci.command("status")
+def ci_status_cmd():
+    """Show CI configuration state."""
+    from gapp.admin.sdk.ci import get_ci_status
+
+    result = get_ci_status()
+
+    click.echo()
+    if not result["repo"]:
+        click.echo("  No CI repo configured.")
+        click.echo("  Run: gapp ci init <repo-name>")
+        click.echo()
+        return
+
+    click.echo(f"  CI repo: {result['repo']} (source: {result['source']})")
+    click.echo(f"    Local config:  {'set' if result['local_config'] else 'not set'}")
+    click.echo(f"    Remote topic:  {result['remote_config'] or 'not set'}")
+    click.echo()
+
+
 # --- MCP (deployed solutions) ---
 
 @main.group()
