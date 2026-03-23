@@ -422,6 +422,50 @@ The `gapp_run` ASGI wrapper already has everything needed for user and token man
 
 Not yet implemented. The current stdio MCP server and CLI work for workstation-based administration.
 
+## Version Management
+
+**Single source of truth:** `gapp/__init__.py` contains `__version__`
+
+Git tags match the version with a `v` prefix. This is important because `service.runtime` in `gapp.yaml` references a git ref to install the `gapp_run` wrapper from. When auth is enabled, `gapp init` auto-sets `runtime` to `v{__version__}` from the installed package — so the tag must exist.
+
+**When to bump versions:**
+
+| Change Type | Bump | Example |
+|-------------|------|---------|
+| Bug fix, minor tweak | Patch | 0.1.0 → 0.1.1 |
+| New feature (backwards compatible) | Minor | 0.1.0 → 0.2.0 |
+| Breaking change | Major | 0.1.0 → 1.0.0 |
+
+**Release workflow:**
+
+1. Make changes, commit normally
+2. When ready to release:
+   ```bash
+   # Update version in gapp/__init__.py
+   # Commit the version bump
+   git add gapp/__init__.py
+   git commit -m "chore: bump version to X.Y.Z"
+
+   # Tag the release
+   git tag vX.Y.Z
+
+   # Push with tags
+   git push && git push --tags
+   ```
+
+**Why version bumps matter:**
+
+- `pip install --upgrade` only installs if version number is higher
+- Same version number = pip thinks nothing changed, skips update
+- Git tags are used as `runtime` refs in solution `gapp.yaml` files. When auth is enabled, `gapp init` auto-sets `runtime: v{__version__}`. If that tag doesn't exist on GitHub, **container builds will fail** — Cloud Build won't be able to install the auth wrapper. Always tag before releasing.
+- Pinning runtime to a version tag also ensures correct container rebuilds. Container images are tagged by the solution repo's HEAD commit SHA. If runtime points to a moving target like `main`, the auth wrapper could change without the solution repo knowing — the solution SHA stays the same, so gapp skips the build ("image already exists") and the wrapper update never lands. Pinning to a versioned tag means upgrading the wrapper requires bumping the runtime ref in gapp.yaml → that's a commit → new SHA → forces a new image build.
+- Editable installs (`pip install -e .`) always use live code regardless of version
+
+**For development:** Use editable install to avoid version concerns:
+```bash
+pipx install -e .   # or: pip install -e .
+```
+
 ## CI/CD and Remote Deployment
 
 gapp is designed to work without a local machine. The three-layer model — tool (gapp), application (solution repo), and operator config (private repo) — enables deployment from GitHub Actions, Codespaces, or any stateless environment using Workload Identity Federation for keyless GCP authentication.

@@ -43,14 +43,15 @@ def get_entrypoint(manifest: dict) -> str | None:
 
 
 def get_auth_config(manifest: dict) -> dict | None:
-    """Return auth configuration if enabled, else None."""
-    auth = manifest.get("service", {}).get("auth", {})
-    if not auth.get("enabled"):
+    """Return auth configuration if enabled, else None.
+
+    Format: auth: bearer  (or google_oauth2)
+    Absent means no auth.
+    """
+    auth = manifest.get("service", {}).get("auth")
+    if not auth:
         return None
-    return {
-        "enabled": True,
-        "strategy": auth.get("strategy", "bearer"),
-    }
+    return {"enabled": True, "strategy": auth}
 
 
 def get_runtime_ref(manifest: dict) -> str | None:

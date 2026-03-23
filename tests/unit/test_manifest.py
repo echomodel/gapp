@@ -95,24 +95,20 @@ def test_service_config_overrides():
     assert config["env"] == {"FOO": "bar"}
 
 
-def test_auth_config_enabled():
-    manifest = {"service": {"auth": {"enabled": True, "strategy": "google_oauth2"}}}
+def test_auth_config_bearer():
+    manifest = {"service": {"auth": "bearer"}}
+    auth = get_auth_config(manifest)
+    assert auth["enabled"] is True
+    assert auth["strategy"] == "bearer"
+
+
+def test_auth_config_google_oauth2():
+    manifest = {"service": {"auth": "google_oauth2"}}
     auth = get_auth_config(manifest)
     assert auth["enabled"] is True
     assert auth["strategy"] == "google_oauth2"
 
 
-def test_auth_config_enabled_defaults_to_bearer():
-    manifest = {"service": {"auth": {"enabled": True}}}
-    auth = get_auth_config(manifest)
-    assert auth["strategy"] == "bearer"
-
-
-def test_auth_config_disabled():
-    manifest = {"service": {"auth": {"enabled": False}}}
-    assert get_auth_config(manifest) is None
-
-
-def test_auth_config_missing():
+def test_auth_config_absent():
     assert get_auth_config({}) is None
     assert get_auth_config({"service": {}}) is None

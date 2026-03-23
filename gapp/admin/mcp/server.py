@@ -6,6 +6,141 @@ mcp = FastMCP("gapp-admin")
 
 
 @mcp.tool()
+def gapp_init(
+    entrypoint: str | None = None,
+    mcp_path: str | None = None,
+    auth: str | None = None,
+    runtime: str | None = None,
+    secrets: dict | None = None,
+) -> dict:
+    """Initialize or configure a gapp solution in the current repo.
+
+    Idempotent. Creates gapp.yaml on first call. Also used to update
+    gapp configuration settings later — e.g., enable auth, change
+    entrypoint, add secrets. Only non-None parameters are written;
+    omitted parameters leave existing values unchanged.
+
+    Args:
+        entrypoint: ASGI entrypoint (module:app).
+        mcp_path: MCP endpoint path (e.g., /mcp).
+        auth: Auth strategy — "bearer" or "google_oauth2". Absent means no auth.
+        runtime: gapp git ref for the runtime wrapper version.
+        secrets: Dict of secret name to description for prerequisites.
+    """
+    from gapp.admin.sdk.init import init_solution
+    return init_solution(
+        entrypoint=entrypoint,
+        mcp_path=mcp_path,
+        auth=auth,
+        runtime=runtime,
+        secrets=secrets,
+    )
+
+
+@mcp.tool()
+def gapp_setup(project_id: str | None = None, solution: str | None = None) -> dict:
+    """Set up GCP foundation for a gapp solution.
+
+    Enables APIs, creates per-solution GCS bucket, and labels the project.
+
+    Args:
+        project_id: GCP project ID. Uses saved value if omitted.
+        solution: Solution name. Defaults to current directory's solution.
+    """
+    from gapp.admin.sdk.setup import setup_solution
+    return setup_solution(project_id, solution=solution)
+
+
+@mcp.tool()
+def gapp_deploy(
+    auto_approve: bool = True,
+    ref: str | None = None,
+    solution: str | None = None,
+) -> dict:
+    """Deploy a gapp solution to Cloud Run.
+
+    Builds container via Cloud Build and deploys via Terraform.
+    Requires a clean git tree unless ref is specified.
+
+    Args:
+        auto_approve: Skip Terraform confirmation prompt (default: True).
+        ref: Git ref to deploy (commit, tag, branch). Skips dirty tree check.
+        solution: Solution name. Defaults to current directory's solution.
+    """
+    from gapp.admin.sdk.deploy import deploy_solution
+    return deploy_solution(auto_approve=auto_approve, ref=ref, solution=solution)
+
+
+@mcp.tool()
+def gapp_secret_list(solution: str | None = None) -> dict:
+    """List prerequisite secrets and their status in Secret Manager.
+
+    Args:
+        solution: Solution name. Defaults to current directory's solution.
+    """
+    from gapp.admin.sdk.secrets import list_secrets
+    return list_secrets(solution=solution)
+
+
+@mcp.tool()
+def gapp_secret_set(secret_name: str, value: str, solution: str | None = None) -> dict:
+    """Store a secret value in Secret Manager.
+
+    Creates the secret if it doesn't exist, then adds a new version.
+
+    Args:
+        secret_name: Name of the secret (as declared in gapp.yaml).
+        value: The secret value.
+        solution: Solution name. Defaults to current directory's solution.
+    """
+    from gapp.admin.sdk.secrets import set_secret
+    return set_secret(secret_name, value, solution=solution)
+
+
+@mcp.tool()
+def gapp_ci_init(repo: str, local_only: bool = False) -> dict:
+    """Designate the operator's CI repo for GitHub Actions deployments.
+
+    Args:
+        repo: GitHub repo name or owner/name.
+        local_only: Only write to local config, skip GitHub topic.
+    """
+    from gapp.admin.sdk.ci import init_ci
+    return init_ci(repo, local_only=local_only)
+
+
+@mcp.tool()
+def gapp_ci_setup(solution: str | None = None) -> dict:
+    """Wire a solution for CI/CD deployment.
+
+    Creates Workload Identity Federation, service account, IAM bindings,
+    and pushes the GitHub Actions workflow to the CI repo.
+
+    Args:
+        solution: Solution name. Defaults to current directory's solution.
+    """
+    from gapp.admin.sdk.ci import setup_ci
+    return setup_ci(solution=solution)
+
+
+@mcp.tool()
+def gapp_ci_trigger(
+    solution: str | None = None,
+    ref: str = "main",
+    watch: bool = True,
+) -> dict:
+    """Trigger a CI deployment for a solution via GitHub Actions.
+
+    Args:
+        solution: Solution name. Defaults to current directory's solution.
+        ref: Git ref to deploy (default: main).
+        watch: Block and stream status until completion (default: True).
+    """
+    from gapp.admin.sdk.ci import trigger_ci
+    return trigger_ci(solution=solution, ref=ref, watch=watch)
+
+
+@mcp.tool()
 def gapp_status(solution: str | None = None) -> dict:
     """Infrastructure health check for a gapp solution.
 
@@ -110,6 +245,37 @@ def gapp_tokens_revoke(email: str, solution: str | None = None) -> dict:
     """
     from gapp.admin.sdk.tokens import revoke_tokens
     return revoke_tokens(email, solution=solution)
+
+
+@mcp.tool()
+def gapp_users_update(
+    email: str,
+    credential: str | None = None,
+    revoke_before: str | None = None,
+    solution: str | None = None,
+) -> dict:
+    """Update a user's credential or revocation timestamp.
+
+    Args:
+        email: User's email address.
+        credential: New upstream credential value.
+        revoke_before: ISO 8601 timestamp — reject tokens issued before this.
+        solution: Solution name. Defaults to current directory's solution.
+    """
+    from gapp.admin.sdk.users import update_user
+    return update_user(email, credential=credential, revoke_before=revoke_before, solution=solution)
+
+
+@mcp.tool()
+def gapp_users_revoke(email: str, solution: str | None = None) -> dict:
+    """Revoke a user by deleting their credential file from GCS.
+
+    Args:
+        email: User's email address.
+        solution: Solution name. Defaults to current directory's solution.
+    """
+    from gapp.admin.sdk.users import revoke_user
+    return revoke_user(email, solution=solution)
 
 
 def main():

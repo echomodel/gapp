@@ -101,22 +101,22 @@ If your solution accesses a third-party API on behalf of users (e.g., Monarch Mo
 ```yaml
 service:
   entrypoint: mypackage.mcp.server:mcp_app
-  runtime: 413feef          # gapp git ref to install gapp_run from (commit, tag, or branch)
-  auth:
-    enabled: true
-    strategy: bearer        # or google_oauth2
+  runtime: v0.1.0           # gapp version tag — auto-set by gapp init
+  auth: bearer              # or google_oauth2
 ```
 
 **When to enable:** Any deployed service where clients shouldn't hold raw upstream credentials directly. The wrapper mediates: clients authenticate with a PAT (lightweight JWT), and the server looks up the real credential server-side.
 
-**`runtime`** — required when auth is enabled. Specifies which version of the `gapp_run` wrapper to install from the gapp GitHub repo. Use a commit SHA or tag for reproducibility. Bump this and commit to get a new container build with updated wrapper code.
+**`auth`** — the credential strategy. Absent means no auth.
 
-**Strategies:**
-
-| Strategy | Use when | What happens |
-|----------|----------|-------------|
+| Value | Use when | What happens |
+|-------|----------|-------------|
 | `bearer` | Upstream API uses a static token (API key, session token) | Token is passed through as-is to the solution |
 | `google_oauth2` | Upstream API uses Google OAuth2 (e.g., Gmail, Calendar) | Refresh token is used to obtain a fresh access token, with automatic refresh and write-back |
+
+**`runtime`** — required when auth is enabled. Specifies which gapp version tag to install the `gapp_run` wrapper from. `gapp init` auto-sets this to the installed gapp version (e.g., `v0.1.0`).
+
+Use a version tag, not `main`. Pinning to a tag ensures that upgrading the wrapper requires bumping the runtime ref → that's a commit in your repo → new image SHA → gapp builds a fresh container. If runtime pointed to `main`, the wrapper could change silently but your repo's HEAD SHA stays the same — gapp would skip the build and the update never lands.
 
 The `bearer` strategy covers most cases — Monarch Money, TickTick, and similar services that use session tokens or API keys. Use `google_oauth2` only when the upstream credential is a Google OAuth2 refresh token that needs periodic refresh.
 

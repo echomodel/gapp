@@ -44,7 +44,7 @@ def test_init_existing_manifest(mock_topic, tmp_path):
     result = init_solution(repo_path=repo)
 
     assert result["name"] == "custom"
-    assert result["manifest_status"] == "exists"
+    assert result["manifest_status"] == "unchanged"
 
 
 @patch("gapp.admin.sdk.init._add_github_topic", return_value="skipped")
@@ -65,7 +65,7 @@ def test_init_idempotent(mock_topic, tmp_path):
     assert result1["manifest_status"] == "created"
 
     result2 = init_solution(repo_path=repo)
-    assert result2["manifest_status"] == "exists"
+    assert result2["manifest_status"] == "unchanged"
     assert result2["name"] == "my-app"
 
 

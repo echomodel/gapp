@@ -1,0 +1,323 @@
+---
+name: deploy
+description: Deploy and manage Python web servers and MCP servers on Google Cloud Run using gapp. Use when asked to deploy a service, get something running on GCP or Cloud Run, push changes to production, set up CI/CD, check deployment status, manage users or access tokens, or any question about hosting a Python service on Google Cloud. Trigger on intent — "deploy this to cloud run", "help me get this hosted", "deploy my latest changes", "set up CI/CD", "how do I get this running in the cloud", "check my deployment status", etc.
+disable-model-invocation: false
+user-invocable: true
+---
+
+# Deploy Skill
+
+## Overview
+
+This skill guides users through the full lifecycle of deploying
+and managing Python web servers and MCP servers on Google Cloud
+Run using gapp. It handles everything from initial assessment
+through ongoing operations — candidacy evaluation, setup,
+deployment, CI/CD, user management, and redeployment.
+
+gapp deploys containerized Python services to Cloud Run with
+Terraform. Solutions remain cloud-agnostic — no GCP imports, no
+framework dependencies. A `gapp.yaml` file is the only
+touchpoint. gapp handles infrastructure, secrets, container
+builds, multi-user auth, and credential management.
+
+## Phase 0: Assess the Situation
+
+Before doing anything, figure out where the user is. Call these
+in parallel:
+
+- `gapp_list` — see if any solutions are already registered
+- `gapp_status` — if in a repo that looks like a solution, check
+  its deployment status
+
+Also inspect the current working directory:
+
+- Does `gapp.yaml` exist? → already initialized
+- Does `pyproject.toml` or `setup.py` exist? → Python package
+- Is there an ASGI app or MCP server? Look for uvicorn
+  entrypoints, FastMCP, Starlette, FastAPI
+- Is there a `Dockerfile`? → may already be containerized
+
+### If gapp.yaml exists (already initialized)
+
+The repo is already a gapp solution. Check status and determine
+what phase it's in:
+
+1. Call `gapp_status` to get infrastructure health
+2. The status response includes a `next_step` field — this tells
+   you exactly what the user needs to do next
+3. Present the current state and offer to help with the next step
+
+### If no gapp.yaml (new candidate)
+
+Evaluate whether the repo is a good candidate for gapp:
+
+**Good candidates:**
+- Python web server (FastAPI, Starlette, Flask with ASGI)
+- Python MCP server (FastMCP with HTTP transport)
+- Has a clear ASGI entrypoint (`module.path:app`)
+- Needs to be accessible over the internet
+
+**Not a fit:**
+- Not Python
+- CLI-only tool (no web server)
+- No ASGI/HTTP interface
+- Already deployed elsewhere and user doesn't want to move
+
+**Present gapp to the user:**
+
+> gapp deploys Python web servers and MCP servers to Google Cloud
+> Run. Your solution stays cloud-agnostic — no GCP imports, no
+> auth code. You add a small `gapp.yaml` to your repo and gapp
+> handles everything: infrastructure, secrets, container builds,
+> and optionally multi-user auth with credential mediation.
+>
+> It takes four steps to go from repo to running service:
+> init, setup, set secrets, deploy. Each step is idempotent
+> and tells you what to do next.
+>
+> Want to set it up?
+
+## Phase 1: Initialize
+
+`gapp_init` both creates and configures. First call creates
+`gapp.yaml`; subsequent calls update settings. Use it anytime
+the user wants to change gapp configuration — entrypoint, auth,
+secrets, mcp_path, etc.
+
+If the user wants to proceed and there's no `gapp.yaml`:
+
+1. Help them identify the ASGI entrypoint — the `module:app`
+   string that uvicorn would use. Look at the code to find it.
+2. Call `gapp_init` to create `gapp.yaml`, a `Dockerfile`, and
+   register the solution locally.
+3. If the service needs secrets (API keys, tokens), help them
+   declare those in `gapp.yaml` under `prerequisites.secrets`.
+4. Walk the user through the auth decision (see below).
+
+### Auth Decision
+
+This is a key question. Look at the code to understand how the
+service authenticates with its backend (if any), then present the
+options:
+
+**Option A: No auth / direct auth (simpler, good for single-user
+or trusted environments)**
+
+The service handles auth itself. Clients pass credentials directly
+— either via a configured `Authorization` header in MCP client
+settings, or via a parameterized URL. The credential is often the
+backend platform's own token (e.g., a Monarch session token, a
+TickTick token, an AppSheet API key). This is how most solutions
+work out of the box — the app code already reads an auth header
+and uses it to call the upstream API.
+
+This works well when:
+- Single user or small trusted group
+- You're OK having the backend token on every machine/client
+- You don't need cloud-based clients like Claude.ai (which can't
+  set custom headers easily)
+
+**Option B: Credential mediation via gapp's ASGI wrapper
+(recommended for multi-device or multi-user)**
+
+gapp injects an auth wrapper at deploy time. Clients authenticate
+with a lightweight PAT (personal access token) — a JWT that gapp
+issues. The real backend credential (Monarch token, Google OAuth
+refresh token, etc.) is stored server-side and never leaves the
+server. The wrapper validates the PAT, looks up the real
+credential, and rewrites the auth header before the request
+reaches the solution. The solution code doesn't change — it still
+receives a standard `Authorization: Bearer <token>` header.
+
+This is better when:
+- You use the service from multiple machines (laptop, phone,
+  work computer) — one backend token, many PATs
+- You want cloud-based clients like Claude.ai to work (PATs can
+  be passed via URL parameter)
+- You don't want raw backend credentials scattered across devices
+  and agent configs
+- You want centralized credential rotation — update the backend
+  token once with `gapp_users_update`, every device keeps working
+- You want to revoke access without touching the backend credential
+- Multiple users need access, each with their own backend credential
+
+Present it to the user like this:
+
+> Your service talks to a backend API using a token. Right now
+> that token would go directly in every client's config — your
+> laptop, your phone, Claude.ai, etc. If it changes, you update
+> everywhere.
+>
+> Alternatively, gapp can mediate: the real token stays on the
+> server, and each client gets a lightweight access token (PAT)
+> instead. You can generate new PATs anytime, revoke them
+> individually, and rotate the backend token in one place. This
+> also makes Claude.ai work — it can't set custom headers but it
+> can use a PAT in the URL.
+>
+> Which approach fits your use case?
+
+If the user chooses mediation, call `gapp_init(auth="bearer")`
+(or `auth="google_oauth2"` when the backend credential is a
+Google OAuth2 refresh token). The `runtime` field (which version
+of the auth wrapper to install in the container) is auto-set
+from the installed gapp version — don't ask the user about it.
+
+## Phase 2: GCP Foundation
+
+The user needs a GCP project. If they have one:
+
+Call `gapp_setup(project_id="their-project-id")`.
+
+This enables APIs, creates a per-solution GCS bucket for Terraform
+state, and labels the project. The project ID is remembered for
+future commands.
+
+If they don't have a GCP project, they need to create one first
+in the Google Cloud Console.
+
+## Phase 3: Secrets
+
+Call `gapp_secret_list` to see what secrets are declared and
+their status. For any that aren't populated, ask the user for the
+value and call `gapp_secret_set(secret_name, value)`.
+
+Secret values go in Secret Manager, never in the repo. Only
+secret names (references) go in `gapp.yaml`.
+
+## Phase 4: Deploy
+
+Two paths — present both and let the user choose:
+
+### Path A: Local Deploy
+
+Requires `terraform` and `gcloud` locally.
+
+Call `gapp_deploy`. Builds a container via Cloud Build and deploys
+to Cloud Run via Terraform. Requires a clean git tree —
+uncommitted changes block the build. Skips the build if the image
+for the current commit already exists.
+
+### Path B: CI/CD (recommended for ongoing use)
+
+Set up once, then deploy from anywhere — GitHub UI, Claude.ai,
+phone. No terraform or docker needed locally after setup.
+
+1. `gapp_ci_init(repo="owner/ci-repo")` — designate a private
+   CI repo
+2. `gapp_ci_setup(solution="name")` — create WIF, SA, push
+   workflow
+3. `gapp_ci_trigger(solution="name")` — deploy via GitHub Actions
+
+After CI setup, code changes and deployments are decoupled from
+the user's machine. Any tool with GitHub access can trigger a
+deploy.
+
+**When to recommend CI/CD:**
+- User wants to deploy from multiple machines
+- User wants cloud-based agents (Claude.ai) to deploy
+- User doesn't want terraform installed locally
+- User wants automated deployments on push
+
+## Phase 5: Post-Deploy (Auth & Access)
+
+If auth is enabled in `gapp.yaml`, guide through user setup:
+
+1. **Register users** — `gapp_users_register(email, credential)`
+2. **Create PATs** — `gapp_tokens_create(email)`
+3. **Get connection info** — `gapp_mcp_connect()` generates
+   ready-to-use connection commands for Claude Code, Gemini CLI,
+   and Claude.ai
+
+The `gapp_mcp_connect` tool shows:
+- The service URL
+- Registration commands for each client
+- Whether each client already has the service registered
+- With `user` param, mints a real PAT inline
+
+## Ongoing Operations
+
+### Check status
+
+Use `gapp_status` to check infrastructure health. Returns:
+- Deployment state (deployed, not deployed, needs redeploy)
+- Service URL
+- Health check results
+- Guided next steps
+
+Use `gapp_mcp_status` to check MCP-specific health:
+- MCP endpoint availability
+- Tool enumeration
+- Auth status
+
+### Redeploy with changes
+
+After code changes are committed:
+
+- **Path A:** `gapp_deploy` — rebuilds if the commit SHA changed
+- **Path B:** `gapp_ci_trigger` — dispatches GitHub Actions
+
+Remind the user: uncommitted changes won't be included. The build
+uses `git archive HEAD` for source integrity.
+
+### Manage users
+
+- `gapp_users_list` — see who's registered
+- `gapp_users_register` — add a user with their upstream credential
+- `gapp_users_update` — change credential or set revoke_before
+- `gapp_users_revoke` — delete a user's credential file
+- `gapp_tokens_create` — issue a PAT for a user
+- `gapp_tokens_revoke` — invalidate all PATs for a user
+
+### List and discover
+
+- `gapp_list` — all registered solutions
+- `gapp_list(available=True)` — include remote GitHub solutions
+- `gapp_mcp_list` — solutions with MCP endpoints
+
+## MCP Tools Reference
+
+These are the plugin's MCP tools. Use them throughout the
+workflow as needed:
+
+| Tool | Purpose |
+|------|---------|
+| `gapp_init` | Initialize a solution (create gapp.yaml, Dockerfile) |
+| `gapp_setup` | GCP foundation (APIs, bucket, labels) |
+| `gapp_deploy` | Build container + Terraform apply |
+| `gapp_secret_list` | List prerequisite secrets and status |
+| `gapp_secret_set` | Store secret value in Secret Manager |
+| `gapp_ci_init` | Designate CI repo |
+| `gapp_ci_setup` | Wire solution for CI/CD (WIF, SA, workflow) |
+| `gapp_ci_trigger` | Trigger GitHub Actions deploy |
+| `gapp_status` | Infrastructure health check |
+| `gapp_list` | List registered solutions |
+| `gapp_mcp_status` | MCP health + tool enumeration |
+| `gapp_mcp_list` | List MCP-enabled solutions |
+| `gapp_mcp_connect` | Client connection info + PAT minting |
+| `gapp_users_list` | List registered users |
+| `gapp_users_register` | Register user with credential |
+| `gapp_users_update` | Update credential or revocation timestamp |
+| `gapp_users_revoke` | Delete user's credential file |
+| `gapp_tokens_create` | Create a PAT |
+| `gapp_tokens_revoke` | Revoke all PATs for a user |
+
+## Important Reminders
+
+- Every gapp operation is idempotent and returns a `next_step`
+  field telling what to do next. Trust it.
+- Solutions are cloud-agnostic. Never suggest adding GCP imports
+  or auth code to the solution itself.
+- One repo = one solution = one Cloud Run service.
+- The build uses `git archive HEAD`. Uncommitted changes are never
+  included. The working tree must be clean.
+- Image tags are the HEAD commit SHA. If the image already exists,
+  the build is skipped.
+- Secret values go in Secret Manager, never in the repo. Only
+  secret names (references) go in `gapp.yaml`.
+- When auth is enabled, gapp injects a credential mediation
+  wrapper at deploy time. The solution never sees PATs or
+  credential files.
+- Guide users step by step. Don't dump the entire lifecycle at
+  once. Assess where they are and help with the next phase.

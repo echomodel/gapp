@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "gapp": {
+      "command": "python3",
+      "args": ["-m", "gapp.admin.mcp.server"],
+      "env": {
+        "PYTHONPATH": "${CLAUDE_PLUGIN_DATA}/site-packages"
+      }
+    }
+  }
+}

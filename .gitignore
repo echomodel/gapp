@@ -30,3 +30,6 @@ dist/
 
 # Logs
 *.log
+
+# Claude plugin data (installed at runtime)
+site-packages/
