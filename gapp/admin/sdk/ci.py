@@ -133,38 +133,59 @@ def init_ci(repo: str, local_only: bool = False) -> dict:
     return result
 
 
-def get_ci_status() -> dict:
-    """Check CI configuration state.
+def get_ci_status(solution: str | None = None) -> dict:
+    """Check CI readiness for the current solution.
 
-    Returns dict with:
-        repo: owner/name of CI repo (or None)
-        source: "local" | "remote" | None
-        local_config: bool (ci.yaml exists and has repo)
-        remote_config: str | None (repo found via topic)
+    Returns:
+        repo: owner/name of the CI repo, or None if gapp_ci_init
+              has not been run. Resolved from local config first,
+              then GitHub topic.
+        workflow: True if a GitHub Actions workflow exists in the
+                  CI repo for this solution (meaning gapp_ci_setup
+                  has been run for it). False if the workflow is
+                  missing or the CI repo is not configured. Only
+                  checked when repo is set and a solution can be
+                  resolved.
     """
+    from gapp.admin.sdk.context import resolve_solution
+
     result = {
         "repo": None,
-        "source": None,
-        "local_config": False,
-        "remote_config": None,
+        "workflow": False,
     }
 
-    # Check local config
+    # Resolve CI repo: local config → GitHub topic
     config = _load_ci_config()
     local_repo = config.get("repo")
     if local_repo:
-        result["local_config"] = True
         result["repo"] = local_repo
-        result["source"] = "local"
+    else:
+        try:
+            remote_repo = _find_ci_repo_by_topic()
+            if remote_repo:
+                result["repo"] = remote_repo
+        except Exception:
+            pass
 
-    # Check remote (don't fail if gh is not available or not authenticated)
+    if not result["repo"]:
+        return result
+
+    # Check if this solution has a workflow in the CI repo
+    ctx = resolve_solution(solution)
+    if not ctx:
+        return result
+
+    solution_name = ctx["name"]
+    workflow_file = f"{solution_name}.yml"
     try:
-        remote_repo = _find_ci_repo_by_topic()
-        result["remote_config"] = remote_repo
-        if not result["repo"] and remote_repo:
-            result["repo"] = remote_repo
-            result["source"] = "remote"
-    except Exception:
+        check = subprocess.run(
+            ["gh", "api",
+             f"repos/{result['repo']}/contents/.github/workflows/{workflow_file}",
+             "--jq", ".name"],
+            capture_output=True, text=True,
+        )
+        result["workflow"] = check.returncode == 0 and bool(check.stdout.strip())
+    except FileNotFoundError:
         pass
 
     return result

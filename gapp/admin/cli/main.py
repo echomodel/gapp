@@ -545,11 +545,12 @@ def ci_setup_cmd(name):
 
 
 @ci.command("status")
-def ci_status_cmd():
-    """Show CI configuration state."""
+@click.argument("name", required=False)
+def ci_status_cmd(name):
+    """Show CI readiness for the current solution."""
     from gapp.admin.sdk.ci import get_ci_status
 
-    result = get_ci_status()
+    result = get_ci_status(solution=name)
 
     click.echo()
     if not result["repo"]:
@@ -558,9 +559,12 @@ def ci_status_cmd():
         click.echo()
         return
 
-    click.echo(f"  CI repo: {result['repo']} (source: {result['source']})")
-    click.echo(f"    Local config:  {'set' if result['local_config'] else 'not set'}")
-    click.echo(f"    Remote topic:  {result['remote_config'] or 'not set'}")
+    repo_status = "\u2713" if result["repo"] else "\u2717"
+    workflow_status = "\u2713" if result["workflow"] else "\u2717"
+    click.echo(f"  CI repo:   {result['repo']} {repo_status}")
+    click.echo(f"  Workflow:  {'found' if result['workflow'] else 'not found'} {workflow_status}")
+    if not result["workflow"]:
+        click.echo("  Run: gapp ci setup")
     click.echo()
 
 
