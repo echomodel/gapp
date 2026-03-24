@@ -247,29 +247,31 @@ from the installed gapp version — don't ask the user about it.
 
 ## Phase 2: GCP Foundation
 
-A GCP project is needed. Before asking the user, check what's
-already in use:
+Call `gapp_status` — if `deployment.project.id` is null, the
+response includes `deployment.project.suggestions`:
 
-1. Call `gapp_list` and look at `project_id` for each registered
-   solution. Most users deploy everything to a single project.
-2. If one or more solutions already have a project_id set, present
-   it as the default:
+- `suggestions.default` — a project already labeled for this
+  solution in GCP (strongest signal: this solution was previously
+  set up there)
+- `suggestions.others` — projects used by other local solutions,
+  grouped by project ID with solution names
 
-   > Your other solutions (X, Y) are using project `foo-bar-123`.
-   > Want to use the same project for this one?
+Present suggestions to the user:
 
-   Lean toward the default — just confirm and proceed. Don't make
-   the user dig up a project ID they've already configured.
+1. If `default` is set, recommend it:
 
-3. If no existing solutions have a project, check if gcloud has
-   a default: `gcloud config get project`. If it returns one,
-   offer that.
+   > This solution was previously set up in project `<default>`.
+   > Want to use that?
 
-4. Only if none of the above yields a project, ask the user to
-   provide one or create one in the Google Cloud Console.
+2. If no default but `others` has entries, present them:
 
-Once you have the project ID, call
-`gapp_setup(project_id="the-project-id")`.
+   > Your other solutions (X, Y) use project `<id>`. Want to
+   > use the same one?
+
+3. If no suggestions at all, ask the user to provide a project
+   ID or create one in the Google Cloud Console.
+
+Once confirmed, call `gapp_setup(project_id="the-project-id")`.
 
 This enables APIs, creates a per-solution GCS bucket for Terraform
 state, and labels the project. The project ID is remembered for
