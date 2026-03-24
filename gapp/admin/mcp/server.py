@@ -103,20 +103,28 @@ def gapp_secret_set(secret_name: str, value: str, solution: str | None = None) -
 
 
 @mcp.tool()
-def gapp_ci_status() -> dict:
-    """Check CI/CD configuration state.
+def gapp_ci_status(solution: str | None = None) -> dict:
+    """Check CI/CD readiness for the current solution.
 
-    Returns whether a CI repo is configured, its source (local config
-    or remote GitHub topic), and the repo name. Use this to determine
-    whether gapp_ci_init has been run and whether CI is ready.
+    Returns:
+        repo: CI repo name (owner/name), or null if gapp_ci_init
+              has not been run.
+        workflow: true if this solution has a GitHub Actions workflow
+                  in the CI repo (gapp_ci_setup was run for it),
+                  false otherwise.
+
+    Both must be true before gapp_ci_trigger will work.
 
     The CI/CD setup sequence is:
-    1. gapp_ci_init — designate the CI repo
-    2. gapp_ci_setup — wire a solution (WIF, SA, workflow)
+    1. gapp_ci_init — designate the CI repo (once)
+    2. gapp_ci_setup — wire a solution (per solution, idempotent)
     3. gapp_ci_trigger — deploy via GitHub Actions
+
+    Args:
+        solution: Solution name. Defaults to current directory's solution.
     """
     from gapp.admin.sdk.ci import get_ci_status
-    return get_ci_status()
+    return get_ci_status(solution=solution)
 
 
 @mcp.tool()
