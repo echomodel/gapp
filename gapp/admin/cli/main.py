@@ -101,17 +101,9 @@ def plan():
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON.")
 def status(name, as_json):
     """Infrastructure health check with guided next steps."""
-    from gapp.admin.sdk.status import get_status, TerraformNotFoundError, GcloudNotFoundError
+    from gapp.admin.sdk.status import get_status
 
-    try:
-        result = get_status(name)
-    except TerraformNotFoundError:
-        click.echo("  Error: terraform is not installed.", err=True)
-        click.echo("  Install terraform or use: gapp deployments list", err=True)
-        raise SystemExit(1)
-    except GcloudNotFoundError as e:
-        click.echo(f"  Error: {e}", err=True)
-        raise SystemExit(1)
+    result = get_status(name)
 
     if as_json:
         click.echo(json_mod.dumps(result.model_dump(), indent=2))

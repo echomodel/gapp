@@ -4,10 +4,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
-import pytest
-
 from gapp.admin.sdk.config import save_solutions
-from gapp.admin.sdk.status import get_status, TerraformNotFoundError, GcloudNotFoundError
+from gapp.admin.sdk.status import get_status
 
 
 def _make_solution(tmp_path, monkeypatch, name="my-app", project_id=None):
@@ -65,12 +63,16 @@ def test_initialized_no_project(tmp_path, monkeypatch):
     assert result.next_step.action == "setup"
 
 
-def test_terraform_not_installed_raises(tmp_path, monkeypatch):
+def test_terraform_not_installed_returns_pending(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     _make_solution(tmp_path, monkeypatch, project_id="my-project")
 
     # Remove terraform from PATH but keep git and gcloud
     monkeypatch.setenv("PATH", _path_without("terraform"))
 
-    with pytest.raises(TerraformNotFoundError, match="terraform CLI is not installed"):
-        get_status()
+    result = get_status()
+    assert result.initialized is True
+    assert result.deployment.project == "my-project"
+    assert result.deployment.pending is True
+    assert result.next_step.action == "deploy"
+    assert "terraform" in result.next_step.hint
