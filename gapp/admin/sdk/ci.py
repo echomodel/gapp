@@ -659,13 +659,17 @@ def setup_ci(solution: str | None = None) -> dict:
 
 
 def _get_gapp_repo() -> str:
-    """Determine the gapp repo owner/name for workflow references."""
+    """Determine the gapp repo owner/name for workflow references.
+
+    Reads from the installed package's Project-URL metadata, which is
+    set via [project.urls] in pyproject.toml.
+    """
     import importlib.metadata
-    # Try to get from the installed package's git origin
-    # If gapp is installed from git, the URL contains the repo
     try:
         urls = importlib.metadata.metadata("gapp").get_all("Project-URL") or []
-        for url in urls:
+        for entry in urls:
+            # Format is "Label, https://github.com/owner/repo"
+            url = entry.split(",", 1)[-1].strip()
             if "github.com" in url:
                 parts = url.split("github.com/")[-1].strip("/").split("/")
                 if len(parts) >= 2:
@@ -673,17 +677,7 @@ def _get_gapp_repo() -> str:
     except Exception:
         pass
 
-    # Fallback: check if we're inside the gapp repo
-    try:
-        result = subprocess.run(
-            ["gh", "repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"],
-            capture_output=True, text=True,
-        )
-        if result.returncode == 0:
-            return result.stdout.strip()
-    except Exception:
-        pass
-
     raise RuntimeError(
-        "Could not determine the gapp repo. Ensure gapp is installed from a known GitHub source."
+        "Could not determine the gapp repo. Ensure gapp is installed from a known GitHub source\n"
+        "  and that [project.urls] Repository is set in pyproject.toml."
     )
