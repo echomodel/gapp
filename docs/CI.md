@@ -158,16 +158,41 @@ jobs:
 
 That's it. No boilerplate. Each file says something different — which solution, which project, which identity. The reusable workflow in gapp handles all the logic.
 
+### Why deployments are manual by default
+
+`gapp ci setup` generates workflows with `workflow_dispatch` only — no automatic triggers. This is deliberate:
+
+1. **Operator controls when code reaches production.** A push to a solution repo is a code change, not a deployment decision. The operator explicitly decides when a new version is ready for their infrastructure via `gapp ci trigger` (which calls `workflow_dispatch`). This keeps deployments stable and intentional.
+
+2. **Solution repos are not deployment pipelines.** Adding push-triggered workflows to solution repos would couple them to a specific operator's CI repo, violating the open/closed principle. Solution repos must remain clean, reusable products that anyone can deploy to their own infrastructure without modification.
+
+3. **No access to the solution repo required.** An operator should be able to deploy any public solution repo — even one they don't own — without admin access to it. GitHub has no native mechanism to watch another repo for pushes without either (a) adding a webhook (requires admin), (b) installing a GitHub App (requires owner), or (c) adding a workflow to that repo (requires write access). The only zero-access approach is polling.
+
+4. **Security by default.** Auto-deploying on push to a third-party public repo means someone else's commit deploys to your infrastructure. Even for repos you own, explicit triggering is the safer default.
+
+### Optional: auto-deploy via polling
+
+For operators who want automatic deployments, a scheduled poller workflow in the CI repo can check each solution repo for new commits and dispatch the corresponding workflow. This is the only approach that:
+
+- Requires no access to the solution repo (public API read only)
+- Keeps solution repos untouched
+- Lives entirely in the operator's private CI repo
+- Works for repos the operator doesn't own
+
+The tradeoff is a polling interval (e.g., 5-15 minutes) rather than instant triggers. This is acceptable for personal tooling and stays well within GitHub Actions' free tier.
+
+This is not yet implemented — see the GitHub issue for tracking.
+
 ### Trigger options (operator's choice)
 
-The operator decides when deployment happens:
+For operators who want to customize beyond the default, the workflow YAML in the CI repo is plain GitHub Actions configuration. The operator can add triggers:
 
-- **`workflow_dispatch`** — manual trigger from GitHub UI, `gh` CLI, or API. Best for third-party solution repos you don't own.
-- **Push-triggered** — if the operator owns the solution repo (e.g., you own monarch-access), pushing to main triggers deployment. Safe because only you can merge to main via branch protection.
-- **Scheduled** — poll for new versions on a cron.
-- **`repository_dispatch`** — webhook-triggered from the solution repo.
+- **`workflow_dispatch`** (default) — manual trigger from GitHub UI, `gh` CLI, API, or `gapp ci trigger`. Best for third-party solution repos you don't own.
+- **`schedule`** — poll for new versions on a cron. The only auto-deploy option that works without access to the solution repo.
+- **Push-triggered** — only possible if the operator owns the solution repo AND moves the workflow there (breaks the three-layer separation, not recommended).
+- **`repository_dispatch`** — webhook-triggered, but requires a sender (webhook on solution repo = requires admin access, or external infrastructure).
 
-This is operator-level configuration, not a gapp concern. A push to a public third-party solution repo must NOT auto-trigger deployment to your project — that would let someone else's commit deploy to your infrastructure. But if you own the solution repo, auto-deploy on push to main is perfectly safe because only you control what gets merged. The same mechanism supports both — the operator just configures a different trigger.
+The default (`workflow_dispatch` only) is the right choice for most operators. It's the only trigger that works universally — regardless of who owns the solution repo, without infrastructure, and without compromising the product-level cleanliness of any public repo.
 
 ### What the operator does NOT want
 
