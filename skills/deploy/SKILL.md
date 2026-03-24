@@ -64,6 +64,77 @@ Evaluate whether the repo is a good candidate for gapp:
 - No ASGI/HTTP interface
 - Already deployed elsewhere and user doesn't want to move
 
+### Cloud Readiness Check (MCP servers)
+
+Before proceeding to init, inspect how the MCP server
+authenticates with its backend API. Look at the SDK layer (or
+wherever the HTTP client is configured) for how backend
+credentials are obtained. Common patterns:
+
+**Pattern A: Reads `Authorization` header from incoming request**
+→ Cloud-ready. The credential arrives per-request, which works
+with both direct auth and gapp's bearer mediation.
+
+**Pattern B: Reads credential from environment variable or local
+file** (e.g., `os.getenv("SOME_TOKEN")` or
+`~/.config/tool/token`)
+→ **Not cloud-ready.** This pattern assumes single-user local
+execution (stdio). If deployed as-is to Cloud Run, you'd have
+to bake the backend credential into the container environment —
+which means every unauthenticated HTTP request gets full access
+to the user's backend account. **Never do this.** Do not suggest
+setting the backend credential as a Cloud Run secret env var as
+a workaround — it creates an unauthenticated proxy to the
+user's account.
+
+**When you detect Pattern B, propose a refactor before
+proceeding.** Present it like this:
+
+> Your service reads backend credentials from an environment
+> variable / local file. That works for local stdio, but on
+> Cloud Run it would mean any request to the URL gets full
+> access to your account — there's no incoming auth.
+>
+> A small refactor makes it work for both local and cloud: the
+> SDK accepts an optional token parameter. When provided (from
+> an incoming request's Authorization header), it uses that.
+> When not provided, it falls back to the environment variable
+> for local/stdio use. If neither exists, it raises an auth
+> error — not a "missing env var" error, but a proper "no
+> credentials" error.
+>
+> This keeps local stdio working exactly as before, while
+> making the service ready for cloud hosting with gapp's
+> credential mediation. Want me to make this change?
+
+If the user agrees, make these changes in order:
+
+1. **SDK layer** — modify the function that obtains the backend
+   credential (e.g., `get_token()`) to accept an optional
+   `token` parameter. Logic:
+   - If `token` is provided → use it (cloud/HTTP path)
+   - Else if env var is set → use it (local/stdio path)
+   - Else → raise an authentication error (not a "missing env
+     var" error — the caller isn't authenticated)
+
+2. **SDK client/operations** — thread the optional token through
+   to wherever API calls are made, so callers can pass it in.
+
+3. **MCP server layer** — when running in HTTP mode, extract
+   the `Authorization: Bearer <token>` header from the incoming
+   request and pass it to the SDK. When running in stdio mode,
+   pass nothing (falls back to env var).
+
+4. After the refactor, recommend `auth="bearer"` for gapp so
+   that credential mediation protects the endpoint.
+
+**Important:** Do not suggest putting the backend credential in
+a Cloud Run secret environment variable as an alternative. That
+creates an unauthenticated proxy — any request to the service
+URL gets the user's backend access with no gatekeeping. The
+whole point of this refactor is to ensure credentials arrive
+per-request through a mediated auth layer.
+
 **Present gapp to the user:**
 
 > gapp deploys Python web servers and MCP servers to Google Cloud
@@ -99,7 +170,13 @@ If the user wants to proceed and there's no `gapp.yaml`:
 
 This is a key question. Look at the code to understand how the
 service authenticates with its backend (if any), then present the
-options:
+options.
+
+**Important:** Before presenting these options, you must have
+completed the Cloud Readiness Check above. If the service uses
+Pattern B (env-var/file-based credentials), the refactor must
+happen first — otherwise neither option works safely on Cloud
+Run.
 
 **Option A: No auth / direct auth (simpler, good for single-user
 or trusted environments)**
@@ -108,9 +185,13 @@ The service handles auth itself. Clients pass credentials directly
 — either via a configured `Authorization` header in MCP client
 settings, or via a parameterized URL. The credential is often the
 backend platform's own token (e.g., a Monarch session token, a
-TickTick token, an AppSheet API key). This is how most solutions
-work out of the box — the app code already reads an auth header
-and uses it to call the upstream API.
+TickTick token, an AppSheet API key).
+
+**Prerequisite:** The service must actually read the incoming
+request's `Authorization` header (not just an env var). If you
+found Pattern B during the Cloud Readiness Check, this option
+only works after the refactor — and even then, it means the raw
+backend credential is on every client device.
 
 This works well when:
 - Single user or small trusted group
@@ -166,16 +247,33 @@ from the installed gapp version — don't ask the user about it.
 
 ## Phase 2: GCP Foundation
 
-The user needs a GCP project. If they have one:
+A GCP project is needed. Before asking the user, check what's
+already in use:
 
-Call `gapp_setup(project_id="their-project-id")`.
+1. Call `gapp_list` and look at `project_id` for each registered
+   solution. Most users deploy everything to a single project.
+2. If one or more solutions already have a project_id set, present
+   it as the default:
+
+   > Your other solutions (X, Y) are using project `foo-bar-123`.
+   > Want to use the same project for this one?
+
+   Lean toward the default — just confirm and proceed. Don't make
+   the user dig up a project ID they've already configured.
+
+3. If no existing solutions have a project, check if gcloud has
+   a default: `gcloud config get project`. If it returns one,
+   offer that.
+
+4. Only if none of the above yields a project, ask the user to
+   provide one or create one in the Google Cloud Console.
+
+Once you have the project ID, call
+`gapp_setup(project_id="the-project-id")`.
 
 This enables APIs, creates a per-solution GCS bucket for Terraform
 state, and labels the project. The project ID is remembered for
 future commands.
-
-If they don't have a GCP project, they need to create one first
-in the Google Cloud Console.
 
 ## Phase 3: Secrets
 
@@ -321,3 +419,12 @@ workflow as needed:
   credential files.
 - Guide users step by step. Don't dump the entire lifecycle at
   once. Assess where they are and help with the next phase.
+- Never suggest setting a backend credential (API token, session
+  token, OAuth token) as a Cloud Run secret env var for direct
+  use by the service. This creates an unauthenticated proxy.
+  Backend credentials must arrive per-request via the
+  Authorization header, mediated by gapp's auth wrapper.
+- IAM-based auth on Cloud Run is not practical for MCP clients.
+  Claude.ai, Gemini CLI, and Claude Code cannot attach IAM
+  tokens to requests. Always use gapp's bearer mediation (PATs)
+  for access control instead.
