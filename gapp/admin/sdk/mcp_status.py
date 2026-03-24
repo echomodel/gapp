@@ -11,7 +11,10 @@ from gapp.admin.sdk.models import (
     ConnectResult, McpSolution, McpStatusResult, NextStep,
 )
 from gapp.admin.sdk.solutions import list_solutions
-from gapp.admin.sdk.status import _check_health, _get_tf_outputs
+from gapp.admin.sdk.status import (
+    _check_health, _get_tf_outputs,
+    TerraformNotFoundError, GcloudNotFoundError,
+)
 from gapp.admin.sdk.tokens import create_status_token, create_token
 
 
@@ -44,7 +47,11 @@ def mcp_status(name: str | None = None) -> McpStatusResult:
         result.next_step = NextStep(action="configure", hint="No mcp_path configured in gapp.yaml.")
         return result
 
-    tf_outputs = _get_tf_outputs(ctx["name"], ctx["project_id"])
+    try:
+        tf_outputs = _get_tf_outputs(ctx["name"], ctx["project_id"])
+    except (TerraformNotFoundError, GcloudNotFoundError) as e:
+        result.next_step = NextStep(action="deploy", hint=str(e))
+        return result
     if tf_outputs is None:
         result.next_step = NextStep(action="deploy", hint="Not deployed.")
         return result
@@ -119,7 +126,11 @@ def mcp_connect(name: str | None = None, *, user: str | None = None) -> ConnectR
         result.next_step = NextStep(action="configure", hint="No mcp_path configured in gapp.yaml.")
         return result
 
-    tf_outputs = _get_tf_outputs(ctx["name"], ctx["project_id"])
+    try:
+        tf_outputs = _get_tf_outputs(ctx["name"], ctx["project_id"])
+    except (TerraformNotFoundError, GcloudNotFoundError) as e:
+        result.next_step = NextStep(action="deploy", hint=str(e))
+        return result
     if tf_outputs is None:
         result.next_step = NextStep(action="deploy", hint="Not deployed.")
         return result
