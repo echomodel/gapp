@@ -264,29 +264,31 @@ from the installed gapp version — don't ask the user about it.
 
 ## Phase 2: GCP Foundation
 
-Call `gapp_status` — if `deployment.project.id` is null, the
-response includes `deployment.project.suggestions`:
+If `gapp_status` shows `deployment.project` is null, the user
+needs a GCP project. Call `gapp_deployments_list` to discover
+available projects.
 
-- `suggestions.default` — a project already labeled for this
-  solution in GCP (strongest signal: this solution was previously
-  set up there)
-- `suggestions.others` — projects used by other local solutions,
-  grouped by project ID with solution names
+The response has:
+- `default` — project ID with the most gapp solutions (the
+  primary gapp project)
+- `projects` — all GCP projects with gapp solutions, each
+  listing its deployed solutions with instance names
 
-Present suggestions to the user:
+Present the results:
 
-1. If `default` is set, recommend it:
+1. If the solution appears in a project's solutions list, it's
+   already deployed there. Recommend that project:
 
-   > This solution was previously set up in project `<default>`.
-   > Want to use that?
+   > This solution is already deployed to project `<id>`.
+   > Want to attach to that?
 
-2. If no default but `others` has entries, present them:
+2. If not deployed anywhere but `default` exists, recommend it:
 
-   > Your other solutions (X, Y) use project `<id>`. Want to
-   > use the same one?
+   > Your other solutions (X, Y) are deployed to project
+   > `<default>`. Want to use the same one?
 
-3. If no suggestions at all, ask the user to provide a project
-   ID or create one in the Google Cloud Console.
+3. If no projects found at all, ask the user to provide a
+   project ID or create one in the Google Cloud Console.
 
 Once confirmed, call `gapp_setup(project_id="the-project-id")`.
 
@@ -408,7 +410,8 @@ workflow as needed:
 | `gapp_ci_init` | Designate CI repo |
 | `gapp_ci_setup` | Wire solution for CI/CD (WIF, SA, workflow) |
 | `gapp_ci_trigger` | Trigger GitHub Actions deploy |
-| `gapp_status` | Infrastructure health check |
+| `gapp_status` | Infrastructure health check (local, fast) |
+| `gapp_deployments_list` | Discover GCP projects with gapp solutions |
 | `gapp_list` | List registered solutions |
 | `gapp_mcp_status` | MCP health + tool enumeration |
 | `gapp_mcp_list` | List MCP-enabled solutions |

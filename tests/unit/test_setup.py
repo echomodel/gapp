@@ -96,7 +96,7 @@ def test_setup_fails_outside_solution(tmp_path, monkeypatch):
         setup_solution("proj")
 
 
-@patch("gapp.admin.sdk.setup._discover_project_from_label", return_value=None)
+@patch("gapp.admin.sdk.setup.discover_project_from_label", return_value=None)
 def test_setup_fails_no_project(mock_discover, tmp_path, monkeypatch):
     _make_solution(tmp_path, monkeypatch)
 

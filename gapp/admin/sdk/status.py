@@ -4,21 +4,21 @@ import json
 import os
 import shutil
 import subprocess
-from collections import defaultdict
 from pathlib import Path
 
-from gapp.admin.sdk.config import load_solutions
 from gapp.admin.sdk.context import resolve_solution
 from gapp.admin.sdk.deploy import _get_staging_dir, _get_tf_source_dir
 from gapp.admin.sdk.manifest import get_auth_config, get_mcp_path, load_manifest
-from gapp.admin.sdk.models import (
-    DeploymentInfo, NextStep, ProjectInfo, ProjectSuggestion,
-    ProjectSuggestions, ServiceStatus, StatusResult,
-)
+from gapp.admin.sdk.models import DeploymentInfo, NextStep, ServiceStatus, StatusResult
 
 
 def get_status(name: str | None = None) -> StatusResult:
-    """Infrastructure status check for a solution."""
+    """Infrastructure status check for a solution.
+
+    Purely local — no GCP or GitHub queries. Reports on the attached
+    project and deployment state. Use gapp_deployments_list for
+    cross-project discovery.
+    """
     ctx = resolve_solution(name)
     if not ctx:
         return StatusResult(
@@ -33,13 +33,12 @@ def get_status(name: str | None = None) -> StatusResult:
         name=ctx["name"],
         repo_path=ctx.get("repo_path"),
         deployment=DeploymentInfo(
-            project=ProjectInfo(id=project_id),
+            project=project_id,
             pending=True,
         ),
     )
 
     if not project_id:
-        result.deployment.project.suggestions = _build_project_suggestions(ctx["name"])
         result.next_step = NextStep(
             action="setup",
             hint="No GCP project attached.",
@@ -75,55 +74,6 @@ def get_status(name: str | None = None) -> StatusResult:
         result.deployment.services.append(service)
 
     return result
-
-
-def _build_project_suggestions(solution_name: str) -> ProjectSuggestions:
-    """Build project suggestions from GCP labels and local solutions.yaml."""
-    solutions = load_solutions()
-
-    # Build project → solutions map from local cache (no network I/O)
-    projects: dict[str, list[str]] = defaultdict(list)
-    for name, entry in solutions.items():
-        if name == solution_name:
-            continue
-        pid = entry.get("project_id")
-        if pid:
-            projects[pid].append(name)
-
-    # default: GCP label lookup (network I/O)
-    default_id = _discover_project_from_label(solution_name)
-    default = None
-    if default_id:
-        default = ProjectSuggestion(
-            id=default_id,
-            solutions=sorted(projects.pop(default_id, [])),
-        )
-
-    # others: remaining projects from local cache
-    others = [
-        ProjectSuggestion(id=pid, solutions=sorted(names))
-        for pid, names in sorted(projects.items())
-    ]
-
-    return ProjectSuggestions(default=default, others=others)
-
-
-def _discover_project_from_label(solution_name: str) -> str | None:
-    """Find a GCP project with the gapp-{name} label."""
-    label_filter = f"labels.gapp-{solution_name}=default"
-    try:
-        result = subprocess.run(
-            ["gcloud", "projects", "list",
-             "--filter", label_filter,
-             "--format", "value(projectId)"],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip().splitlines()[0]
-    except FileNotFoundError:
-        pass
-    return None
 
 
 def _get_tf_outputs(solution_name: str, project_id: str) -> dict | None:
