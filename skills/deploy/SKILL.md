@@ -83,29 +83,29 @@ Evaluate whether the repo is a good candidate for gapp:
 
 ### Cloud Readiness Check (MCP servers)
 
-Before proceeding to init, inspect how the MCP server
-authenticates with its backend API. Look at the SDK layer (or
-wherever the HTTP client is configured) for how backend
-credentials are obtained. Common patterns:
+Before proceeding to init, check for these common issues that
+prevent MCP servers from working on Cloud Run.
 
-**Pattern A: Reads `Authorization` header from incoming request**
-→ Cloud-ready. The credential arrives per-request, which works
-with both direct auth and gapp's bearer mediation.
+#### Backend credentials must come from the request, not the environment
 
-**Pattern B: Reads credential from environment variable or local
-file** (e.g., `os.getenv("SOME_TOKEN")` or
-`~/.config/tool/token`)
-→ **Not cloud-ready.** This pattern assumes single-user local
-execution (stdio). If deployed as-is to Cloud Run, you'd have
-to bake the backend credential into the container environment —
-which means every unauthenticated HTTP request gets full access
-to the user's backend account. **Never do this.** Do not suggest
-setting the backend credential as a Cloud Run secret env var as
-a workaround — it creates an unauthenticated proxy to the
-user's account.
+Look at the SDK layer for how backend credentials (API tokens,
+session tokens) are obtained. If the code reads from an
+environment variable or local file (e.g., `os.getenv("API_TOKEN")`
+or `~/.config/tool/token`), it's not cloud-ready.
 
-**When you detect Pattern B, propose a refactor before
-proceeding.** Present it like this:
+This pattern assumes single-user local execution (stdio). On
+Cloud Run, you'd have to bake the credential into the container
+environment, which means every request to the URL gets full
+access to the user's backend account with no gatekeeping.
+**Never do this.** Do not suggest setting the backend credential
+as a Cloud Run secret env var as a workaround — it creates an
+unauthenticated proxy.
+
+If the code already reads the `Authorization` header from the
+incoming request, it's cloud-ready.
+
+**If credentials come from the environment, propose a refactor
+before proceeding:**
 
 > Your service reads backend credentials from an environment
 > variable / local file. That works for local stdio, but on
@@ -144,6 +144,36 @@ If the user agrees, make these changes in order:
 
 4. After the refactor, recommend `auth="bearer"` for gapp so
    that credential mediation protects the endpoint.
+
+#### DNS rebinding protection must be disabled on Cloud Run
+
+FastMCP enables DNS rebinding protection by default, rejecting
+requests whose `Host` header doesn't match expected values. On
+Cloud Run, the load balancer sets a Host header that the MCP SDK
+doesn't recognize, causing all requests to fail with HTTP 421
+("Invalid Host header").
+
+Check how `FastMCP` is constructed. If it's just
+`FastMCP("name")` with no transport security override, the
+service will fail on Cloud Run.
+
+The fix is to disable DNS rebinding protection when running on
+Cloud Run, detected via the `K_SERVICE` environment variable
+that Cloud Run sets automatically:
+
+```python
+if os.environ.get("K_SERVICE"):
+    from mcp.server.transport_security import TransportSecuritySettings
+    mcp = FastMCP("name", transport_security=TransportSecuritySettings(
+        enable_dns_rebinding_protection=False,
+    ))
+else:
+    mcp = FastMCP("name")
+```
+
+This is safe because on Cloud Run, gapp's auth wrapper and the
+load balancer handle host validation. Locally, the MCP SDK's
+built-in localhost-only protection remains active.
 
 **Important:** Do not suggest putting the backend credential in
 a Cloud Run secret environment variable as an alternative. That
@@ -190,10 +220,10 @@ service authenticates with its backend (if any), then present the
 options.
 
 **Important:** Before presenting these options, you must have
-completed the Cloud Readiness Check above. If the service uses
-Pattern B (env-var/file-based credentials), the refactor must
-happen first — otherwise neither option works safely on Cloud
-Run.
+completed the Cloud Readiness Check above. If the service reads
+credentials from environment variables or local files, the
+refactor must happen first — otherwise neither option works
+safely on Cloud Run.
 
 **Option A: No auth / direct auth (simpler, good for single-user
 or trusted environments)**
@@ -201,12 +231,12 @@ or trusted environments)**
 The service handles auth itself. Clients pass credentials directly
 — either via a configured `Authorization` header in MCP client
 settings, or via a parameterized URL. The credential is often the
-backend platform's own token (e.g., a Monarch session token, a
-TickTick token, an AppSheet API key).
+backend platform's own token (e.g., a session token, an API key,
+or an OAuth access token).
 
 **Prerequisite:** The service must actually read the incoming
 request's `Authorization` header (not just an env var). If you
-found Pattern B during the Cloud Readiness Check, this option
+the Cloud Readiness Check found env-var/file-based credentials, this option
 only works after the refactor — and even then, it means the raw
 backend credential is on every client device.
 
@@ -221,8 +251,9 @@ This works well when:
 
 gapp injects an auth wrapper at deploy time. Clients authenticate
 with a lightweight PAT (personal access token) — a JWT that gapp
-issues. The real backend credential (Monarch token, Google OAuth
-refresh token, etc.) is stored server-side and never leaves the
+issues. The real backend credential (e.g., a SaaS platform token,
+API key, or database credential used by the MCP server) is stored
+server-side and never leaves the
 server. The wrapper validates the PAT, looks up the real
 credential, and rewrites the auth header before the request
 reaches the solution. The solution code doesn't change — it still
