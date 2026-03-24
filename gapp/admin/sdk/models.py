@@ -17,23 +17,8 @@ class ServiceStatus(BaseModel):
     mcp_path: str | None = None
 
 
-class ProjectSuggestion(BaseModel):
-    id: str
-    solutions: list[str] = Field(default_factory=list)
-
-
-class ProjectSuggestions(BaseModel):
-    default: ProjectSuggestion | None = Field(None, description="Project discovered via GCP label for this solution.")
-    others: list[ProjectSuggestion] = Field(default_factory=list, description="Projects used by other local solutions.")
-
-
-class ProjectInfo(BaseModel):
-    id: str | None = None
-    suggestions: ProjectSuggestions | None = None
-
-
 class DeploymentInfo(BaseModel):
-    project: ProjectInfo = Field(default_factory=ProjectInfo)
+    project: str | None = Field(None, description="GCP project ID.")
     pending: bool = True
     services: list[ServiceStatus] = []
 

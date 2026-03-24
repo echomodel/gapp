@@ -151,6 +151,18 @@ def gapp_status(solution: str | None = None) -> dict:
 
 
 @mcp.tool()
+def gapp_deployments_list() -> dict:
+    """List GCP projects with deployed gapp solutions.
+
+    Returns all GCP projects that have gapp-* labels, with the solutions
+    deployed to each. The default project (most solutions) is highlighted.
+    Use this to discover available projects when setting up a new solution.
+    """
+    from gapp.admin.sdk.deployments import list_deployments
+    return list_deployments()
+
+
+@mcp.tool()
 def gapp_list(available: bool = False) -> list[dict]:
     """List registered gapp solutions.
 

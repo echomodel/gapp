@@ -7,7 +7,7 @@ import subprocess
 from gapp.admin.sdk.config import load_solutions, save_solutions
 from gapp.admin.sdk.context import get_git_root, resolve_solution
 from gapp.admin.sdk.manifest import get_required_apis, load_manifest
-from gapp.admin.sdk.status import _discover_project_from_label
+from gapp.admin.sdk.deployments import discover_project_from_label
 
 # APIs that every gapp solution needs — enabled automatically
 _FOUNDATION_APIS = [
@@ -44,7 +44,7 @@ def setup_solution(project_id: str | None = None, solution: str | None = None) -
     if not project_id:
         project_id = ctx.get("project_id")
     if not project_id:
-        project_id = _discover_project_from_label(solution_name)
+        project_id = discover_project_from_label(solution_name)
     if not project_id:
         # GOOGLE_CLOUD_PROJECT is a standard GCP env var set by gcloud, Cloud Run,
         # Cloud Shell, CI runners with WIF auth, and any GCP-aware environment.
@@ -93,7 +93,6 @@ def setup_solution(project_id: str | None = None, solution: str | None = None) -
     save_solutions(solutions)
 
     return result
-
 
 
 def _enable_api(project_id: str, api: str) -> None:

@@ -79,8 +79,8 @@ def resolve_full_context(solution: str | None = None) -> dict:
 
     # Fill project_id from GCP labels if missing
     if not result.get("project_id"):
-        from gapp.admin.sdk.status import _discover_project_from_label
-        result["project_id"] = _discover_project_from_label(result["name"])
+        from gapp.admin.sdk.deployments import discover_project_from_label
+        result["project_id"] = discover_project_from_label(result["name"])
 
     # Fill github_repo from local git remote
     repo_path = result.get("repo_path")

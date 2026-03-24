@@ -115,7 +115,7 @@ def status(name, as_json):
         raise SystemExit(1)
 
     dep = result.deployment
-    project_display = dep.project.id or "(no project attached)"
+    project_display = dep.project or "(no project attached)"
 
     click.echo()
     click.echo(f"  {result.name} \u2192 {project_display}")
@@ -123,15 +123,6 @@ def status(name, as_json):
 
     if result.next_step:
         click.echo(f"  {result.next_step.hint}")
-        if dep.project.suggestions:
-            sug = dep.project.suggestions
-            if sug.default:
-                names = ", ".join(sug.default.solutions)
-                label = f" (also used by {names})" if names else ""
-                click.echo(f"    Suggested: {sug.default.id}{label}")
-            for other in sug.others:
-                names = ", ".join(other.solutions)
-                click.echo(f"    Available: {other.id} (used by {names})")
         return
 
     for svc in dep.services:
@@ -144,6 +135,38 @@ def status(name, as_json):
         if svc.mcp_path:
             click.echo(f"    MCP:    {svc.mcp_path} (run gapp mcp status for tools)")
 
+    click.echo()
+
+
+# --- Deployments ---
+
+@main.group()
+def deployments():
+    """Discover GCP projects with gapp solutions."""
+
+
+@deployments.command("list")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON.")
+def deployments_list_cmd(as_json):
+    """List GCP projects with deployed gapp solutions."""
+    from gapp.admin.sdk.deployments import list_deployments
+
+    result = list_deployments()
+
+    if as_json:
+        click.echo(json_mod.dumps(result, indent=2))
+        return
+
+    if not result["projects"]:
+        click.echo("  No gapp deployments found.")
+        return
+
+    click.echo()
+    for proj in result["projects"]:
+        default_marker = " (default)" if proj["id"] == result["default"] else ""
+        click.echo(f"  {proj['id']}{default_marker}")
+        for s in proj["solutions"]:
+            click.echo(f"    {s['name']:<24} instance={s['instance']}")
     click.echo()
 
 
