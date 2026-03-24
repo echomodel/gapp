@@ -333,6 +333,7 @@ _DEPLOY_SA_ROLES = [
     "roles/secretmanager.admin",
     "roles/storage.admin",
     "roles/iam.serviceAccountUser",
+    "roles/iam.serviceAccountAdmin",
 ]
 
 
