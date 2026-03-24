@@ -165,7 +165,7 @@ resource "google_storage_bucket_iam_member" "auth_bucket" {
 
 # Public access (if enabled)
 resource "google_cloud_run_v2_service_iam_member" "public" {
-  count    = var.public ? 1 : 0
+  count    = var.auth_enabled ? 1 : 0
   project  = var.project_id
   location = var.region
   name     = google_cloud_run_v2_service.service.name

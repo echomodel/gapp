@@ -42,6 +42,9 @@ def get_entrypoint(manifest: dict) -> str | None:
     return manifest.get("service", {}).get("entrypoint")
 
 
+VALID_AUTH_STRATEGIES = {"bearer", "google_oauth2"}
+
+
 def get_auth_config(manifest: dict) -> dict | None:
     """Return auth configuration if enabled, else None.
 
@@ -51,6 +54,10 @@ def get_auth_config(manifest: dict) -> dict | None:
     auth = manifest.get("service", {}).get("auth")
     if not auth:
         return None
+    if auth not in VALID_AUTH_STRATEGIES:
+        raise ValueError(
+            f"Invalid auth strategy '{auth}'. Must be one of: {', '.join(sorted(VALID_AUTH_STRATEGIES))}"
+        )
     return {"enabled": True, "strategy": auth}
 
 
@@ -73,6 +80,5 @@ def get_service_config(manifest: dict) -> dict:
         "memory": service.get("memory", "512Mi"),
         "cpu": service.get("cpu", "1"),
         "max_instances": service.get("max_instances", 1),
-        "public": service.get("public", False),
         "env": service.get("env", {}),
     }

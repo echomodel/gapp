@@ -31,12 +31,6 @@ variable "max_instances" {
   default     = 1
 }
 
-variable "public" {
-  description = "Allow unauthenticated access"
-  type        = bool
-  default     = false
-}
-
 variable "env" {
   description = "Environment variables"
   type        = map(string)

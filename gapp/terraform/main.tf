@@ -16,7 +16,6 @@ module "service" {
   memory        = var.memory
   cpu           = var.cpu
   max_instances = var.max_instances
-  public        = var.public
   env           = var.env
   secrets       = var.secrets
   auth_enabled  = var.auth_enabled

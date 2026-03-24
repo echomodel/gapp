@@ -25,12 +25,6 @@ variable "env" {
   default     = {}
 }
 
-variable "public" {
-  description = "Allow unauthenticated access"
-  type        = bool
-  default     = false
-}
-
 variable "max_instances" {
   description = "Maximum number of instances"
   type        = number

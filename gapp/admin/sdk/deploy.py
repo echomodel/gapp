@@ -338,7 +338,6 @@ def _build_tfvars(
         "memory": service_config["memory"],
         "cpu": service_config["cpu"],
         "max_instances": service_config["max_instances"],
-        "public": service_config["public"],
         "env": env,
         "secrets": {
             _secret_name_to_env_var(name): name
