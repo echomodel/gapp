@@ -4,12 +4,17 @@ import json
 import os
 import shutil
 import subprocess
+from collections import defaultdict
 from pathlib import Path
 
+from gapp.admin.sdk.config import load_solutions
 from gapp.admin.sdk.context import resolve_solution
 from gapp.admin.sdk.deploy import _get_staging_dir, _get_tf_source_dir
 from gapp.admin.sdk.manifest import get_auth_config, get_mcp_path, load_manifest
-from gapp.admin.sdk.models import NextStep, ServiceStatus, StatusResult
+from gapp.admin.sdk.models import (
+    DeploymentInfo, NextStep, ProjectInfo, ProjectSuggestionOther,
+    ProjectSuggestions, ServiceStatus, StatusResult,
+)
 
 
 def get_status(name: str | None = None) -> StatusResult:
@@ -19,19 +24,25 @@ def get_status(name: str | None = None) -> StatusResult:
         return StatusResult(
             name=name or "",
             error="not_found",
-            next_step=NextStep(action="init", hint="Not inside a gapp solution. Run: gapp init"),
+            next_step=NextStep(action="init", hint="Not inside a gapp solution."),
         )
+
+    project_id = ctx.get("project_id")
 
     result = StatusResult(
         name=ctx["name"],
-        project_id=ctx.get("project_id"),
         repo_path=ctx.get("repo_path"),
+        deployment=DeploymentInfo(
+            project=ProjectInfo(id=project_id),
+        ),
     )
 
-    if not ctx.get("project_id"):
+    if not project_id:
+        result.deployment.status = "no_project"
+        result.deployment.project.suggestions = _build_project_suggestions(ctx["name"])
         result.next_step = NextStep(
             action="setup",
-            hint="No GCP project attached. Run: gapp setup <project-id>",
+            hint="No GCP project attached.",
         )
         return result
 
@@ -42,15 +53,16 @@ def get_status(name: str | None = None) -> StatusResult:
         mcp_path = get_mcp_path(manifest)
         auth_enabled = bool(get_auth_config(manifest))
 
-    tf_outputs = _get_tf_outputs(ctx["name"], ctx["project_id"])
+    tf_outputs = _get_tf_outputs(ctx["name"], project_id)
     if tf_outputs is None:
+        result.deployment.status = "not_deployed"
         result.next_step = NextStep(
             action="deploy",
-            hint="Not deployed (no Terraform state found). Run: gapp deploy",
+            hint="Not deployed (no Terraform state found).",
         )
         return result
 
-    result.deployed = True
+    result.deployment.status = "deployed"
 
     service_url = tf_outputs.get("service_url")
     if service_url:
@@ -61,9 +73,50 @@ def get_status(name: str | None = None) -> StatusResult:
             auth_enabled=auth_enabled,
             mcp_path=mcp_path,
         )
-        result.services.append(service)
+        result.deployment.services.append(service)
 
     return result
+
+
+def _build_project_suggestions(solution_name: str) -> ProjectSuggestions:
+    """Build project suggestions from GCP labels and local solutions.yaml."""
+    # default: GCP label lookup (network I/O)
+    default = _discover_project_from_label(solution_name)
+
+    # others: local solutions.yaml only (no network I/O)
+    solutions = load_solutions()
+    projects: dict[str, list[str]] = defaultdict(list)
+    for name, entry in solutions.items():
+        if name == solution_name:
+            continue
+        pid = entry.get("project_id")
+        if pid:
+            projects[pid].append(name)
+
+    others = [
+        ProjectSuggestionOther(id=pid, solutions=sorted(names))
+        for pid, names in sorted(projects.items())
+    ]
+
+    return ProjectSuggestions(default=default, others=others)
+
+
+def _discover_project_from_label(solution_name: str) -> str | None:
+    """Find a GCP project with the gapp-{name} label."""
+    label_filter = f"labels.gapp-{solution_name}=default"
+    try:
+        result = subprocess.run(
+            ["gcloud", "projects", "list",
+             "--filter", label_filter,
+             "--format", "value(projectId)"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip().splitlines()[0]
+    except FileNotFoundError:
+        pass
+    return None
 
 
 def _get_tf_outputs(solution_name: str, project_id: str) -> dict | None:

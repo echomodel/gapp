@@ -7,6 +7,7 @@ import subprocess
 from gapp.admin.sdk.config import load_solutions, save_solutions
 from gapp.admin.sdk.context import get_git_root, resolve_solution
 from gapp.admin.sdk.manifest import get_required_apis, load_manifest
+from gapp.admin.sdk.status import _discover_project_from_label
 
 # APIs that every gapp solution needs — enabled automatically
 _FOUNDATION_APIS = [
@@ -93,24 +94,6 @@ def setup_solution(project_id: str | None = None, solution: str | None = None) -
 
     return result
 
-
-def _discover_project_from_label(solution_name: str) -> str | None:
-    """Find a GCP project with the gapp-{name} label."""
-    label_filter = f"labels.gapp-{solution_name}=default"
-    try:
-        result = subprocess.run(
-            ["gcloud", "projects", "list",
-             "--filter", label_filter,
-             "--format", "value(projectId)"],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            # Return first match
-            return result.stdout.strip().splitlines()[0]
-    except FileNotFoundError:
-        pass
-    return None
 
 
 def _enable_api(project_id: str, api: str) -> None:

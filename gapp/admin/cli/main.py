@@ -113,15 +113,25 @@ def status(name, as_json):
         click.echo(f"  {result.next_step.hint}")
         raise SystemExit(1)
 
+    dep = result.deployment
+    project_display = dep.project.id or "(no project attached)"
+
     click.echo()
-    click.echo(f"  {result.name} \u2192 {result.project_id or '(no project attached)'}")
+    click.echo(f"  {result.name} \u2192 {project_display}")
     click.echo()
 
     if result.next_step:
         click.echo(f"  {result.next_step.hint}")
+        if dep.project.suggestions:
+            sug = dep.project.suggestions
+            if sug.default:
+                click.echo(f"    Suggested: {sug.default} (labeled for this solution)")
+            for other in sug.others:
+                names = ", ".join(other.solutions)
+                click.echo(f"    Available: {other.id} (used by {names})")
         return
 
-    for svc in result.services:
+    for svc in dep.services:
         health = "\u2713 healthy" if svc.healthy else "\u2717 unhealthy"
         click.echo(f"  {svc.name}")
         click.echo(f"    URL:    {svc.url}")

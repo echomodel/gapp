@@ -22,7 +22,7 @@ def mcp_status(name: str | None = None) -> McpStatusResult:
         return McpStatusResult(
             name=name or "",
             error="not_found",
-            next_step=NextStep(action="init", hint="Not inside a gapp solution. Run: gapp init"),
+            next_step=NextStep(action="init", hint="Not inside a gapp solution."),
         )
 
     result = McpStatusResult(
@@ -31,7 +31,7 @@ def mcp_status(name: str | None = None) -> McpStatusResult:
     )
 
     if not ctx.get("project_id"):
-        result.next_step = NextStep(action="setup", hint="No GCP project attached. Run: gapp setup <project-id>")
+        result.next_step = NextStep(action="setup", hint="No GCP project attached.")
         return result
 
     mcp_path = None
@@ -46,7 +46,7 @@ def mcp_status(name: str | None = None) -> McpStatusResult:
 
     tf_outputs = _get_tf_outputs(ctx["name"], ctx["project_id"])
     if tf_outputs is None:
-        result.next_step = NextStep(action="deploy", hint="Not deployed. Run: gapp deploy")
+        result.next_step = NextStep(action="deploy", hint="Not deployed.")
         return result
 
     result.deployed = True
@@ -97,7 +97,7 @@ def mcp_connect(name: str | None = None, *, user: str | None = None) -> ConnectR
         return ConnectResult(
             name=name or "",
             error="not_found",
-            next_step=NextStep(action="init", hint="Not inside a gapp solution. Run: gapp init"),
+            next_step=NextStep(action="init", hint="Not inside a gapp solution."),
         )
 
     result = ConnectResult(
@@ -106,7 +106,7 @@ def mcp_connect(name: str | None = None, *, user: str | None = None) -> ConnectR
     )
 
     if not ctx.get("project_id"):
-        result.next_step = NextStep(action="setup", hint="No GCP project attached. Run: gapp setup <project-id>")
+        result.next_step = NextStep(action="setup", hint="No GCP project attached.")
         return result
 
     mcp_path = None
@@ -121,7 +121,7 @@ def mcp_connect(name: str | None = None, *, user: str | None = None) -> ConnectR
 
     tf_outputs = _get_tf_outputs(ctx["name"], ctx["project_id"])
     if tf_outputs is None:
-        result.next_step = NextStep(action="deploy", hint="Not deployed. Run: gapp deploy")
+        result.next_step = NextStep(action="deploy", hint="Not deployed.")
         return result
 
     result.deployed = True
