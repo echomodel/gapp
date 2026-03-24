@@ -54,6 +54,17 @@ gapp mcp connect                                     # show client connection in
 
 Each command is idempotent and tells you what to do next.
 
+### Solution Lifecycle
+
+`gapp status` tells you where a solution is in its lifecycle:
+
+| State | `initialized` | `project.id` | `pending` | `next_step.action` | CLI | MCP tool | How you get here |
+|-------|--------------|-------------|-----------|-------------------|-----|----------|-----------------|
+| Not initialized | `false` | — | — | `init` | `gapp init` | `gapp_init` | Haven't run `gapp init` yet |
+| Initialized, no project | `true` | `null` | `true` | `setup` | `gapp setup <project-id>` | `gapp_setup` | Ran `gapp init` but not `gapp setup` |
+| Has project, not deployed | `true` | set | `true` | `deploy` | `gapp deploy` | `gapp_deploy` | Ran `gapp setup` but not `gapp deploy`, or infrastructure was destroyed |
+| Deployed | `true` | set | `false` | — | — | — | Service URL available |
+
 ## How It Works
 
 1. **`gapp init`** — creates `gapp.yaml` in your repo root and adds a `gapp-solution` GitHub topic. No cloud interaction.
