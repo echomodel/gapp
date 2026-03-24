@@ -12,12 +12,25 @@ from gapp.admin.sdk.manifest import get_auth_config, get_mcp_path, load_manifest
 from gapp.admin.sdk.models import DeploymentInfo, NextStep, ServiceStatus, StatusResult
 
 
+class TerraformNotFoundError(RuntimeError):
+    """Raised when terraform CLI is not installed."""
+    pass
+
+
+class GcloudNotFoundError(RuntimeError):
+    """Raised when gcloud CLI is not installed or not authenticated."""
+    pass
+
+
 def get_status(name: str | None = None) -> StatusResult:
     """Infrastructure status check for a solution.
 
-    Purely local — no GCP or GitHub queries. Reports on the attached
-    project and deployment state. Use gapp_deployments_list for
-    cross-project discovery.
+    Reports on the attached project and deployment state.
+    Use gapp_deployments_list for cross-project discovery.
+
+    Raises:
+        TerraformNotFoundError: terraform CLI is not installed.
+        GcloudNotFoundError: gcloud CLI is not installed or not authenticated.
     """
     ctx = resolve_solution(name)
     if not ctx:
@@ -77,7 +90,12 @@ def get_status(name: str | None = None) -> StatusResult:
 
 
 def _get_tf_outputs(solution_name: str, project_id: str) -> dict | None:
-    """Read Terraform outputs from remote state without applying."""
+    """Read Terraform outputs from remote state without applying.
+
+    Raises:
+        TerraformNotFoundError: terraform CLI is not installed.
+        GcloudNotFoundError: gcloud CLI is not installed or not authenticated.
+    """
     staging_dir = _get_staging_dir(solution_name)
     bucket_name = f"gapp-{solution_name}-{project_id}"
 
@@ -87,23 +105,29 @@ def _get_tf_outputs(solution_name: str, project_id: str) -> dict | None:
         for tf_file in tf_source.glob("*.tf"):
             shutil.copy2(tf_file, staging_dir)
 
-    token_result = subprocess.run(
-        ["gcloud", "auth", "print-access-token"],
-        capture_output=True, text=True,
-    )
+    try:
+        token_result = subprocess.run(
+            ["gcloud", "auth", "print-access-token"],
+            capture_output=True, text=True,
+        )
+    except FileNotFoundError:
+        raise GcloudNotFoundError("gcloud CLI is not installed.")
     if token_result.returncode != 0:
-        return None
+        raise GcloudNotFoundError("gcloud is not authenticated. Run: gcloud auth login")
     token = token_result.stdout.strip()
     env = {**os.environ, "GOOGLE_OAUTH_ACCESS_TOKEN": token}
 
-    init_result = subprocess.run(
-        ["terraform", "init",
-         f"-backend-config=bucket={bucket_name}",
-         "-backend-config=prefix=terraform/state",
-         "-input=false", "-upgrade"],
-        cwd=staging_dir, env=env,
-        capture_output=True, text=True,
-    )
+    try:
+        init_result = subprocess.run(
+            ["terraform", "init",
+             f"-backend-config=bucket={bucket_name}",
+             "-backend-config=prefix=terraform/state",
+             "-input=false", "-upgrade"],
+            cwd=staging_dir, env=env,
+            capture_output=True, text=True,
+        )
+    except FileNotFoundError:
+        raise TerraformNotFoundError("terraform CLI is not installed.")
     if init_result.returncode != 0:
         return None
 
