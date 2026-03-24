@@ -83,29 +83,28 @@ Evaluate whether the repo is a good candidate for gapp:
 
 ### Cloud Readiness Check (MCP servers)
 
-Before proceeding to init, check for these common issues that
-prevent MCP servers from working on Cloud Run.
+Before proceeding to init, inspect how the MCP server
+authenticates with its backend API. Look at the SDK layer (or
+wherever the HTTP client is configured) for how backend
+credentials are obtained. Common patterns:
 
-#### Backend credentials must come from the request, not the environment
+**Reads `Authorization` header from incoming request**
+→ Cloud-ready. The credential arrives per-request, which works
+with both direct auth and gapp's bearer mediation.
 
-Look at the SDK layer for how backend credentials (API tokens,
-session tokens) are obtained. If the code reads from an
-environment variable or local file (e.g., `os.getenv("API_TOKEN")`
-or `~/.config/tool/token`), it's not cloud-ready.
+**Reads credential from environment variable or local file**
+(e.g., `os.getenv("SOME_TOKEN")` or `~/.config/tool/token`)
+→ **Not cloud-ready.** This pattern assumes single-user local
+execution (stdio). If deployed as-is to Cloud Run, you'd have
+to bake the backend credential into the container environment —
+which means every unauthenticated HTTP request gets full access
+to the user's backend account. **Never do this.** Do not suggest
+setting the backend credential as a Cloud Run secret env var as
+a workaround — it creates an unauthenticated proxy to the
+user's account.
 
-This pattern assumes single-user local execution (stdio). On
-Cloud Run, you'd have to bake the credential into the container
-environment, which means every request to the URL gets full
-access to the user's backend account with no gatekeeping.
-**Never do this.** Do not suggest setting the backend credential
-as a Cloud Run secret env var as a workaround — it creates an
-unauthenticated proxy.
-
-If the code already reads the `Authorization` header from the
-incoming request, it's cloud-ready.
-
-**If credentials come from the environment, propose a refactor
-before proceeding:**
+**When you detect env-var/file-based credentials, propose a
+refactor before proceeding.** Present it like this:
 
 > Your service reads backend credentials from an environment
 > variable / local file. That works for local stdio, but on
