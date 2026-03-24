@@ -65,7 +65,20 @@ def get_status(name: str | None = None) -> StatusResult:
         mcp_path = get_mcp_path(manifest)
         auth_enabled = bool(get_auth_config(manifest))
 
-    tf_outputs = _get_tf_outputs(ctx["name"], project_id)
+    try:
+        tf_outputs = _get_tf_outputs(ctx["name"], project_id)
+    except TerraformNotFoundError:
+        result.next_step = NextStep(
+            action="deploy",
+            hint="Cannot determine deployment state (terraform not installed).",
+        )
+        return result
+    except GcloudNotFoundError:
+        result.next_step = NextStep(
+            action="deploy",
+            hint="Cannot determine deployment state (gcloud not authenticated).",
+        )
+        return result
     if tf_outputs is None:
         result.next_step = NextStep(
             action="deploy",

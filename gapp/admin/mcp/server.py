@@ -185,19 +185,16 @@ def gapp_status(solution: str | None = None) -> dict:
     Returns initialized, deployment.project, deployment.pending,
     deployment.services, and next_step with the recommended action.
 
-    Requires gcloud and terraform to be installed when a project is
-    attached (needed to check Terraform state). If terraform is not
-    installed, returns an error — use gapp_deployments_list instead
-    to discover deployment state via GCP labels.
+    If terraform or gcloud is unavailable, returns pending=true with
+    a hint explaining why deployment state couldn't be checked. Use
+    gapp_deployments_list to discover deployments via GCP labels
+    without needing terraform.
 
     Args:
         solution: Solution name. Defaults to current directory's solution.
     """
-    from gapp.admin.sdk.status import get_status, TerraformNotFoundError, GcloudNotFoundError
-    try:
-        return get_status(solution).model_dump()
-    except (TerraformNotFoundError, GcloudNotFoundError) as e:
-        return {"error": str(e)}
+    from gapp.admin.sdk.status import get_status
+    return get_status(solution).model_dump()
 
 
 @mcp.tool()
