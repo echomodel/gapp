@@ -57,10 +57,15 @@ def gapp_deploy(
     ref: str | None = None,
     solution: str | None = None,
 ) -> dict:
-    """Deploy a gapp solution to Cloud Run.
+    """Deploy a gapp solution to Cloud Run (local deploy path).
 
     Builds container via Cloud Build and deploys via Terraform.
-    Requires a clean git tree unless ref is specified.
+    Requires terraform and gcloud installed locally, and a clean git
+    tree unless ref is specified.
+
+    Prerequisites: gapp_init and gapp_setup must have been run first.
+    If terraform is not available locally, use the CI/CD path instead
+    (gapp_ci_init → gapp_ci_setup → gapp_ci_trigger).
 
     Args:
         auto_approve: Skip Terraform confirmation prompt (default: True).
@@ -98,8 +103,31 @@ def gapp_secret_set(secret_name: str, value: str, solution: str | None = None) -
 
 
 @mcp.tool()
+def gapp_ci_status() -> dict:
+    """Check CI/CD configuration state.
+
+    Returns whether a CI repo is configured, its source (local config
+    or remote GitHub topic), and the repo name. Use this to determine
+    whether gapp_ci_init has been run and whether CI is ready.
+
+    The CI/CD setup sequence is:
+    1. gapp_ci_init — designate the CI repo
+    2. gapp_ci_setup — wire a solution (WIF, SA, workflow)
+    3. gapp_ci_trigger — deploy via GitHub Actions
+    """
+    from gapp.admin.sdk.ci import get_ci_status
+    return get_ci_status()
+
+
+@mcp.tool()
 def gapp_ci_init(repo: str, local_only: bool = False) -> dict:
     """Designate the operator's CI repo for GitHub Actions deployments.
+
+    This is the first step in CI/CD setup. Must be called before
+    gapp_ci_setup. The CI repo is a private GitHub repo that holds
+    deployment workflows — it is NOT the solution repo.
+
+    Check current state with gapp_ci_status before calling.
 
     Args:
         repo: GitHub repo name or owner/name.
@@ -116,6 +144,11 @@ def gapp_ci_setup(solution: str | None = None) -> dict:
     Creates Workload Identity Federation, service account, IAM bindings,
     and pushes the GitHub Actions workflow to the CI repo.
 
+    Prerequisites: gapp_ci_init must have been called first to designate
+    the CI repo. The solution must also have been initialized (gapp_init)
+    and set up (gapp_setup) with a GCP project. Check readiness with
+    gapp_ci_status.
+
     Args:
         solution: Solution name. Defaults to current directory's solution.
     """
@@ -131,6 +164,11 @@ def gapp_ci_trigger(
 ) -> dict:
     """Trigger a CI deployment for a solution via GitHub Actions.
 
+    Prerequisites: gapp_ci_init and gapp_ci_setup must have been
+    completed first. Check readiness with gapp_ci_status. This
+    dispatches the workflow created by gapp_ci_setup. Does not
+    require terraform locally.
+
     Args:
         solution: Solution name. Defaults to current directory's solution.
         ref: Git ref to deploy (default: main).
@@ -144,10 +182,22 @@ def gapp_ci_trigger(
 def gapp_status(solution: str | None = None) -> dict:
     """Infrastructure health check for a gapp solution.
 
-    Returns deployment status, service URL, health, and guided next steps.
+    Returns initialized, deployment.project, deployment.pending,
+    deployment.services, and next_step with the recommended action.
+
+    Requires gcloud and terraform to be installed when a project is
+    attached (needed to check Terraform state). If terraform is not
+    installed, returns an error — use gapp_deployments_list instead
+    to discover deployment state via GCP labels.
+
+    Args:
+        solution: Solution name. Defaults to current directory's solution.
     """
-    from gapp.admin.sdk.status import get_status
-    return get_status(solution).model_dump()
+    from gapp.admin.sdk.status import get_status, TerraformNotFoundError, GcloudNotFoundError
+    try:
+        return get_status(solution).model_dump()
+    except (TerraformNotFoundError, GcloudNotFoundError) as e:
+        return {"error": str(e)}
 
 
 @mcp.tool()
