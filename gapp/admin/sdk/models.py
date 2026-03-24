@@ -17,14 +17,14 @@ class ServiceStatus(BaseModel):
     mcp_path: str | None = None
 
 
-class ProjectSuggestionOther(BaseModel):
+class ProjectSuggestion(BaseModel):
     id: str
-    solutions: list[str]
+    solutions: list[str] = Field(default_factory=list)
 
 
 class ProjectSuggestions(BaseModel):
-    default: str | None = Field(None, description="Project discovered via GCP label for this solution.")
-    others: list[ProjectSuggestionOther] = Field(default_factory=list, description="Projects used by other local solutions.")
+    default: ProjectSuggestion | None = Field(None, description="Project discovered via GCP label for this solution.")
+    others: list[ProjectSuggestion] = Field(default_factory=list, description="Projects used by other local solutions.")
 
 
 class ProjectInfo(BaseModel):
@@ -34,16 +34,16 @@ class ProjectInfo(BaseModel):
 
 class DeploymentInfo(BaseModel):
     project: ProjectInfo = Field(default_factory=ProjectInfo)
-    status: str = Field("unknown", description="no_project, not_deployed, or deployed")
+    pending: bool = True
     services: list[ServiceStatus] = []
 
 
 class StatusResult(BaseModel):
-    name: str
+    initialized: bool = False
+    name: str | None = None
     repo_path: str | None = None
-    deployment: DeploymentInfo = Field(default_factory=DeploymentInfo)
+    deployment: DeploymentInfo | None = None
     next_step: NextStep | None = None
-    error: str | None = None
 
 
 class McpStatusResult(BaseModel):

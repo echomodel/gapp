@@ -21,6 +21,23 @@ framework dependencies. A `gapp.yaml` file is the only
 touchpoint. gapp handles infrastructure, secrets, container
 builds, multi-user auth, and credential management.
 
+## Solution Lifecycle
+
+`gapp_status` tells you where a solution is. Use this to
+determine which phase to start from:
+
+| State | `initialized` | `project.id` | `pending` | `next_step.action` | CLI | MCP tool | How you get here |
+|-------|--------------|-------------|-----------|-------------------|-----|----------|-----------------|
+| Not initialized | `false` | — | — | `init` | `gapp init` | `gapp_init` | Haven't run `gapp init` yet |
+| Initialized, no project | `true` | `null` | `true` | `setup` | `gapp setup <project-id>` | `gapp_setup` | Ran `gapp init` but not `gapp setup` |
+| Has project, not deployed | `true` | set | `true` | `deploy` | `gapp deploy` | `gapp_deploy` | Ran `gapp setup` but not `gapp deploy`, or infrastructure was destroyed |
+| Deployed | `true` | set | `false` | — | — | — | Service URL available |
+
+When `initialized` is `false`, skip straight to Phase 1. When
+`initialized` is `true`, read `next_step.action` to know which
+phase the user needs next. When `pending` is `false`, the
+solution is fully deployed — jump to Ongoing Operations.
+
 ## Phase 0: Assess the Situation
 
 Before doing anything, figure out where the user is. Call these

@@ -12,7 +12,7 @@ from gapp.admin.sdk.context import resolve_solution
 from gapp.admin.sdk.deploy import _get_staging_dir, _get_tf_source_dir
 from gapp.admin.sdk.manifest import get_auth_config, get_mcp_path, load_manifest
 from gapp.admin.sdk.models import (
-    DeploymentInfo, NextStep, ProjectInfo, ProjectSuggestionOther,
+    DeploymentInfo, NextStep, ProjectInfo, ProjectSuggestion,
     ProjectSuggestions, ServiceStatus, StatusResult,
 )
 
@@ -22,23 +22,23 @@ def get_status(name: str | None = None) -> StatusResult:
     ctx = resolve_solution(name)
     if not ctx:
         return StatusResult(
-            name=name or "",
-            error="not_found",
-            next_step=NextStep(action="init", hint="Not inside a gapp solution."),
+            initialized=False,
+            next_step=NextStep(action="init"),
         )
 
     project_id = ctx.get("project_id")
 
     result = StatusResult(
+        initialized=True,
         name=ctx["name"],
         repo_path=ctx.get("repo_path"),
         deployment=DeploymentInfo(
             project=ProjectInfo(id=project_id),
+            pending=True,
         ),
     )
 
     if not project_id:
-        result.deployment.status = "no_project"
         result.deployment.project.suggestions = _build_project_suggestions(ctx["name"])
         result.next_step = NextStep(
             action="setup",
@@ -55,14 +55,13 @@ def get_status(name: str | None = None) -> StatusResult:
 
     tf_outputs = _get_tf_outputs(ctx["name"], project_id)
     if tf_outputs is None:
-        result.deployment.status = "not_deployed"
         result.next_step = NextStep(
             action="deploy",
             hint="Not deployed (no Terraform state found).",
         )
         return result
 
-    result.deployment.status = "deployed"
+    result.deployment.pending = False
 
     service_url = tf_outputs.get("service_url")
     if service_url:
@@ -80,11 +79,9 @@ def get_status(name: str | None = None) -> StatusResult:
 
 def _build_project_suggestions(solution_name: str) -> ProjectSuggestions:
     """Build project suggestions from GCP labels and local solutions.yaml."""
-    # default: GCP label lookup (network I/O)
-    default = _discover_project_from_label(solution_name)
-
-    # others: local solutions.yaml only (no network I/O)
     solutions = load_solutions()
+
+    # Build project → solutions map from local cache (no network I/O)
     projects: dict[str, list[str]] = defaultdict(list)
     for name, entry in solutions.items():
         if name == solution_name:
@@ -93,8 +90,18 @@ def _build_project_suggestions(solution_name: str) -> ProjectSuggestions:
         if pid:
             projects[pid].append(name)
 
+    # default: GCP label lookup (network I/O)
+    default_id = _discover_project_from_label(solution_name)
+    default = None
+    if default_id:
+        default = ProjectSuggestion(
+            id=default_id,
+            solutions=sorted(projects.pop(default_id, [])),
+        )
+
+    # others: remaining projects from local cache
     others = [
-        ProjectSuggestionOther(id=pid, solutions=sorted(names))
+        ProjectSuggestion(id=pid, solutions=sorted(names))
         for pid, names in sorted(projects.items())
     ]
 

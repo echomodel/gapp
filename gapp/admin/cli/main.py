@@ -109,8 +109,9 @@ def status(name, as_json):
         click.echo(json_mod.dumps(result.model_dump(), indent=2))
         return
 
-    if result.error:
-        click.echo(f"  {result.next_step.hint}")
+    if not result.initialized:
+        click.echo("  Not inside a gapp solution.")
+        click.echo("  Run: gapp init")
         raise SystemExit(1)
 
     dep = result.deployment
@@ -125,7 +126,9 @@ def status(name, as_json):
         if dep.project.suggestions:
             sug = dep.project.suggestions
             if sug.default:
-                click.echo(f"    Suggested: {sug.default} (labeled for this solution)")
+                names = ", ".join(sug.default.solutions)
+                label = f" (also used by {names})" if names else ""
+                click.echo(f"    Suggested: {sug.default.id}{label}")
             for other in sug.others:
                 names = ", ".join(other.solutions)
                 click.echo(f"    Available: {other.id} (used by {names})")
