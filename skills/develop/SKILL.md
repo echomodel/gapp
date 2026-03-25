@@ -1,6 +1,6 @@
 ---
 name: develop
-description: Build and structure Python MCP servers and web APIs for deployment. Use when asked to create a new MCP server, structure a solution repo, add multi-user auth, set up a data store, or any question about building a deployable Python service — "create an MCP server", "add auth to my app", "how should I structure this", "set up user management", "make this multi-user", etc.
+description: Build, structure, migrate, or review Python MCP servers and web APIs for deployment. Use when asked to create a new MCP server, structure a solution repo, add multi-user auth, set up a data store, migrate an existing app to gapp conventions, review an app against standards, or any question about building a deployable Python service — "create an MCP server", "add auth to my app", "how should I structure this", "set up user management", "make this multi-user", "review my solution", "is this ready to deploy", "port this to gapp", etc.
 disable-model-invocation: false
 user-invocable: true
 ---
@@ -17,6 +17,95 @@ with this guidance work locally (stdio, single user) and deployed
 When the solution is ready to deploy, hand off to the **deploy**
 skill. When the user needs to manage users after deployment, hand
 off to the **user-management** skill.
+
+## Modes
+
+This skill operates in three modes depending on what the user
+needs. Determine the mode from the user's request and the state
+of the current working directory.
+
+### Mode 1: Greenfield — Build a New Solution
+
+User wants to create a new MCP server or web API from scratch.
+Follow the full guide below from Repository Structure onward.
+
+### Mode 2: Migration — Port an Existing App
+
+User has an existing app (possibly with custom auth, custom
+deployment, non-standard structure) and wants to port it to
+follow gapp conventions. Steps:
+
+1. Read the existing codebase to understand current structure
+2. Walk through the Compliance Checklist below, noting what
+   already conforms and what needs to change
+3. Propose a migration plan — what to move, what to delete,
+   what to add — in priority order
+4. Execute the migration with the user's approval
+5. Run the checklist again to verify compliance
+
+### Mode 3: Review — Evaluate Against Standards
+
+User wants a compliance check of their existing solution.
+Maybe they've refactored, maybe gapp has a new version with
+new conventions, maybe they just want to know where they stand.
+
+Run the **Compliance Checklist** below and present results as
+a table:
+
+| Item | Status | Notes |
+|------|--------|-------|
+| SDK layer contains all business logic | ✅ | |
+| MCP tools are thin wrappers | ✅ | |
+| APP_NAME constant in __init__.py | ❌ | Missing |
+| ... | ... | ... |
+
+For each ❌, explain what's wrong and what the fix would be.
+Ask the user if they want to fix the issues.
+
+## Compliance Checklist
+
+Use this for Mode 2 (migration) and Mode 3 (review):
+
+### Structure
+- [ ] Three-layer architecture: `sdk/`, `mcp/`, optional `cli/`
+- [ ] All business logic in `sdk/` — no logic in MCP tools or CLI commands
+- [ ] MCP tools are async one-liners calling SDK methods
+- [ ] `APP_NAME` constant in `__init__.py`, used everywhere
+- [ ] `pyproject.toml` or `setup.py` with correct dependencies
+
+### MCP Server
+- [ ] Uses `mcp` package (FastMCP) with `stateless_http=True`
+- [ ] DNS rebinding protection disabled (`enable_dns_rebinding_protection = False`)
+- [ ] `mcp.run()` for stdio, `app` variable for HTTP (uvicorn)
+- [ ] All tools have clear, user-centric docstrings
+
+### Multi-User Auth (if applicable)
+- [ ] `app-user` in dependencies
+- [ ] `FileSystemUserDataStore` (or custom `UserDataStore`) instantiated
+- [ ] `DataStoreAuthAdapter` bridges auth store to data store
+- [ ] `create_app()` wires auth + admin + inner app
+- [ ] `app` variable assigned from `create_app()` for uvicorn
+- [ ] SDK reads `current_user_id` from `app_user.context`
+- [ ] Solution's `context.py` re-exports from `app_user.context`
+
+### Environment Variables
+- [ ] `SIGNING_KEY` — read by app-user (not hardcoded)
+- [ ] `JWT_AUD` — optional, for audience validation
+- [ ] `APP_USERS_PATH` — data directory (with XDG fallback)
+- [ ] No hardcoded paths in code
+- [ ] Tests use the same env vars for isolation
+
+### Testing
+- [ ] Sociable unit tests in `tests/unit/`
+- [ ] No mocks unless explicitly justified
+- [ ] Tests use temp dirs and env vars for isolation
+- [ ] Test names describe scenario + outcome
+
+### Deployment Readiness
+- [ ] `app` variable in `server.py` for uvicorn HTTP mode
+- [ ] `gapp.yaml` present (if deploying with gapp)
+- [ ] No Terraform, no custom Dockerfiles (if using gapp to generate)
+- [ ] All secrets declared in `gapp.yaml` env section
 
 ## Repository Structure
 
@@ -300,18 +389,41 @@ Describe scenario + outcome, not implementation:
 - Integration tests: `tests/integration/` — only when explicitly
   requested, excluded from default pytest run
 
-## Preparing for Deployment
+## Final Step: Compliance Dashboard
 
-When the solution is ready to deploy:
+**Always conclude with this** — whether greenfield, migration, or
+review. Run the Compliance Checklist and present results:
 
-1. Ensure the `app` variable exists in `server.py` for uvicorn
-2. Ensure `pyproject.toml` has all dependencies
-3. Run tests: `pytest tests/unit/`
-4. **Hand off to the deploy skill** — it handles gapp init,
-   setup, Dockerfile, Cloud Run, secrets, etc.
+```
+## Solution Compliance Dashboard: {APP_NAME}
 
-If the solution uses app-user, after deployment hand off to the
-**user-management skill** for registering users and testing.
+| Category | Item | Status |
+|----------|------|--------|
+| Structure | SDK layer contains all business logic | ✅ |
+| Structure | MCP tools are thin wrappers | ✅ |
+| Structure | APP_NAME constant in __init__.py | ✅ |
+| MCP | Uses FastMCP with stateless_http=True | ✅ |
+| MCP | DNS rebinding protection disabled | ✅ |
+| MCP | app variable for uvicorn HTTP mode | ❌ |
+| Auth | app-user in dependencies | ✅ |
+| Auth | create_app() wires auth + admin | ❌ |
+| Testing | Sociable unit tests exist | ✅ |
+| Testing | Tests use env vars for isolation | ⚠️ |
+| Deploy | gapp.yaml present | ❌ |
+| ... | ... | ... |
+
+✅ = conforms  ❌ = missing/wrong  ⚠️ = partial
+```
+
+After presenting the dashboard:
+
+1. If there are ❌ or ⚠️ items: "Want me to fix these?"
+2. If all ✅: "This solution is ready. Next steps:"
+   - **Deploy** → hand off to the **deploy** skill
+   - **User management** → hand off to the **user-management**
+     skill (if using app-user)
+   - **Stay here** → if the user wants to add features or
+     refactor further
 
 ## What This Skill Does NOT Cover
 
