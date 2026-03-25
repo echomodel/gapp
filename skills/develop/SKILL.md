@@ -134,6 +134,42 @@ Use this for Mode 2 (migration) and Mode 3 (review):
 - [ ] No Terraform, no custom Dockerfiles (if using gapp to generate)
 - [ ] All secrets declared in `gapp.yaml` env section
 
+## Gitignore
+
+Start with this baseline for Python MCP repos:
+
+```gitignore
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.eggs/
+
+# Environment
+.env
+
+# Testing
+.pytest_cache/
+
+# Gemini (except settings.json)
+.gemini/*
+!.gemini/settings.json
+
+# OS
+.DS_Store
+
+# Logs
+*.log
+```
+
+Add solution-specific entries as needed (data files, temp dirs,
+etc.). Avoid bloated templates with entries for tools you don't
+use (`develop-eggs/`, `lib64/`, `MANIFEST`, etc.).
+
 ## Repository Structure
 
 Every solution follows a three-layer architecture:
