@@ -125,6 +125,7 @@ Use this for Mode 2 (migration) and Mode 3 (review):
 - [ ] CONTRIBUTING.md: architecture, testing standards, conventions, how to add features
 - [ ] CLAUDE.md: thin, `@import README.md` and `@import CONTRIBUTING.md`, no other content
 - [ ] `.gemini/settings.json`: `context.fileName` pointing to README.md and CONTRIBUTING.md, committed, no secrets/tokens
+- [ ] `.gitignore` follows baseline (see Gitignore section): no bloat, no duplicate entries
 - [ ] `.gitignore` includes `.gemini/*` and `!.gemini/settings.json`
 - [ ] No stale references to removed features or old architecture in any docs
 
