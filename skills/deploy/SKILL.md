@@ -81,6 +81,38 @@ Evaluate whether the repo is a good candidate for gapp:
 - No ASGI/HTTP interface
 - Already deployed elsewhere and user doesn't want to move
 
+### Two Deployment Paths
+
+Before proceeding, determine which path the solution needs:
+
+**API-proxy solutions** (monarch-access, ticktick-mcp, gwsa, etc.)
+— proxy requests to a backend API. Need gapp's credential
+mediation to swap user tokens for backend credentials. Use gapp's
+ASGI wrapper (`gapp_run`). Follow the existing deployment flow
+below (Cloud Readiness Check → Phase 1 → etc.).
+
+**Data-owning solutions** (food-agent, etc.) — own user data
+directly. Use the `app-user` library (`krisrowe/app-user`) for
+auth and user management. The solution owns its ASGI entrypoint
+via `app_user.create_app()`. gapp deploys the container but does
+NOT inject a wrapper.
+
+For data-owning solutions using app-user:
+
+1. Ensure the solution was built following the **develop** skill
+   guidance (app-user integration, `create_app()`, env vars)
+2. `gapp.yaml` should include:
+   ```yaml
+   auth:
+     framework: app-user
+   ```
+   And env vars for `SIGNING_KEY` (secret, generate: true),
+   `JWT_AUD`, and `APP_USERS_PATH`.
+3. Deploy normally (Phase 1 → 2 → 3 below). gapp does not
+   inject its ASGI wrapper for these solutions.
+4. After deploy, hand off to the **user-management** skill for
+   registering users and testing.
+
 ### Cloud Readiness Check (MCP servers)
 
 Before proceeding to init, inspect how the MCP server
