@@ -27,6 +27,25 @@ of the current working directory.
 ### Mode 1: Greenfield — Build a New Solution
 
 User wants to create a new MCP server or web API from scratch.
+
+**First, help them decide: local or remote?**
+
+**Local MCP server (stdio)** makes sense when:
+- Works with local files, code, git repos, or system config
+- Manages the local workstation or development environment
+- Needs fast, low-latency interaction
+- Single user, single machine
+
+**Remote MCP server (HTTP)** makes sense when:
+- Accesses cloud data or external APIs
+- Needs to be available from multiple devices (phone, laptop, desktop)
+- Needs multi-user support
+- Benefits from always-on availability (logging, tracking, etc.)
+
+Based on this, the solution targets stdio only (simpler — no auth,
+no deployment) or stdio + HTTP (needs `app` variable, auth setup,
+deployment planning). Both follow the same repo structure.
+
 Follow the full guide below from Repository Structure onward.
 
 ### Mode 2: Migration — Port an Existing App
@@ -100,6 +119,13 @@ Use this for Mode 2 (migration) and Mode 3 (review):
 - [ ] No mocks unless explicitly justified
 - [ ] Tests use temp dirs and env vars for isolation
 - [ ] Test names describe scenario + outcome
+
+### Documentation
+- [ ] README.md: why the repo exists, quick start, deployment, CLI overview, config, dev guide
+- [ ] CONTRIBUTING.md: architecture, testing standards, conventions, how to add features
+- [ ] CLAUDE.md: thin, `@import README.md` and `@import CONTRIBUTING.md`, no other content
+- [ ] `.gemini/settings.json`: `contextFiles` pointing to README.md and CONTRIBUTING.md, committed (not gitignored), no secrets
+- [ ] No stale references to removed features or old architecture in any docs
 
 ### Deployment Readiness
 - [ ] `app` variable in `server.py` for uvicorn HTTP mode
@@ -511,6 +537,77 @@ Describe scenario + outcome, not implementation:
 - Unit tests: `tests/unit/` — fast, no network, no credentials
 - Integration tests: `tests/integration/` — only when explicitly
   requested, excluded from default pytest run
+
+## Documentation
+
+### README.md
+
+Every solution repo must have a thorough README.md covering:
+
+- **Why this repo exists** — what problem it solves, who it's for
+- **Quick start** — install and register with an MCP client (stdio)
+- **HTTP deployment** — env vars, running with uvicorn, deploying
+  with gapp or without gapp
+- **User management** — link to app-user if applicable
+- **MCP client configuration** — Claude.ai, Claude Code, Gemini CLI
+- **Configuration** — settings, timezone, data paths
+- **CLI commands** — overview of available commands and capabilities
+- **Development** — repo structure, how to run tests
+
+README.md is the user-facing document. It answers "how do I use
+this?" and "why should I care?"
+
+### CONTRIBUTING.md
+
+Contributor-facing design principles and constraints:
+
+- Architecture decisions (SDK-first, three-layer structure)
+- Testing standards (sociable, no mocks, env var isolation)
+- Code conventions
+- Version management
+- How to add new features (SDK first, then MCP tool, then CLI)
+- Security considerations
+- What NOT to do (no business logic in MCP/CLI layers)
+
+CONTRIBUTING.md answers "how do I work on this?" and "what are
+the rules?"
+
+### Agent context files
+
+**CLAUDE.md** — project-level, thin. `@import` README.md and
+CONTRIBUTING.md so Claude Code always has full context:
+
+```markdown
+@import README.md
+@import CONTRIBUTING.md
+```
+
+No other content.
+
+**`.gemini/settings.json`** — same purpose for Gemini CLI.
+Points to the same files via `contextFiles`:
+
+```json
+{
+  "codeAssist": {
+    "contextFiles": [
+      "README.md",
+      "CONTRIBUTING.md"
+    ]
+  }
+}
+```
+
+This file should be committed (not gitignored). Ensure it
+contains no secrets or sensitive paths before committing.
+
+### Review during compliance check
+
+As part of the compliance dashboard, review README.md and
+CONTRIBUTING.md for:
+- Thoroughness — are all sections present and filled out?
+- Accuracy — does it match the current code?
+- No stale references to removed features or old architecture
 
 ## Final Step: Compliance Dashboard
 
