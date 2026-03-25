@@ -1,6 +1,6 @@
 {
-  "codeAssist": {
-    "contextFiles": [
+  "context": {
+    "fileName": [
       "README.md",
       "CONTRIBUTING.md"
     ]

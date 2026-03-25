@@ -124,7 +124,7 @@ Use this for Mode 2 (migration) and Mode 3 (review):
 - [ ] README.md: why the repo exists, quick start, deployment, CLI overview, config, dev guide
 - [ ] CONTRIBUTING.md: architecture, testing standards, conventions, how to add features
 - [ ] CLAUDE.md: thin, `@import README.md` and `@import CONTRIBUTING.md`, no other content
-- [ ] `.gemini/settings.json`: `contextFiles` pointing to README.md and CONTRIBUTING.md, committed (not gitignored), no secrets
+- [ ] `.gemini/settings.json`: `context.fileName` pointing to README.md and CONTRIBUTING.md, committed (not gitignored), no secrets
 - [ ] No stale references to removed features or old architecture in any docs
 
 ### Deployment Readiness
@@ -589,8 +589,8 @@ Points to the same files via `contextFiles`:
 
 ```json
 {
-  "codeAssist": {
-    "contextFiles": [
+  "context": {
+    "fileName": [
       "README.md",
       "CONTRIBUTING.md"
     ]
