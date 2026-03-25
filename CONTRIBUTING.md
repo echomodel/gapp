@@ -317,6 +317,18 @@ These approaches were evaluated during the credential mediation design:
 - **Solution manages its own auth** — each solution implements JWT validation and credential lookup. Massive duplication, solutions lose cloud-agnosticism.
 - **ContextVar coupling** — pass credentials via Python ContextVar instead of HTTP headers. Couples the wrapper to Python internals, breaks ASGI transport independence.
 
+## External Framework Awareness
+
+gapp skills (`.md` files in `skills/`) may reference external frameworks like `app-user` (`krisrowe/app-user`) by name — documenting how to use them, CLI commands, handoff patterns, etc. This is intentional.
+
+**However, gapp MUST NEVER:**
+- Import `app-user` or any external auth/user framework in Python code
+- List it in `pyproject.toml`, `setup.py`, `requirements*.txt`, or any dependency file
+- `pip install` it as part of gapp's installation
+- Statically link to or bundle any of its code
+
+Skills (`.md` files) are the ONLY artifacts in gapp that are aware of external frameworks. This is documentation-level coupling, not code coupling. If `app-user` changes its interface, only the skill `.md` files need updating — no code changes, no version pins, no dependency conflicts.
+
 ## Design Principles
 
 ### 1. Separate the Tool from the Deployment
