@@ -79,7 +79,7 @@ Use this for Mode 2 (migration) and Mode 3 (review):
 - [ ] `mcp.run()` for stdio, `app` variable for HTTP (uvicorn)
 - [ ] All tools have clear, user-centric docstrings
 
-### Multi-User Auth (if applicable)
+### Multi-User Auth (only if solution uses app-user)
 - [ ] `app-user` in dependencies
 - [ ] `FileSystemUserDataStore` (or custom `UserDataStore`) instantiated
 - [ ] `DataStoreAuthAdapter` bridges auth store to data store
@@ -88,12 +88,12 @@ Use this for Mode 2 (migration) and Mode 3 (review):
 - [ ] SDK reads `current_user_id` from `app_user.context`
 - [ ] Solution's `context.py` re-exports from `app_user.context`
 
-### Environment Variables
-- [ ] `SIGNING_KEY` — read by app-user (not hardcoded)
-- [ ] `JWT_AUD` — optional, for audience validation
-- [ ] `APP_USERS_PATH` — data directory (with XDG fallback)
-- [ ] No hardcoded paths in code
-- [ ] Tests use the same env vars for isolation
+### Paths and Environment Variables
+- [ ] XDG path resolver functions in SDK (data, config, cache)
+- [ ] Each resolver checks env var override first, then XDG fallback with APP_NAME
+- [ ] No hardcoded absolute paths in code
+- [ ] Tests use the same env var overrides for isolation
+- [ ] (If using app-user) `SIGNING_KEY`, `JWT_AUD`, `APP_USERS_PATH` env vars handled
 
 ### Testing
 - [ ] Sociable unit tests in `tests/unit/`
@@ -201,9 +201,52 @@ if __name__ == "__main__":
 Both use the same MCP tools, same SDK. The only difference is
 how the server is started and whether auth is present.
 
-## CLI (Optional)
+## XDG Path Convention
 
-Use Click for CLI commands:
+Solutions use XDG Base Directory Specification for local paths.
+Each major XDG directory has a global resolver function in the SDK
+that checks an env var first, then falls back to XDG with the
+app name:
+
+```python
+# my_solution/sdk/paths.py
+import os
+from pathlib import Path
+from my_solution import APP_NAME
+
+def get_data_dir() -> Path:
+    """Data directory (logs, user data, catalogs)."""
+    env = os.environ.get("MY_SOLUTION_DATA")
+    if env:
+        return Path(env).expanduser().resolve()
+    base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+    return base / APP_NAME
+
+def get_config_dir() -> Path:
+    """Config directory (settings, app.yaml)."""
+    env = os.environ.get("MY_SOLUTION_CONFIG")
+    if env:
+        return Path(env).expanduser().resolve()
+    base = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+    return base / APP_NAME
+
+def get_cache_dir() -> Path:
+    """Cache directory (temporary data, can be deleted)."""
+    env = os.environ.get("MY_SOLUTION_CACHE")
+    if env:
+        return Path(env).expanduser().resolve()
+    base = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+    return base / APP_NAME
+```
+
+The env var overrides (`MY_SOLUTION_DATA`, etc.) serve two purposes:
+1. **Deployment** — gapp.yaml maps them to GCS FUSE mount paths
+2. **Testing** — unit tests set them to temp dirs for isolation
+
+## CLI Layer
+
+Use Click for CLI commands. The CLI is a thin wrapper that calls
+SDK methods — same rule as MCP tools.
 
 ```toml
 [project]
@@ -232,13 +275,68 @@ def do_thing():
     click.echo(result)
 ```
 
-## Multi-User Auth (app-user)
+### CLI scope — discuss with the user
 
-For solutions that need multi-user support — user identity,
-registration, revocation, data scoping — use the `app-user`
-library. This is optional. Single-user solutions skip this.
+The CLI's role varies by solution. Discuss with the user:
 
-**app-user repo:** `krisrowe/app-user`
+**Minimal CLI (management only):**
+- Configuration management (set data paths, change settings)
+- Security-sensitive operations the user doesn't want an agent
+  doing (rotating keys, changing auth settings, wiping data)
+- Operations that require confirmation or are destructive
+- The MCP tools handle all day-to-day functionality
+
+**Full parity CLI:**
+- Every MCP tool has a CLI equivalent
+- Useful for scripting, cron jobs, pipelines
+- More work to maintain — every new feature needs two interfaces
+
+**Recommended starting point:** minimal CLI for management and
+security-sensitive operations. Add CLI equivalents of MCP tools
+only when the user has a concrete need (scripting, automation,
+non-agent workflows). Don't build full parity speculatively.
+
+### SDK returns JSON, always
+
+Regardless of CLI scope, all logic lives in the SDK. SDK methods
+return dicts (JSON-serializable). Both MCP tools and CLI commands
+call the same SDK methods and get the same data:
+
+```python
+# SDK returns a dict
+def log_food(self, entries) -> dict:
+    return {"success": True, "date": "2026-03-25", "entries_added": 2}
+
+# MCP tool returns it directly
+@mcp.tool()
+async def log_meal(food_entries: list) -> dict:
+    return sdk.log_food(food_entries)
+
+# CLI formats it for humans, or passes through as JSON
+@cli.command()
+@click.option("--json", "as_json", is_flag=True)
+def log(food, as_json):
+    result = sdk.log_food(food)
+    if as_json:
+        click.echo(json.dumps(result, indent=2))
+    else:
+        click.echo(f"Logged {result['entries_added']} entries for {result['date']}")
+```
+
+One SDK method. Two interfaces. Same data. `--json` gives the
+raw SDK output. Human-readable formatting is CLI-only.
+
+## Multi-User Auth (app-user) — Optional
+
+If the solution needs multi-user support — user identity,
+registration, revocation, per-user data scoping — the `app-user`
+library (`krisrowe/app-user`) handles JWT auth, admin endpoints,
+and per-user data storage with minimal wiring.
+
+**This is entirely optional.** Solutions can implement their own
+auth however they want, or skip auth entirely for single-user
+tools. app-user is a convenience for the common case, not a
+requirement. Mention it as an option — don't push it.
 
 ### Add dependency
 
@@ -275,7 +373,7 @@ async def my_tool(param: str) -> dict:
     return sdk.do_thing(param)
 
 # HTTP mode — ASGI app with auth + admin endpoints
-app = create_app(store=auth_store, inner_app=mcp.asgi_app())
+app = create_app(store=auth_store, inner_app=mcp.streamable_http_app())
 
 # stdio mode
 def run_server():
@@ -357,25 +455,50 @@ For gapp deployment, these are set in `gapp.yaml` under `env:`.
 
 ### Sociable unit tests
 
-- No mocks unless explicitly needed
-- Isolate via temp dirs and env vars
-- Use the same env vars the solution reads in production
+Tests should exercise real code paths with minimal stubbing:
+
+- **No mocks** unless needed to avoid network I/O or to manage
+  env vars that affect global state
+- **Isolate via env vars** — set the same env var overrides the
+  solution's XDG path functions read (`MY_SOLUTION_DATA`, etc.)
+  to temp directories. This proves the env var contract works
+  AND provides test isolation.
+- **Temp dirs for data** — use `tmp_path` (pytest fixture) and
+  point env vars at it
+- **The env vars tests set are the same ones gapp.yaml maps in
+  production** — tests validate the deployment contract
 
 ```python
 # tests/unit/test_something.py
 import os
 import pytest
 
-def test_stores_data_in_configured_path(tmp_path):
-    os.environ["APP_USERS_PATH"] = str(tmp_path / "users")
-    try:
-        # Test that SDK reads/writes to the configured path
-        sdk = MySDK(FileSystemUserDataStore(app_name="my-solution"))
-        sdk.do_thing("test")
-        assert (tmp_path / "users" / "default" / "some-file.json").exists()
-    finally:
-        del os.environ["APP_USERS_PATH"]
+@pytest.fixture(autouse=True)
+def isolated_data(tmp_path):
+    """Point data dir to temp for every test."""
+    os.environ["MY_SOLUTION_DATA"] = str(tmp_path / "data")
+    os.environ["MY_SOLUTION_CONFIG"] = str(tmp_path / "config")
+    yield
+    del os.environ["MY_SOLUTION_DATA"]
+    del os.environ["MY_SOLUTION_CONFIG"]
+
+def test_logs_food_to_date_directory(tmp_path):
+    sdk = MySDK()
+    result = sdk.log_food([{"food_name": "apple"}])
+    assert result["success"]
+    data_dir = tmp_path / "data"
+    assert any(data_dir.rglob("*food-log.json"))
 ```
+
+### When to stub
+
+- **Network I/O** — stub HTTP clients, API calls. Never hit
+  real APIs in unit tests.
+- **Subprocess calls** — stub if the subprocess isn't ubiquitous
+  (e.g., don't stub `git init`, do stub `gcloud`).
+- **Everything else** — use real code. Real file I/O (to temp
+  dirs), real JSON parsing, real config loading. Sociable tests
+  catch integration bugs that mocks hide.
 
 ### Test names
 
