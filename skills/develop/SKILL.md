@@ -124,7 +124,8 @@ Use this for Mode 2 (migration) and Mode 3 (review):
 - [ ] README.md: why the repo exists, quick start, deployment, CLI overview, config, dev guide
 - [ ] CONTRIBUTING.md: architecture, testing standards, conventions, how to add features
 - [ ] CLAUDE.md: thin, `@import README.md` and `@import CONTRIBUTING.md`, no other content
-- [ ] `.gemini/settings.json`: `context.fileName` pointing to README.md and CONTRIBUTING.md, committed (not gitignored), no secrets
+- [ ] `.gemini/settings.json`: `context.fileName` pointing to README.md and CONTRIBUTING.md, committed, no secrets/tokens
+- [ ] `.gitignore` includes `.gemini/*` and `!.gemini/settings.json`
 - [ ] No stale references to removed features or old architecture in any docs
 
 ### Deployment Readiness
@@ -598,8 +599,23 @@ Points to the same files via `contextFiles`:
 }
 ```
 
-This file should be committed (not gitignored). Ensure it
-contains no secrets or sensitive paths before committing.
+This file should be committed (not gitignored). Before
+committing, verify it contains no secrets, tokens, API keys,
+or sensitive paths (e.g., MCP server URLs with embedded tokens).
+
+**Gitignore pattern** — add to `.gitignore`:
+
+```
+# Gemini folder (except settings.json)
+.gemini/*
+!.gemini/settings.json
+```
+
+This keeps Gemini's temp/cache files out of git while preserving
+the config. If `.gemini/settings.json` contains MCP server
+configurations, review them for embedded credentials before
+committing — tokens in URLs, authorization headers, or API keys
+must not be committed to non-personal repos.
 
 ### Review during compliance check
 
