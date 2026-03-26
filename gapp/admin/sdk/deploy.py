@@ -117,6 +117,16 @@ def deploy_solution(auto_approve: bool = False, ref: str | None = None, solution
         result["build_status"] = "built"
     result["image"] = image
 
+    # Auto-generate secrets declared with generate: true
+    from gapp.admin.sdk.manifest import get_env_vars
+    for entry in get_env_vars(manifest):
+        secret_cfg = entry.get("secret")
+        if isinstance(secret_cfg, dict) and secret_cfg.get("generate"):
+            secret_name = entry["name"].lower().replace("_", "-")
+            if not _secret_exists(project_id, secret_name):
+                import secrets as secrets_mod
+                _create_and_set_secret(project_id, secret_name, secrets_mod.token_urlsafe(32))
+
     # Stage Terraform and apply
     bucket_name = f"gapp-{solution_name}-{project_id}"
     tf_result = _stage_and_apply(
@@ -129,6 +139,7 @@ def deploy_solution(auto_approve: bool = False, ref: str | None = None, solution
         auth_config=auth_config,
         token=token,
         auto_approve=auto_approve,
+        manifest=manifest,
     )
     result["terraform_status"] = tf_result["status"]
     result["service_url"] = tf_result.get("service_url")
@@ -304,6 +315,29 @@ def _build_and_push(
             )
 
 
+def _secret_exists(project_id: str, secret_name: str) -> bool:
+    """Check if a secret exists in Secret Manager."""
+    result = subprocess.run(
+        ["gcloud", "secrets", "describe", secret_name, "--project", project_id],
+        capture_output=True, text=True,
+    )
+    return result.returncode == 0
+
+
+def _create_and_set_secret(project_id: str, secret_name: str, value: str) -> None:
+    """Create a secret in Secret Manager and set its initial value."""
+    subprocess.run(
+        ["gcloud", "secrets", "create", secret_name, "--project", project_id,
+         "--replication-policy=automatic"],
+        capture_output=True, text=True,
+    )
+    subprocess.run(
+        ["gcloud", "secrets", "versions", "add", secret_name, "--project", project_id,
+         "--data-file=-"],
+        input=value, capture_output=True, text=True,
+    )
+
+
 def _secret_name_to_env_var(name: str) -> str:
     """Convert kebab-case secret name to UPPER_SNAKE env var name."""
     return name.upper().replace("-", "_")
@@ -322,14 +356,45 @@ def _build_tfvars(
     service_config: dict,
     secrets: dict | None = None,
     auth_config: dict | None = None,
+    env_vars: list[dict] | None = None,
 ) -> dict:
     """Build the tfvars dict from manifest config."""
+    from gapp.admin.sdk.manifest import resolve_env_vars
+
     bucket_name = f"gapp-{solution_name}-{project_id}"
+
+    # Start with legacy service.env (dict format)
     env = dict(service_config.get("env", {}))
+
+    # Resolve new-format env vars (list with {{VARIABLE}} substitution)
+    if env_vars:
+        gapp_vars = {
+            "SOLUTION_DATA_PATH": "/mnt/data",
+            "SOLUTION_NAME": solution_name,
+        }
+        resolved = resolve_env_vars(env_vars, gapp_vars)
+        secret_env = {}
+        for entry in resolved:
+            name = entry["name"]
+            secret_cfg = entry.get("secret")
+            if secret_cfg:
+                # Secret-backed — derive secret manager name from env var name
+                secret_name = name.lower().replace("_", "-")
+                secret_env[name] = secret_name
+            elif "value" in entry:
+                env[name] = entry["value"]
 
     # When auth enabled, set GAPP_APP so the wrapper knows what to import
     if auth_config:
         env["GAPP_APP"] = service_config["entrypoint"]
+
+    # Merge legacy prerequisite secrets with new env-declared secrets
+    all_secrets = {
+        _secret_name_to_env_var(name): name
+        for name in (secrets or {})
+    }
+    if env_vars:
+        all_secrets.update(secret_env)
 
     tfvars = {
         "project_id": project_id,
@@ -339,12 +404,9 @@ def _build_tfvars(
         "cpu": service_config["cpu"],
         "max_instances": service_config["max_instances"],
         "env": env,
-        "secrets": {
-            _secret_name_to_env_var(name): name
-            for name in (secrets or {})
-        },
+        "secrets": all_secrets,
+        "data_bucket": bucket_name,
         "auth_enabled": bool(auth_config),
-        "auth_bucket": bucket_name if auth_config else "",
     }
     return tfvars
 
@@ -365,6 +427,7 @@ def _stage_and_apply(
     auth_config: dict | None = None,
     token: str = "",
     auto_approve: bool = False,
+    manifest: dict | None = None,
 ) -> dict:
     """Copy static TF files to staging dir, write tfvars.json, and apply."""
     env = {**os.environ, "GOOGLE_OAUTH_ACCESS_TOKEN": token}
@@ -380,8 +443,11 @@ def _stage_and_apply(
         shutil.copy2(tf_file, staging_dir)
 
     # Write tfvars.json
+    from gapp.admin.sdk.manifest import get_env_vars
+    env_vars = get_env_vars(manifest or {})
     tfvars = _build_tfvars(
         solution_name, project_id, image, service_config, secrets, auth_config,
+        env_vars=env_vars,
     )
     (staging_dir / "terraform.tfvars.json").write_text(json.dumps(tfvars, indent=2))
 

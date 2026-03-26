@@ -56,14 +56,15 @@ resource "google_cloud_run_v2_service" "service" {
       max_instance_count = var.max_instances
     }
 
-    # GCS FUSE volume for credential files (only when auth enabled)
+    # GCS FUSE volume — always mounted, scoped to data/ prefix
     dynamic "volumes" {
-      for_each = var.auth_enabled ? [1] : []
+      for_each = var.data_bucket != "" ? [1] : []
       content {
-        name = "auth-credentials"
+        name = "solution-data"
         gcs {
-          bucket    = var.auth_bucket
-          read_only = false
+          bucket        = var.data_bucket
+          read_only     = false
+          mount_options = ["only-dir=data"]
         }
       }
     }
@@ -82,15 +83,16 @@ resource "google_cloud_run_v2_service" "service" {
         }
       }
 
-      # GCS FUSE mount (only when auth enabled)
+      # Data volume mount
       dynamic "volume_mounts" {
-        for_each = var.auth_enabled ? [1] : []
+        for_each = var.data_bucket != "" ? [1] : []
         content {
-          name       = "auth-credentials"
-          mount_path = "/mnt/gcs"
+          name       = "solution-data"
+          mount_path = "/mnt/data"
         }
       }
 
+      # Plain env vars
       dynamic "env" {
         for_each = var.env
         content {
@@ -99,6 +101,7 @@ resource "google_cloud_run_v2_service" "service" {
         }
       }
 
+      # Secret-backed env vars
       dynamic "env" {
         for_each = var.secrets
         content {
@@ -130,14 +133,14 @@ resource "google_cloud_run_v2_service" "service" {
         for_each = var.auth_enabled ? [1] : []
         content {
           name  = "GAPP_AUTH_MOUNT"
-          value = "/mnt/gcs/auth"
+          value = "/mnt/data/auth"
         }
       }
     }
   }
 }
 
-# Grant service account access to each prerequisite secret (not project-wide)
+# Grant service account access to each prerequisite secret
 resource "google_secret_manager_secret_iam_member" "prerequisite_secret" {
   for_each  = var.secrets
   project   = var.project_id
@@ -155,15 +158,15 @@ resource "google_secret_manager_secret_iam_member" "signing_key" {
   member    = "serviceAccount:${google_service_account.service.email}"
 }
 
-# Grant service account access to auth bucket (only when auth enabled)
-resource "google_storage_bucket_iam_member" "auth_bucket" {
-  count  = var.auth_enabled ? 1 : 0
-  bucket = var.auth_bucket
+# Grant service account access to data bucket (always when bucket provided)
+resource "google_storage_bucket_iam_member" "data_bucket" {
+  count  = var.data_bucket != "" ? 1 : 0
+  bucket = var.data_bucket
   role   = "roles/storage.objectUser"
   member = "serviceAccount:${google_service_account.service.email}"
 }
 
-# Public access (if enabled)
+# Public access (if auth enabled — gapp_run wrapper handles real auth)
 resource "google_cloud_run_v2_service_iam_member" "public" {
   count    = var.auth_enabled ? 1 : 0
   project  = var.project_id

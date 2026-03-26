@@ -49,14 +49,14 @@ variable "secrets" {
   default     = {}
 }
 
+variable "data_bucket" {
+  description = "GCS bucket for solution data (FUSE mounted at /mnt/data, scoped to data/ prefix)"
+  type        = string
+  default     = ""
+}
+
 variable "auth_enabled" {
   description = "Enable credential mediation wrapper"
   type        = bool
   default     = false
-}
-
-variable "auth_bucket" {
-  description = "GCS bucket for credential files (used for FUSE mount)"
-  type        = string
-  default     = ""
 }

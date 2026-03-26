@@ -77,7 +77,6 @@ def test_service_config_defaults():
     assert config["memory"] == "512Mi"
     assert config["cpu"] == "1"
     assert config["max_instances"] == 1
-    assert config["public"] is False
     assert config["env"] == {}
 
 
@@ -85,13 +84,11 @@ def test_service_config_overrides():
     manifest = {"service": {
         "entrypoint": "app:main",
         "memory": "1Gi",
-        "public": True,
         "env": {"FOO": "bar"},
     }}
     config = get_service_config(manifest)
     assert config["port"] == 8080
     assert config["memory"] == "1Gi"
-    assert config["public"] is True
     assert config["env"] == {"FOO": "bar"}
 
 
@@ -112,3 +109,59 @@ def test_auth_config_google_oauth2():
 def test_auth_config_absent():
     assert get_auth_config({}) is None
     assert get_auth_config({"service": {}}) is None
+
+
+# --- New env var support ---
+
+from gapp.admin.sdk.manifest import get_env_vars, resolve_env_vars, get_auth_framework
+
+
+def test_get_env_vars_new_format():
+    manifest = {
+        "env": [
+            {"name": "LOG_LEVEL", "value": "INFO"},
+            {"name": "SIGNING_KEY", "secret": {"generate": True}},
+        ]
+    }
+    result = get_env_vars(manifest)
+    assert len(result) == 2
+    assert result[0]["name"] == "LOG_LEVEL"
+    assert result[1]["secret"]["generate"] is True
+
+
+def test_get_env_vars_legacy_format():
+    manifest = {"service": {"env": {"DB_HOST": "localhost", "LOG_LEVEL": "DEBUG"}}}
+    result = get_env_vars(manifest)
+    assert len(result) == 2
+    names = {e["name"] for e in result}
+    assert names == {"DB_HOST", "LOG_LEVEL"}
+
+
+def test_get_env_vars_empty():
+    assert get_env_vars({}) == []
+
+
+def test_resolve_env_vars_substitution():
+    env_list = [
+        {"name": "APP_DATA", "value": "{{SOLUTION_DATA_PATH}}/users"},
+        {"name": "APP_NAME", "value": "{{SOLUTION_NAME}}"},
+        {"name": "PLAIN", "value": "no-substitution"},
+    ]
+    gapp_vars = {"SOLUTION_DATA_PATH": "/mnt/data", "SOLUTION_NAME": "my-app"}
+    result = resolve_env_vars(env_list, gapp_vars)
+    assert result[0]["value"] == "/mnt/data/users"
+    assert result[1]["value"] == "my-app"
+    assert result[2]["value"] == "no-substitution"
+
+
+def test_resolve_env_vars_unknown_variable():
+    import pytest
+    env_list = [{"name": "X", "value": "{{UNKNOWN_VAR}}"}]
+    with pytest.raises(ValueError, match="Unknown gapp variable"):
+        resolve_env_vars(env_list, {})
+
+
+def test_get_auth_framework():
+    assert get_auth_framework({"auth": {"framework": "app-user"}}) == "app-user"
+    assert get_auth_framework({}) is None
+    assert get_auth_framework({"auth": "bearer"}) is None

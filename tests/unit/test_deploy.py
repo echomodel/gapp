@@ -24,14 +24,13 @@ def test_build_tfvars():
         "memory": "512Mi",
         "cpu": "1",
         "max_instances": 1,
-        "public": False,
         "env": {},
     }
     tfvars = _build_tfvars("my-app", "my-project", "img:abc123", config)
     assert tfvars["project_id"] == "my-project"
     assert tfvars["service_name"] == "my-app"
     assert tfvars["image"] == "img:abc123"
-    assert tfvars["public"] is False
+    assert tfvars["data_bucket"] == "gapp-my-app-my-project"
     assert tfvars["secrets"] == {}
 
 
@@ -42,7 +41,6 @@ def test_build_tfvars_with_secrets():
         "memory": "512Mi",
         "cpu": "1",
         "max_instances": 1,
-        "public": False,
         "env": {},
     }
     secrets = {"api-token": {"description": "Auth token"}}
@@ -57,12 +55,10 @@ def test_build_tfvars_with_env():
         "memory": "512Mi",
         "cpu": "1",
         "max_instances": 1,
-        "public": True,
         "env": {"DB_HOST": "localhost"},
     }
     tfvars = _build_tfvars("my-app", "proj", "img:abc123", config)
     assert tfvars["env"] == {"DB_HOST": "localhost"}
-    assert tfvars["public"] is True
 
 
 def test_build_tfvars_auth_disabled():
@@ -72,12 +68,10 @@ def test_build_tfvars_auth_disabled():
         "memory": "512Mi",
         "cpu": "1",
         "max_instances": 1,
-        "public": False,
         "env": {},
     }
     tfvars = _build_tfvars("my-app", "proj", "img:abc123", config)
     assert tfvars["auth_enabled"] is False
-    assert tfvars["auth_bucket"] == ""
     assert "GAPP_APP" not in tfvars["env"]
 
 
@@ -88,15 +82,13 @@ def test_build_tfvars_auth_enabled():
         "memory": "512Mi",
         "cpu": "1",
         "max_instances": 1,
-        "public": True,
         "env": {"LOG_LEVEL": "INFO"},
     }
     auth = {"enabled": True, "strategy": "bearer"}
     tfvars = _build_tfvars("monarch-access", "proj", "img:abc123", config, auth_config=auth)
     assert tfvars["auth_enabled"] is True
-    assert tfvars["auth_bucket"] == "gapp-monarch-access-proj"
+    assert tfvars["data_bucket"] == "gapp-monarch-access-proj"
     assert tfvars["env"]["GAPP_APP"] == "monarch.mcp.server:mcp_app"
-    # Original env vars preserved
     assert tfvars["env"]["LOG_LEVEL"] == "INFO"
 
 
@@ -107,14 +99,48 @@ def test_build_tfvars_auth_does_not_mutate_original_env():
         "memory": "512Mi",
         "cpu": "1",
         "max_instances": 1,
-        "public": False,
         "env": {"FOO": "bar"},
     }
     original_env = config["env"].copy()
     auth = {"enabled": True, "strategy": "bearer"}
     _build_tfvars("my-app", "proj", "img:abc123", config, auth_config=auth)
-    # Original config dict should not be modified
     assert config["env"] == original_env
+
+
+def test_build_tfvars_with_env_vars_list():
+    """Test new-format env vars from gapp.yaml env section."""
+    config = {
+        "entrypoint": "app:main",
+        "port": 8080,
+        "memory": "512Mi",
+        "cpu": "1",
+        "max_instances": 1,
+        "env": {},
+    }
+    env_vars = [
+        {"name": "APP_DATA_PATH", "value": "{{SOLUTION_DATA_PATH}}/users"},
+        {"name": "LOG_LEVEL", "value": "INFO"},
+        {"name": "SIGNING_KEY", "secret": {"generate": True}},
+    ]
+    tfvars = _build_tfvars("my-app", "proj", "img:abc123", config, env_vars=env_vars)
+    assert tfvars["env"]["APP_DATA_PATH"] == "/mnt/data/users"
+    assert tfvars["env"]["LOG_LEVEL"] == "INFO"
+    assert tfvars["secrets"]["SIGNING_KEY"] == "signing-key"
+
+
+def test_build_tfvars_data_bucket_always_set():
+    """Data bucket is always set regardless of auth."""
+    config = {
+        "entrypoint": "app:main",
+        "port": 8080,
+        "memory": "512Mi",
+        "cpu": "1",
+        "max_instances": 1,
+        "env": {},
+    }
+    tfvars = _build_tfvars("food-agent", "proj", "img:abc123", config)
+    assert tfvars["data_bucket"] == "gapp-food-agent-proj"
+    assert tfvars["auth_enabled"] is False
 
 
 def test_dockerfile_template_supports_runtime_install():

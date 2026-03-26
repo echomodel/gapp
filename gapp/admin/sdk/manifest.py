@@ -82,3 +82,87 @@ def get_service_config(manifest: dict) -> dict:
         "max_instances": service.get("max_instances", 1),
         "env": service.get("env", {}),
     }
+
+
+def get_env_vars(manifest: dict) -> list[dict]:
+    """Return env var declarations from the manifest.
+
+    Supports both the new `env` section and the legacy `service.env` dict.
+    New format:
+        env:
+          - name: LOG_LEVEL
+            value: INFO
+          - name: SIGNING_KEY
+            secret:
+              generate: true
+
+    Legacy format (service.env dict):
+        service:
+          env:
+            LOG_LEVEL: INFO
+
+    Returns a normalized list of dicts, each with:
+        name: str
+        value: str | None (for plain env vars)
+        secret: dict | bool | None (for secret-backed env vars)
+    """
+    # New format
+    env_list = manifest.get("env", [])
+    if env_list:
+        return env_list
+
+    # Legacy: service.env dict → normalize to list
+    legacy = manifest.get("service", {}).get("env", {})
+    if legacy and isinstance(legacy, dict):
+        return [{"name": k, "value": v} for k, v in legacy.items()]
+
+    return []
+
+
+def get_auth_framework(manifest: dict) -> str | None:
+    """Return the auth framework hint if configured, else None.
+
+    Format in gapp.yaml:
+        auth:
+          framework: app-user
+    """
+    auth = manifest.get("auth", {})
+    if isinstance(auth, dict):
+        return auth.get("framework")
+    return None
+
+
+# -- Substitution --
+
+GAPP_VARIABLES = {
+    "SOLUTION_DATA_PATH",
+    "SOLUTION_NAME",
+}
+
+
+def resolve_env_vars(env_list: list[dict], gapp_vars: dict) -> list[dict]:
+    """Resolve {{VARIABLE}} placeholders in env var values.
+
+    Args:
+        env_list: List of env var dicts from get_env_vars().
+        gapp_vars: Dict of gapp-provided variable values
+            (e.g., {"SOLUTION_DATA_PATH": "/mnt/data", "SOLUTION_NAME": "my-app"}).
+
+    Returns: New list with placeholders replaced in value fields.
+    """
+    import re
+    result = []
+    for entry in env_list:
+        entry = dict(entry)  # copy
+        if "value" in entry and isinstance(entry["value"], str):
+            def replacer(m):
+                var_name = m.group(1)
+                if var_name not in GAPP_VARIABLES:
+                    raise ValueError(f"Unknown gapp variable: {{{{{var_name}}}}}. "
+                                     f"Valid: {', '.join(sorted(GAPP_VARIABLES))}")
+                if var_name not in gapp_vars:
+                    raise ValueError(f"gapp variable {{{{{var_name}}}}} not available in this context.")
+                return gapp_vars[var_name]
+            entry["value"] = re.sub(r"\{\{(\w+)\}\}", replacer, entry["value"])
+        result.append(entry)
+    return result

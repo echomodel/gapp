@@ -43,14 +43,14 @@ variable "secrets" {
   default     = {}
 }
 
+variable "data_bucket" {
+  description = "GCS bucket for solution data (always mounted when non-empty)"
+  type        = string
+  default     = ""
+}
+
 variable "auth_enabled" {
   description = "Enable credential mediation wrapper"
   type        = bool
   default     = false
-}
-
-variable "auth_bucket" {
-  description = "GCS bucket for credential files"
-  type        = string
-  default     = ""
 }

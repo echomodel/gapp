@@ -18,8 +18,8 @@ module "service" {
   max_instances = var.max_instances
   env           = var.env
   secrets       = var.secrets
+  data_bucket   = var.data_bucket
   auth_enabled  = var.auth_enabled
-  auth_bucket   = var.auth_bucket
 }
 
 output "service_url" {
