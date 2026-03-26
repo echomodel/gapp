@@ -357,6 +357,7 @@ def _build_tfvars(
     secrets: dict | None = None,
     auth_config: dict | None = None,
     env_vars: list[dict] | None = None,
+    public: bool | None = None,
 ) -> dict:
     """Build the tfvars dict from manifest config."""
     from gapp.admin.sdk.manifest import resolve_env_vars
@@ -406,6 +407,7 @@ def _build_tfvars(
         "env": env,
         "secrets": all_secrets,
         "data_bucket": bucket_name,
+        "public": bool(public) if public is not None else bool(auth_config),
         "auth_enabled": bool(auth_config),
     }
     return tfvars
@@ -443,11 +445,13 @@ def _stage_and_apply(
         shutil.copy2(tf_file, staging_dir)
 
     # Write tfvars.json
-    from gapp.admin.sdk.manifest import get_env_vars
+    from gapp.admin.sdk.manifest import get_env_vars, get_public
     env_vars = get_env_vars(manifest or {})
+    public = get_public(manifest or {})
     tfvars = _build_tfvars(
         solution_name, project_id, image, service_config, secrets, auth_config,
         env_vars=env_vars,
+        public=public,
     )
     (staging_dir / "terraform.tfvars.json").write_text(json.dumps(tfvars, indent=2))
 

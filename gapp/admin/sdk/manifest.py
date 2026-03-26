@@ -119,6 +119,14 @@ def get_env_vars(manifest: dict) -> list[dict]:
     return []
 
 
+def get_public(manifest: dict) -> bool | None:
+    """Return the public access setting if configured, else None."""
+    val = manifest.get("public")
+    if val is None:
+        return None
+    return bool(val)
+
+
 def get_auth_framework(manifest: dict) -> str | None:
     """Return the auth framework hint if configured, else None.
 

@@ -166,9 +166,9 @@ resource "google_storage_bucket_iam_member" "data_bucket" {
   member = "serviceAccount:${google_service_account.service.email}"
 }
 
-# Public access (if auth enabled — gapp_run wrapper handles real auth)
+# Public access — controlled by explicit flag, not tied to auth
 resource "google_cloud_run_v2_service_iam_member" "public" {
-  count    = var.auth_enabled ? 1 : 0
+  count    = var.public ? 1 : 0
   project  = var.project_id
   location = var.region
   name     = google_cloud_run_v2_service.service.name
