@@ -64,12 +64,37 @@ def deploy_solution(auto_approve: bool = False, ref: str | None = None, solution
     manifest = load_manifest(repo_path)
     entrypoint = get_entrypoint(manifest)
 
-    if not entrypoint:
+    # Entrypoint detection priority:
+    # 1. service.entrypoint in gapp.yaml (explicit ASGI module:app)
+    # 2. mcp-app.yaml exists → "mcp-app serve" (framework handles everything)
+    # 3. Dockerfile exists → gapp uses it as-is, no entrypoint needed
+    # Detection priority:
+    # 1. service.entrypoint or service.cmd in gapp.yaml (mutually exclusive, trumps all)
+    # 2. Dockerfile in repo → use as-is
+    # 3. mcp-app.yaml → mcp-app serve
+    # 4. Error
+    from gapp.admin.sdk.manifest import get_cmd
+    cmd = get_cmd(manifest)
+
+    if entrypoint and cmd:
+        raise RuntimeError("gapp.yaml has both service.entrypoint and service.cmd. Use one or the other.")
+
+    if entrypoint:
+        pass  # ASGI module:app for uvicorn
+    elif cmd:
+        entrypoint = f"__cmd__:{cmd}"
+    elif (repo_path / "Dockerfile").exists():
+        entrypoint = "__dockerfile__"
+    elif (repo_path / "mcp-app.yaml").exists():
+        entrypoint = "__mcp_app__"
+    else:
         raise RuntimeError(
-            "No service entrypoint in gapp.yaml.\n"
-            "  Add:\n"
-            "    service:\n"
-            "      entrypoint: your_package.mcp.server:mcp_app"
+            "Cannot determine how to run this service.\n"
+            "  Options (in priority order):\n"
+            "    1. Set service.entrypoint in gapp.yaml (ASGI module:app)\n"
+            "    2. Set service.cmd in gapp.yaml (raw command)\n"
+            "    3. Provide a Dockerfile\n"
+            "    4. Add mcp-app.yaml (framework handles serving)"
         )
 
     service_config = get_service_config(manifest)
@@ -269,23 +294,43 @@ def _build_and_push(
         )
         archive.wait()
 
-        # Copy gapp's Dockerfile and cloudbuild config
-        shutil.copy2(_get_template("Dockerfile"), Path(build_dir) / "Dockerfile")
-        shutil.copy2(_get_template("cloudbuild.yaml"), Path(build_dir) / "cloudbuild.yaml")
-
-        # When auth enabled: swap entrypoint to the gapp_run wrapper
-        build_entrypoint = entrypoint
+        # Determine Dockerfile source and entrypoint
         build_runtime_ref = ""
-        if auth_config:
-            if not runtime_ref:
-                raise RuntimeError(
-                    "Auth is enabled but no runtime version specified.\n"
-                    "  Add to gapp.yaml:\n"
-                    "    service:\n"
-                    "      runtime: main  # gapp git ref (tag, branch, or commit)"
-                )
-            build_entrypoint = "gapp_run.wrapper:app"
-            build_runtime_ref = runtime_ref
+
+        if entrypoint == "__dockerfile__":
+            # Solution has its own Dockerfile — use it, skip gapp templates
+            if not (Path(build_dir) / "Dockerfile").exists():
+                raise RuntimeError("Dockerfile sentinel set but no Dockerfile in repo.")
+            shutil.copy2(_get_template("cloudbuild.yaml"), Path(build_dir) / "cloudbuild.yaml")
+            build_entrypoint = ""  # not used — Dockerfile has its own CMD
+        elif entrypoint == "__mcp_app__":
+            # mcp-app.yaml detected — use mcp-app serve as CMD
+            shutil.copy2(_get_template("Dockerfile"), Path(build_dir) / "Dockerfile")
+            shutil.copy2(_get_template("cloudbuild.yaml"), Path(build_dir) / "cloudbuild.yaml")
+            build_entrypoint = "__mcp_app_serve__"
+        elif entrypoint.startswith("__cmd__:"):
+            # Raw command from service.cmd
+            raw_cmd = entrypoint[len("__cmd__:"):]
+            shutil.copy2(_get_template("Dockerfile"), Path(build_dir) / "Dockerfile")
+            shutil.copy2(_get_template("cloudbuild.yaml"), Path(build_dir) / "cloudbuild.yaml")
+            build_entrypoint = f"__cmd__:{raw_cmd}"
+        else:
+            # Explicit ASGI entrypoint from gapp.yaml
+            shutil.copy2(_get_template("Dockerfile"), Path(build_dir) / "Dockerfile")
+            shutil.copy2(_get_template("cloudbuild.yaml"), Path(build_dir) / "cloudbuild.yaml")
+            build_entrypoint = entrypoint
+
+            # When auth enabled: swap entrypoint to the gapp_run wrapper
+            if auth_config:
+                if not runtime_ref:
+                    raise RuntimeError(
+                        "Auth is enabled but no runtime version specified.\n"
+                        "  Add to gapp.yaml:\n"
+                        "    service:\n"
+                        "      runtime: main  # gapp git ref (tag, branch, or commit)"
+                    )
+                build_entrypoint = "gapp_run.wrapper:app"
+                build_runtime_ref = runtime_ref
 
         # Submit to Cloud Build with substitutions
         result = subprocess.run(

@@ -10,8 +10,7 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
 COPY . /app
 
 ARG RUNTIME_REF
-RUN uv pip install --system "mcp[cli]" uvicorn \
-    && uv pip install --system -e . \
+RUN uv pip install --system -e . \
     && if [ -n "$RUNTIME_REF" ]; then uv pip install --system "gapp-run @ git+https://github.com/krisrowe/gapp.git@${RUNTIME_REF}#subdirectory=run"; fi
 
 ARG ENTRYPOINT
@@ -19,4 +18,4 @@ ENV ENTRYPOINT=${ENTRYPOINT}
 
 EXPOSE 8080
 
-CMD ["sh", "-c", "uvicorn ${ENTRYPOINT} --host 0.0.0.0 --port 8080"]
+CMD ["sh", "-c", "case \"$ENTRYPOINT\" in __mcp_app_serve__) mcp-app serve ;; __cmd__:*) eval \"${ENTRYPOINT#__cmd__:}\" ;; *) uvicorn ${ENTRYPOINT} --host 0.0.0.0 --port 8080 ;; esac"]

@@ -42,6 +42,11 @@ def get_entrypoint(manifest: dict) -> str | None:
     return manifest.get("service", {}).get("entrypoint")
 
 
+def get_cmd(manifest: dict) -> str | None:
+    """Return the service cmd from the manifest."""
+    return manifest.get("service", {}).get("cmd")
+
+
 VALID_AUTH_STRATEGIES = {"bearer", "google_oauth2"}
 
 
