@@ -134,7 +134,7 @@ def deploy_solution(auto_approve: bool = False, ref: str | None = None, solution
     else:
         _build_and_push(
             project_id, repo_path, image,
-            service_config["entrypoint"],
+            entrypoint,
             ref=deploy_ref,
             auth_config=auth_config,
             runtime_ref=runtime_ref,
