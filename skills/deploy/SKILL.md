@@ -81,37 +81,95 @@ Evaluate whether the repo is a good candidate for gapp:
 - No ASGI/HTTP interface
 - Already deployed elsewhere and user doesn't want to move
 
-### Two Deployment Paths
+### gapp.yaml — Minimal Configuration Philosophy
 
-Before proceeding, determine which path the solution needs:
+**Goal: as little in gapp.yaml as possible.** gapp derives what
+it can. The solution's own files (Dockerfile, mcp-app.yaml,
+pyproject.toml) take precedence over gapp.yaml.
 
-**API-proxy solutions** (monarch-access, ticktick-mcp, gwsa, etc.)
-— proxy requests to a backend API. Need gapp's credential
-mediation to swap user tokens for backend credentials. Use gapp's
-ASGI wrapper (`gapp_run`). Follow the existing deployment flow
-below (Cloud Readiness Check → Phase 1 → etc.).
+#### What gapp needs to know (in priority order)
 
-**Data-owning solutions** (food-agent, etc.) — own user data
-directly. Use the `app-user` library (`krisrowe/app-user`) for
-auth and user management. The solution owns its ASGI entrypoint
-via `app_user.create_app()`. gapp deploys the container but does
-NOT inject a wrapper.
+**How to build and run the container:**
 
-For data-owning solutions using app-user:
+1. Solution has a **Dockerfile** → gapp builds it as-is. No
+   `service.entrypoint` needed. No `service.cmd` needed.
+2. Solution has **mcp-app.yaml** (future) → gapp generates
+   Dockerfile with `CMD ["mcp-app", "serve"]`. No entrypoint
+   needed.
+3. Neither → `service.entrypoint` in gapp.yaml is required.
+   This is the ASGI module:app path (e.g.,
+   `food_agent.mcp.server:app`). gapp wraps it with uvicorn
+   in the generated Dockerfile.
 
-1. Ensure the solution was built following the **develop** skill
-   guidance (app-user integration, `create_app()`, env vars)
-2. `gapp.yaml` should include:
-   ```yaml
-   auth:
-     framework: app-user
-   ```
-   And env vars for `SIGNING_KEY` (secret, generate: true),
-   `JWT_AUD`, and `APP_USERS_PATH`.
-3. Deploy normally (Phase 1 → 2 → 3 below). gapp does not
-   inject its ASGI wrapper for these solutions.
-4. After deploy, hand off to the **user-management** skill for
-   registering users and testing.
+**Whether to allow public access:**
+
+`public: true` grants allUsers Cloud Run IAM. Default is
+non-public (locked down). Solutions handling their own auth
+(app-user, custom) need `public: true`. Use `gapp_status` to
+check current public state. `gapp_deploy(public=true)` can
+override per-deploy without changing the yaml.
+
+**Environment variables and secrets:**
+
+```yaml
+env:
+  - name: SIGNING_KEY
+    secret:
+      generate: true
+  - name: APP_USERS_PATH
+    value: "{{SOLUTION_DATA_PATH}}/users"
+  - name: LOG_LEVEL
+    value: INFO
+```
+
+- Plain values: `name` + `value`
+- Secret-backed: `name` + `secret: true` (must exist) or
+  `secret: { generate: true }` (auto-created if missing)
+- `{{SOLUTION_DATA_PATH}}` → resolved to `/mnt/data` at
+  deploy time (GCS FUSE mount path)
+- `{{SOLUTION_NAME}}` → resolved to the solution name
+
+#### Complete gapp.yaml reference
+
+```yaml
+# Required only when no Dockerfile and no mcp-app.yaml:
+service:
+  entrypoint: my_package.mcp.server:app
+
+# Optional — default false:
+public: true
+
+# Optional — env vars and secrets:
+env:
+  - name: SIGNING_KEY
+    secret:
+      generate: true
+  - name: APP_USERS_PATH
+    value: "{{SOLUTION_DATA_PATH}}/users"
+
+# Legacy — API-proxy solutions only (pins gapp_run version):
+# service:
+#   auth: bearer
+#   runtime: v0.5.0
+```
+
+#### MCP tools for gapp.yaml management
+
+- `gapp_init` — creates or updates gapp.yaml (entrypoint,
+  auth, secrets, mcp_path)
+- `gapp_status` — shows current config, deployment state,
+  public access, next step
+- `gapp_secret_set` — stores a secret value in Secret Manager
+- `gapp_deploy` — deploys (accepts `public` override arg)
+
+Read gapp.yaml directly for full config. Use `gapp_status` for
+a quick check of deployment state without reading files.
+
+#### After deployment
+
+If the solution uses app-user or similar auth framework, hand
+off to the **user-management** skill for registering users
+and testing the deployed service.
 
 ### Cloud Readiness Check (MCP servers)
 
