@@ -19,6 +19,7 @@ module "service" {
   env           = var.env
   secrets       = var.secrets
   data_bucket   = var.data_bucket
+  public        = var.public
   auth_enabled  = var.auth_enabled
 }
 

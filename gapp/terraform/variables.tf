@@ -43,6 +43,12 @@ variable "secrets" {
   default     = {}
 }
 
+variable "public" {
+  description = "Allow unauthenticated access"
+  type        = bool
+  default     = false
+}
+
 variable "data_bucket" {
   description = "GCS bucket for solution data (always mounted when non-empty)"
   type        = string

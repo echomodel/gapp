@@ -49,6 +49,12 @@ variable "secrets" {
   default     = {}
 }
 
+variable "public" {
+  description = "Allow unauthenticated access (allUsers). Default false — Cloud Run IAM blocks traffic."
+  type        = bool
+  default     = false
+}
+
 variable "data_bucket" {
   description = "GCS bucket for solution data (FUSE mounted at /mnt/data, scoped to data/ prefix)"
   type        = string
