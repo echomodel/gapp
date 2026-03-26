@@ -556,13 +556,23 @@ def test_logs_food_to_date_directory(tmp_path):
 
 ### When to stub
 
-- **Network I/O** — stub HTTP clients, API calls. Never hit
-  real APIs in unit tests.
-- **Subprocess calls** — stub if the subprocess isn't ubiquitous
-  (e.g., don't stub `git init`, do stub `gcloud`).
+- **Network I/O** — stub HTTP clients, API calls, google-auth
+  library calls. Never hit real APIs in unit tests.
+- **Subprocess calls to cloud CLIs** — stub `gcloud`, `gh`, and
+  similar CLIs that require credentials or network. Mock at the
+  SDK function boundary, not `subprocess.run` globally. For
+  example, if `sdk/secrets.py` has `_check_secret_status()` that
+  calls `gcloud secrets describe --format=json`, mock
+  `_check_secret_status` to return the expected JSON dict. This
+  lets the calling function's logic run for real while isolating
+  the network boundary.
+- **Local subprocess calls** — do NOT stub `git init`, `git
+  commit`, or other local-only CLI tools. Let them run for real
+  in temp dirs.
 - **Everything else** — use real code. Real file I/O (to temp
-  dirs), real JSON parsing, real config loading. Sociable tests
-  catch integration bugs that mocks hide.
+  dirs), real JSON parsing, real YAML loading, real config
+  resolution. Sociable tests catch integration bugs that mocks
+  hide.
 
 ### Test names
 
