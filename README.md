@@ -8,6 +8,22 @@ gapp handles the full lifecycle: infrastructure, secrets, container builds, mult
 
 ## Quick Start
 
+### Option 1: Claude Code Plugin (recommended)
+
+Install the gapp plugin for guided deployment via Claude Code:
+
+```bash
+claude plugin marketplace add https://github.com/krisrowe/claude-plugins.git
+claude plugin marketplace update claude-plugins
+claude plugin install gapp@claude-plugins --scope user
+```
+
+Restart Claude Code, then ask: **"help me deploy this app"** or **"deploy this to Cloud Run"**. The plugin's deploy skill walks you through the entire lifecycle.
+
+### Option 2: CLI
+
+Install gapp as a standalone CLI:
+
 ```bash
 pipx install git+https://github.com/krisrowe/gapp.git
 ```
