@@ -128,6 +128,25 @@ service:
     DB_HOST: "localhost"
 ```
 
+### gapp.yaml Design Decisions
+
+**Auth is not gapp's concern.** gapp used to bundle auth middleware (`gapp_run` wrapper) and user management. These moved to `mcp-app` — a framework solutions import directly. gapp is purely a deployment tool. It deploys containers, manages secrets, mounts data volumes. How the solution handles auth internally is the solution's business.
+
+**`public` is decoupled from auth.** Previously, public access (Cloud Run `allUsers` IAM) was automatically granted when `auth_enabled=true` — because gapp's wrapper handled auth, so Cloud Run could be open. Now that solutions handle their own auth, `public` is an independent flag. Default is non-public (safe). Priority on each deploy: CLI/MCP arg → gapp.yaml `public:` → default false.
+
+**`service.entrypoint` and `service.cmd` are mutually exclusive.** `entrypoint` is an ASGI module:app path — gapp wraps it with uvicorn. `cmd` is a raw command — gapp passes it through as the Dockerfile CMD. Having both is ambiguous, so gapp rejects it.
+
+**How gapp determines what to run.** At deploy time, gapp resolves the container entrypoint in this order:
+
+1. `service.entrypoint` or `service.cmd` in gapp.yaml — explicit config, always takes priority. Use `entrypoint` for ASGI module:app paths (gapp wraps with uvicorn). Use `cmd` for raw commands (e.g., `mcp-app serve`). These are mutually exclusive.
+2. `Dockerfile` in the repo — solution controls its own build entirely. gapp builds it as-is, no generated CMD.
+3. `mcp-app.yaml` in the repo — gapp detects this file and generates `CMD ["mcp-app", "serve"]`. This is a minimal coupling: gapp knows the filename and the command string. If `mcp-app` renames its config file or changes its serve command, this detection breaks. The coupling is accepted because it eliminates an otherwise-mandatory `service.cmd` line from every mcp-app solution's gapp.yaml, and because mcp-app is a first-party framework in this ecosystem. Solutions that prefer no coupling can use `service.cmd: mcp-app serve` explicitly and skip detection.
+4. None of the above — error with guidance listing all options.
+
+**Dockerfile tradeoffs.** The design preference is for solutions to NOT maintain a Dockerfile — gapp generates one, meaning less maintenance and consistent builds across solutions. But maintaining a Dockerfile gives full control over the build (custom system deps, non-Python components, multi-stage builds). Both are valid. gapp uses a solution's Dockerfile without question when present.
+
+**`env` section replaces `secrets`.** The old `prerequisites.secrets` section only supported Secret Manager-backed values. The new `env` section supports plain values, secret-backed values, and auto-generation (`generate: true`). `{{VARIABLE}}` substitution resolves gapp-provided values (`SOLUTION_DATA_PATH`, `SOLUTION_NAME`) at deploy time.
+
 ## Static Terraform + Generated tfvars.json
 
 Solutions never own Terraform files. gapp manages TF:

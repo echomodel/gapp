@@ -93,32 +93,72 @@ Each command is idempotent and tells you what to do next.
 
 5. **`gapp ci trigger`** (Path B) — dispatches the solution's GitHub Actions workflow, which runs `gapp deploy` on a runner with WIF-authenticated GCP access. No local terraform or docker.
 
-## The `gapp.yaml` File
+## What Goes in Your Repo
 
-Add this to your repo root:
+gapp needs to know how to build and run your service. You have three options, from least to most configuration:
+
+### Option 1: Use the mcp-app framework (zero entrypoint config)
+
+If your repo has an `mcp-app.yaml`, gapp detects it and knows to run `mcp-app serve`. Your `gapp.yaml` only needs env vars and public access — no entrypoint configuration:
+
+```yaml
+public: true
+env:
+  - name: SIGNING_KEY
+    secret:
+      generate: true
+  - name: APP_USERS_PATH
+    value: "{{SOLUTION_DATA_PATH}}/users"
+```
+
+### Option 2: Specify a command or entrypoint
+
+Tell gapp what to run. Use `service.entrypoint` for an ASGI module:app path (gapp wraps it with uvicorn), or `service.cmd` for any command:
 
 ```yaml
 service:
-  entrypoint: mypackage.mcp.server:mcp_app   # REQUIRED: uvicorn module:app
+  entrypoint: mypackage.server:app    # gapp adds uvicorn + host + port
 
+# OR
+
+service:
+  cmd: mcp-app serve                  # runs exactly as written
+```
+
+Use one or the other, not both.
+
+### Option 3: Bring your own Dockerfile
+
+If your repo has a `Dockerfile`, gapp builds it as-is. You control the entire build — system dependencies, multi-stage builds, custom runtimes. Less to configure in gapp.yaml, but you maintain the Dockerfile yourself.
+
+### Priority
+
+If multiple options are present, gapp uses the first match:
+1. `service.entrypoint` or `service.cmd` in gapp.yaml
+2. `Dockerfile` in your repo
+3. `mcp-app.yaml` in your repo
+
+### Additional gapp.yaml settings
+
+```yaml
+public: false         # default — allow unauthenticated HTTP access?
+
+env:                  # environment variables
+  - name: LOG_LEVEL
+    value: INFO
+  - name: SIGNING_KEY
+    secret:             # backed by Secret Manager
+      generate: true    # auto-create if missing
+
+  # {{SOLUTION_DATA_PATH}} resolves to the GCS FUSE mount path
+  - name: APP_USERS_PATH
+    value: "{{SOLUTION_DATA_PATH}}/users"
+
+# Legacy — prerequisite secrets (still supported):
 prerequisites:
   secrets:
     api-token:
       description: "API authentication token"
-```
-
-Optional overrides:
-
-```yaml
-service:
-  entrypoint: mypackage.mcp.server:mcp_app
-  memory: "512Mi"       # default
-  cpu: "1"              # default
-  max_instances: 1      # default
-  public: false         # default
-  env:                  # default: {}
-    LOG_LEVEL: "INFO"
-  mcp_path: /mcp          # MCP endpoint path (enables gapp mcp commands)
 ```
 
 ### Credential Mediation (Runtime Wrapper)
