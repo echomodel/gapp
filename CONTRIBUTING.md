@@ -45,7 +45,7 @@ GAPP REPO (this repo — defines HOW to deploy)
 
 SOLUTION REPO (what gets deployed)
   gapp.yaml                             ← solution metadata, prerequisites
-  Dockerfile                            ← static, uses ARG ENTRYPOINT (created by gapp init)
+  Dockerfile                            ← optional; if absent, gapp generates one at build time
 
 GCP (runtime state)
   Project labels: gapp-{name}=default   ← links project to solution
@@ -77,7 +77,17 @@ Most values are derived, not configured:
 
 ### The 1:1:1 Default
 
-One repo = one solution = one Cloud Run service. Multi-service solutions are supported but are the exception, not the organizing principle.
+One repo = one solution = one Cloud Run service. This is the default. Multi-service repos are supported via the workspace pattern (see README).
+
+#### Workspace pattern internals
+
+When `paths:` is present in gapp.yaml, gapp iterates each path, loads that path's gapp.yaml, and deploys as an independent service. Each service gets its own Cloud Run service, Terraform state, service account, and secrets — same isolation as separate repos.
+
+Service name derivation: `{repo-name}-{path-segments-joined-with-hyphens}`. Override with `name:` in any gapp.yaml. The schema is recursive — any gapp.yaml can have both `paths:` and service config, and `paths:` targets can themselves have `paths:`.
+
+Container builds for multi-package repos: when no `pyproject.toml` exists at repo root, the Dockerfile finds all `pyproject.toml` files up to 2 levels deep and installs each. The entire repo is copied into the container so cross-directory dependencies resolve.
+
+Modeled on: npm workspaces (`package.json`), Cargo workspaces (`Cargo.toml`), Maven multi-module (`pom.xml`). Same filename at every level, same schema, different keys populated.
 
 ### GitHub-Centric Discovery
 
@@ -168,7 +178,7 @@ TF files are nearly identical boilerplate across solutions. Centralizing TF in g
 
 ### Static Dockerfile with Build Args
 
-Each solution repo has a static Dockerfile (created by `gapp init`) that uses `ARG ENTRYPOINT` to parameterize the uvicorn command. The Dockerfile is committed to the repo — no generation at build time.
+gapp generates a Dockerfile at build time from its template (`gapp/templates/Dockerfile`). The Dockerfile uses `ARG ENTRYPOINT` to parameterize the run command. Solutions can provide their own Dockerfile to take full control of the build.
 
 ### Source Integrity via `git archive`
 

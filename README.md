@@ -161,6 +161,44 @@ prerequisites:
       description: "API authentication token"
 ```
 
+### Multi-Service Repos
+
+A repo can contain multiple deployable services. Add `paths:` to your root `gapp.yaml`:
+
+```yaml
+paths:
+  - mcp/diet
+  - mcp/workout
+```
+
+Each path has its own `gapp.yaml` with service-specific config:
+
+```yaml
+# mcp/diet/gapp.yaml
+public: true
+env:
+  - name: SIGNING_KEY
+    secret:
+      generate: true
+  - name: APP_USERS_PATH
+    value: "{{SOLUTION_DATA_PATH}}/users"
+```
+
+Service names auto-derive from `{repo}-{path}` (e.g., `echofit-mcp-diet`). Override with `name:`:
+
+```yaml
+name: echofit
+public: true
+```
+
+`gapp.yaml` uses one schema everywhere. Any file can combine `paths:` (point to more services) with service config (`public:`, `env:`, etc.). No `paths:` key → single-service mode, same as before. Fully backwards compatible.
+
+**Name changes and Terraform:** If the service name changes (e.g., from `echofit` to `echofit-mcp`), Terraform will plan a destroy + create. You'll see this in the plan before anything happens. Use `name:` to preserve the existing service name when migrating, or accept the rename.
+
+#### Does gapp.yaml couple my app to gapp?
+
+No. It's a deployment descriptor — like `Dockerfile`, `fly.toml`, or `docker-compose.yml`. Doesn't modify code, add dependencies, or require imports. Remove it and the app works everywhere else. Repos routinely carry configs for multiple deployment tools.
+
 ### Credential Mediation (Runtime Wrapper)
 
 If your solution accesses a third-party API on behalf of users (e.g., Monarch Money, Google Workspace), enable credential mediation. gapp injects an ASGI wrapper at deploy time that handles client authentication and upstream credential management. Solutions remain unaware of the auth layer — they receive a standard `Authorization: Bearer <upstream-token>` header on every request.

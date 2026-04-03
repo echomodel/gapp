@@ -21,8 +21,22 @@ def save_manifest(repo_path: Path, manifest: dict) -> None:
         yaml.dump(manifest, f, default_flow_style=False, sort_keys=False)
 
 
+def get_paths(manifest: dict) -> list[str]:
+    """Return paths from the manifest, or empty list if none."""
+    return manifest.get("paths", [])
+
+
+def get_name(manifest: dict) -> str | None:
+    """Return explicit name override if set, else None."""
+    return manifest.get("name")
+
+
 def get_solution_name(manifest: dict, repo_path: Path) -> str:
     """Derive solution name from manifest or repo directory name."""
+    # Check top-level name: first
+    name = get_name(manifest)
+    if name:
+        return name
     solution = manifest.get("solution", {})
     return solution.get("name", repo_path.name)
 
