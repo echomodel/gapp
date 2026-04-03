@@ -433,10 +433,32 @@ Two paths — present both and let the user choose:
 
 Requires `terraform` and `gcloud` locally.
 
-Call `gapp_deploy`. Builds a container via Cloud Build and deploys
-to Cloud Run via Terraform. Requires a clean git tree —
-uncommitted changes block the build. Skips the build if the image
-for the current commit already exists.
+**Always use the async build + deploy flow.** This gives the
+user visibility into build progress instead of blocking silently
+for minutes.
+
+1. `gapp_build` — submits Cloud Build and returns immediately
+   with a `build_id`. The image builds remotely while the agent
+   can do other work (check secrets, review config, etc.).
+2. `gapp_deploy(build_ref=<build_id>)` — polls the build status.
+   Keep `build_check_timeout` short (10-30s) so the user sees
+   progress updates. If the build is still running, returns
+   `"status": "running"` with the same `build_ref` and log
+   progress — call again to keep polling. When done, runs
+   Terraform and returns the service URL.
+
+**Do not use long timeouts.** The point of the async flow is to
+report back frequently. Use 10-30s so each poll returns quickly
+with updated log lines and status. The user should see build
+progress, not a spinner.
+
+**Fallback: blocking deploy.** `gapp_deploy` with no `build_ref`
+does a full blocking build + terraform in one call. Avoid this —
+it blocks with no progress feedback.
+
+Both paths require a clean git tree — uncommitted changes block
+the build. The build is skipped if the image for the current
+commit already exists.
 
 ### Path B: CI/CD (recommended for ongoing use)
 
@@ -494,7 +516,7 @@ Use `gapp_mcp_status` to check MCP-specific health:
 
 After code changes are committed:
 
-- **Path A:** `gapp_deploy` — rebuilds if the commit SHA changed
+- **Path A:** `gapp_build` then `gapp_deploy(build_ref=...)` — rebuilds if the commit SHA changed
 - **Path B:** `gapp_ci_trigger` — dispatches GitHub Actions
 
 Remind the user: uncommitted changes won't be included. The build
@@ -524,7 +546,8 @@ workflow as needed:
 |------|---------|
 | `gapp_init` | Initialize a solution (create gapp.yaml, Dockerfile) |
 | `gapp_setup` | GCP foundation (APIs, bucket, labels) |
-| `gapp_deploy` | Build container + Terraform apply |
+| `gapp_build` | Submit async Cloud Build, returns build_id |
+| `gapp_deploy` | Poll build + Terraform apply (use with build_ref) |
 | `gapp_secret_list` | List prerequisite secrets and status |
 | `gapp_secret_set` | Store secret value in Secret Manager |
 | `gapp_ci_init` | Designate CI repo |
