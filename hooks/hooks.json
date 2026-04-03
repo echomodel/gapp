@@ -9,17 +9,6 @@
           }
         ]
       }
-    ],
-    "PreToolUse": [
-      {
-        "matcher": "mcp__gapp__gapp_deploy",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/deploy-hook.sh"
-          }
-        ]
-      }
     ]
   }
 }

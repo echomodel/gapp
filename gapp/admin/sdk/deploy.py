@@ -5,7 +5,7 @@ import os
 import shutil
 import subprocess
 import tempfile
-import uuid
+import time
 from pathlib import Path
 
 from gapp.admin.sdk.context import resolve_solution
@@ -21,43 +21,149 @@ from gapp.admin.sdk.manifest import (
 )
 
 
-def _deploy_cache_dir(solution_name: str) -> Path:
-    """Get the cache directory for deploy results."""
-    cache_base = os.environ.get("XDG_CACHE_HOME", os.path.expanduser("~/.cache"))
-    d = Path(cache_base) / "gapp" / solution_name / "deploy-results"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
 
+def start_build(solution: str | None = None) -> dict:
+    """Submit a Cloud Build and return immediately.
 
-def quick_deploy(auto_approve: bool = False, ref: str | None = None, solution: str | None = None) -> str:
-    """Run the build + terraform deploy, return a deploy_ref.
-
-    This is the heavy-lifting phase — streams output to stdout.
-    The result is cached so get_deploy_outcome() can retrieve it.
-    Not exposed as an MCP tool. Exposed as CLI subcommand for hooks.
+    Always async. Returns the build_id and project_id so the caller
+    can poll with check_build() or pass build_ref to deploy_solution().
     """
-    ctx = resolve_solution(solution)
-    if not ctx:
-        raise RuntimeError("Not inside a gapp solution. Run 'gapp init' first.")
-
+    ctx = _require_solution(solution)
     solution_name = ctx["name"]
-    project_id = ctx.get("project_id")
-    repo_path = ctx.get("repo_path")
-
-    if not project_id:
-        raise RuntimeError("No GCP project attached. Run 'gapp setup <project-id>' first.")
-    if not repo_path:
-        from gapp.admin.sdk.context import get_git_root
-        git_root = get_git_root()
-        if git_root and (git_root / "gapp.yaml").is_file():
-            repo_path = str(git_root)
-        else:
-            raise RuntimeError("No repo path found for this solution.")
-
-    repo_path = Path(repo_path)
+    project_id = ctx["project_id"]
+    repo_path = Path(ctx["repo_path"])
     manifest = load_manifest(repo_path)
 
-    # Workspace pattern
+    paths = get_paths(manifest)
+    if paths:
+        raise RuntimeError(
+            "Async build not supported for workspace (multi-service) solutions. "
+            "Use gapp_deploy without build_ref for a blocking deploy."
+        )
+
+    service_root = repo_path
+    entrypoint, ref_label = _resolve_entrypoint(manifest, service_root, repo_path)
+    auth_config = get_auth_config(manifest)
+    runtime_ref = get_runtime_ref(manifest)
+
+    deploy_sha = _get_head_sha(repo_path)
+    _check_dirty_tree(repo_path)
+
+    region = "us-central1"
+    _ensure_artifact_registry(project_id, region)
+
+    image = f"{region}-docker.pkg.dev/{project_id}/gapp/{solution_name}:{deploy_sha}"
+    if _image_exists(project_id, region, solution_name, deploy_sha):
+        return {
+            "build_id": None,
+            "project_id": project_id,
+            "image": image,
+            "status": "skipped",
+            "message": "Image already exists in Artifact Registry.",
+        }
+
+    build_id = _submit_build_async(
+        project_id, repo_path, image, entrypoint,
+        ref="HEAD", auth_config=auth_config, runtime_ref=runtime_ref,
+    )
+
+    return {
+        "build_id": build_id,
+        "project_id": project_id,
+        "image": image,
+        "status": "queued",
+    }
+
+
+def check_build(build_id: str, project_id: str) -> dict:
+    """Check the status of a Cloud Build by ID.
+
+    Returns status, image, and log URL. Does not modify any state.
+    """
+    result = subprocess.run(
+        ["gcloud", "builds", "describe", build_id,
+         "--project", project_id, "--format=json"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        return {"error": f"Failed to describe build {build_id}: {result.stderr.strip()}"}
+
+    build = json.loads(result.stdout)
+    raw_status = build.get("status", "UNKNOWN")
+
+    if raw_status == "SUCCESS":
+        status = "done"
+    elif raw_status in ("FAILURE", "TIMEOUT", "CANCELLED", "EXPIRED", "INTERNAL_ERROR"):
+        status = "failed"
+    else:
+        status = "running"
+
+    out = {
+        "build_id": build_id,
+        "status": status,
+        "cloud_build_status": raw_status,
+        "log_url": build.get("logUrl"),
+    }
+
+    # Extract image from results if build succeeded
+    results = build.get("results") or {}
+    images = results.get("images") or []
+    if images:
+        out["image"] = images[0].get("name")
+    elif build.get("images"):
+        out["image"] = build["images"][0]
+
+    # Fetch build log progress
+    log_result = subprocess.run(
+        ["gcloud", "builds", "log", build_id, "--project", project_id],
+        capture_output=True, text=True,
+    )
+    if log_result.returncode == 0 and log_result.stdout.strip():
+        lines = log_result.stdout.strip().splitlines()
+        out["log_lines"] = len(lines)
+        out["log_tail"] = lines[-3:] if len(lines) >= 3 else lines
+
+    return out
+
+
+def deploy_solution(
+    auto_approve: bool = False,
+    ref: str | None = None,
+    solution: str | None = None,
+    build_ref: str | None = None,
+    build_check_timeout: int = 10,
+) -> dict:
+    """Deploy the current solution.
+
+    Args:
+        auto_approve: Pass -auto-approve to terraform apply.
+        ref: Git ref (commit, tag, branch) to deploy.
+        solution: Solution name. Defaults to current directory.
+        build_ref: Cloud Build ID from a prior start_build() call.
+            When provided, polls for build completion then runs terraform.
+        build_check_timeout: Max seconds to poll for build completion
+            before returning a "running" status. Minimum 10.
+
+    Returns dict describing what was done.
+    """
+    if build_ref:
+        return _deploy_from_build(
+            build_ref=build_ref,
+            solution=solution,
+            auto_approve=auto_approve,
+            build_check_timeout=max(10, build_check_timeout),
+        )
+
+    # Full blocking deploy
+    ctx = _require_solution(solution)
+    solution_name = ctx["name"]
+    project_id = ctx["project_id"]
+    repo_path = Path(ctx["repo_path"])
+    manifest = load_manifest(repo_path)
+
     paths = get_paths(manifest)
     if paths:
         results = []
@@ -81,85 +187,163 @@ def quick_deploy(auto_approve: bool = False, ref: str | None = None, solution: s
                 ref=ref,
             )
             results.append(sub_result)
-        combined = {"services": results}
-    else:
-        combined = _deploy_single_service(
-            solution_name=solution_name,
-            project_id=project_id,
-            repo_path=repo_path,
-            manifest=manifest,
-            auto_approve=auto_approve,
-            ref=ref,
-        )
+        return {"services": results}
 
-    # Cache result and return deploy_ref
-    deploy_ref = uuid.uuid4().hex[:12]
-    cache_file = _deploy_cache_dir(solution_name) / f"{deploy_ref}.json"
-    cache_file.write_text(json.dumps(combined, indent=2))
-    return deploy_ref
+    return _deploy_single_service(
+        solution_name=solution_name,
+        project_id=project_id,
+        repo_path=repo_path,
+        manifest=manifest,
+        auto_approve=auto_approve,
+        ref=ref,
+    )
 
 
-def get_deploy_outcome(deploy_ref: str, solution: str | None = None) -> dict:
-    """Retrieve cached deploy result and combine with current status.
+# ---------------------------------------------------------------------------
+# Build-ref deploy path
+# ---------------------------------------------------------------------------
 
-    Reads and deletes the cached result (one-time use), then calls
-    gapp_status for current state. Returns combined picture.
-    """
-    ctx = resolve_solution(solution)
-    if not ctx:
-        raise RuntimeError("Not inside a gapp solution.")
-
+def _deploy_from_build(
+    build_ref: str,
+    solution: str | None,
+    auto_approve: bool,
+    build_check_timeout: int,
+) -> dict:
+    """Poll a Cloud Build and run terraform when it finishes."""
+    ctx = _require_solution(solution)
     solution_name = ctx["name"]
-    cache_file = _deploy_cache_dir(solution_name) / f"{deploy_ref}.json"
+    project_id = ctx["project_id"]
+    repo_path = Path(ctx["repo_path"])
 
-    if not cache_file.exists():
-        return {"error": f"Deploy ref '{deploy_ref}' not found. It may have already been consumed or the deploy didn't complete."}
+    # Poll loop: check immediately, then every 5s until timeout
+    start = time.monotonic()
+    status_info = check_build(build_ref, project_id)
 
-    # Read and delete immediately (one-time use)
-    deploy_result = json.loads(cache_file.read_text())
-    cache_file.unlink()
+    if "error" in status_info:
+        return status_info
 
-    # Get current status
-    from gapp.admin.sdk.status import get_solution_status
-    try:
-        status = get_solution_status(solution)
-        if hasattr(status, "model_dump"):
-            status = status.model_dump()
-    except Exception:
-        status = None
+    while status_info["status"] == "running":
+        elapsed = time.monotonic() - start
+        if elapsed >= build_check_timeout:
+            status_info["message"] = (
+                f"Build still running after {int(elapsed)}s. "
+                "Call gapp_deploy with the same build_ref to check again."
+            )
+            return status_info
+        time.sleep(5)
+        status_info = check_build(build_ref, project_id)
+
+    if status_info["status"] == "failed":
+        return {
+            "status": "failed",
+            "build_id": build_ref,
+            "cloud_build_status": status_info.get("cloud_build_status"),
+            "log_url": status_info.get("log_url"),
+            "message": "Cloud Build failed. Check the log URL for details.",
+        }
+
+    # Build succeeded — run terraform
+    image = status_info.get("image")
+    if not image:
+        return {"error": "Build succeeded but no image found in build output."}
+
+    manifest = load_manifest(repo_path)
+    service_config = get_service_config(manifest)
+    secrets = get_prerequisite_secrets(manifest)
+    auth_config = get_auth_config(manifest)
+
+    # Auto-generate secrets
+    from gapp.admin.sdk.manifest import get_env_vars
+    for entry in get_env_vars(manifest):
+        secret_cfg = entry.get("secret")
+        if isinstance(secret_cfg, dict) and secret_cfg.get("generate"):
+            secret_name = entry["name"].lower().replace("_", "-")
+            if not _secret_exists(project_id, secret_name):
+                import secrets as secrets_mod
+                _create_and_set_secret(project_id, secret_name, secrets_mod.token_urlsafe(32))
+
+    token = _get_access_token()
+    bucket_name = f"gapp-{solution_name}-{project_id}"
+    tf_result = _stage_and_apply(
+        solution_name=solution_name,
+        project_id=project_id,
+        image=image,
+        bucket_name=bucket_name,
+        service_config=service_config,
+        secrets=secrets,
+        auth_config=auth_config,
+        token=token,
+        auto_approve=auto_approve,
+        manifest=manifest,
+    )
 
     return {
-        "deploy": deploy_result,
-        "status": status,
+        "name": solution_name,
+        "project_id": project_id,
+        "image": image,
+        "build_status": "built",
+        "build_id": build_ref,
+        "terraform_status": tf_result["status"],
+        "service_url": tf_result.get("service_url"),
     }
 
 
-def deploy_solution(
-    auto_approve: bool = False,
-    ref: str | None = None,
-    solution: str | None = None,
-    deploy_ref: str | None = None,
-) -> dict:
-    """Deploy the current solution.
+# ---------------------------------------------------------------------------
+# Solution resolution
+# ---------------------------------------------------------------------------
 
-    Args:
-        auto_approve: Pass -auto-approve to terraform apply.
-        ref: Git ref (commit, tag, branch) to deploy.
-        solution: Solution name. Defaults to current directory.
-        deploy_ref: If provided, skip the build+terraform phase and
-            retrieve the outcome from a prior quick_deploy() call.
-            Set by PreToolUse hooks — not intended for direct use.
+def _require_solution(solution: str | None) -> dict:
+    """Resolve solution context, raising on missing fields."""
+    ctx = resolve_solution(solution)
+    if not ctx:
+        raise RuntimeError("Not inside a gapp solution. Run 'gapp init' first.")
 
-    Returns dict describing what was done.
-    """
-    # If deploy_ref is provided, the heavy lifting already happened
-    if deploy_ref:
-        return get_deploy_outcome(deploy_ref, solution)
+    if not ctx.get("project_id"):
+        raise RuntimeError("No GCP project attached. Run 'gapp setup <project-id>' first.")
 
-    # Otherwise, do the full deploy: quick_deploy + get_deploy_outcome
-    ref_id = quick_deploy(auto_approve=auto_approve, ref=ref, solution=solution)
-    return get_deploy_outcome(ref_id, solution)
+    if not ctx.get("repo_path"):
+        from gapp.admin.sdk.context import get_git_root
+        git_root = get_git_root()
+        if git_root and (git_root / "gapp.yaml").is_file():
+            ctx["repo_path"] = str(git_root)
+        else:
+            raise RuntimeError("No repo path found for this solution.")
 
+    return ctx
+
+
+def _resolve_entrypoint(manifest: dict, service_root: Path, repo_path: Path) -> tuple[str, str]:
+    """Detect entrypoint from manifest and filesystem. Returns (entrypoint, label)."""
+    entrypoint = get_entrypoint(manifest)
+
+    from gapp.admin.sdk.manifest import get_cmd
+    cmd = get_cmd(manifest)
+
+    if entrypoint and cmd:
+        raise RuntimeError("gapp.yaml has both service.entrypoint and service.cmd. Use one or the other.")
+
+    if entrypoint:
+        return entrypoint, "explicit"
+    elif cmd:
+        return f"__cmd__:{cmd}", "cmd"
+    elif (service_root / "Dockerfile").exists():
+        return "__dockerfile__", "dockerfile"
+    elif (service_root / "mcp-app.yaml").exists() or (repo_path / "mcp-app.yaml").exists():
+        return "__mcp_app__", "mcp-app"
+    else:
+        raise RuntimeError(
+            "Cannot determine how to run this service.\n"
+            "  Options (in priority order):\n"
+            "    1. Set service.entrypoint in gapp.yaml (ASGI module:app)\n"
+            "    2. Set service.cmd in gapp.yaml (raw command)\n"
+            "    3. Provide a Dockerfile\n"
+            "    4. Add mcp-app.yaml (framework handles serving)"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Single-service deploy (blocking path)
+# ---------------------------------------------------------------------------
 
 def _deploy_single_service(
     solution_name: str,
@@ -171,57 +355,15 @@ def _deploy_single_service(
     auto_approve: bool = False,
     ref: str | None = None,
 ) -> dict:
-    """Deploy a single service from a manifest.
-
-    Args:
-        solution_name: Cloud Run service name.
-        project_id: GCP project ID.
-        repo_path: Git repo root (always the full repo).
-        manifest: Parsed gapp.yaml for this service.
-        service_path: Subdirectory within repo (for multi-service repos).
-        auto_approve: Skip Terraform confirmation.
-        ref: Git ref to deploy.
-    """
-    # Resolve the service root for entrypoint detection
+    """Deploy a single service: build + terraform."""
     service_root = repo_path / service_path if service_path else repo_path
-
-    entrypoint = get_entrypoint(manifest)
-
-    # Entrypoint detection priority:
-    # 1. service.entrypoint or service.cmd in gapp.yaml (mutually exclusive, trumps all)
-    # 2. Dockerfile in service root → use as-is
-    # 3. mcp-app.yaml in service root → mcp-app serve
-    # 4. Error
-    from gapp.admin.sdk.manifest import get_cmd
-    cmd = get_cmd(manifest)
-
-    if entrypoint and cmd:
-        raise RuntimeError("gapp.yaml has both service.entrypoint and service.cmd. Use one or the other.")
-
-    if entrypoint:
-        pass  # ASGI module:app for uvicorn
-    elif cmd:
-        entrypoint = f"__cmd__:{cmd}"
-    elif (service_root / "Dockerfile").exists():
-        entrypoint = "__dockerfile__"
-    elif (service_root / "mcp-app.yaml").exists() or (repo_path / "mcp-app.yaml").exists():
-        entrypoint = "__mcp_app__"
-    else:
-        raise RuntimeError(
-            "Cannot determine how to run this service.\n"
-            "  Options (in priority order):\n"
-            "    1. Set service.entrypoint in gapp.yaml (ASGI module:app)\n"
-            "    2. Set service.cmd in gapp.yaml (raw command)\n"
-            "    3. Provide a Dockerfile\n"
-            "    4. Add mcp-app.yaml (framework handles serving)"
-        )
+    entrypoint, _ = _resolve_entrypoint(manifest, service_root, repo_path)
 
     service_config = get_service_config(manifest)
     secrets = get_prerequisite_secrets(manifest)
     auth_config = get_auth_config(manifest)
     runtime_ref = get_runtime_ref(manifest)
 
-    # Resolve git ref to a short SHA for image tagging
     if ref:
         deploy_sha = _resolve_ref(repo_path, ref)
         deploy_ref = ref
@@ -239,29 +381,22 @@ def _deploy_single_service(
         "service_url": None,
     }
 
-    # Get access token for consistent identity across gcloud and terraform
     token = _get_access_token()
-
-    # Ensure Artifact Registry repo exists
     region = "us-central1"
     _ensure_artifact_registry(project_id, region)
 
-    # Build and push container image (skip if image:sha already exists)
     image = f"{region}-docker.pkg.dev/{project_id}/gapp/{solution_name}:{deploy_sha}"
     if _image_exists(project_id, region, solution_name, deploy_sha):
         result["build_status"] = "skipped"
     else:
-        _build_and_push(
-            project_id, repo_path, image,
-            entrypoint,
-            ref=deploy_ref,
-            auth_config=auth_config,
-            runtime_ref=runtime_ref,
+        _submit_build_sync(
+            project_id, repo_path, image, entrypoint,
+            ref=deploy_ref, auth_config=auth_config, runtime_ref=runtime_ref,
         )
         result["build_status"] = "built"
     result["image"] = image
 
-    # Auto-generate secrets declared with generate: true
+    # Auto-generate secrets
     from gapp.admin.sdk.manifest import get_env_vars
     for entry in get_env_vars(manifest):
         secret_cfg = entry.get("secret")
@@ -271,7 +406,6 @@ def _deploy_single_service(
                 import secrets as secrets_mod
                 _create_and_set_secret(project_id, secret_name, secrets_mod.token_urlsafe(32))
 
-    # Stage Terraform and apply
     bucket_name = f"gapp-{solution_name}-{project_id}"
     tf_result = _stage_and_apply(
         solution_name=solution_name,
@@ -291,167 +425,78 @@ def _deploy_single_service(
     return result
 
 
-def _get_access_token() -> str:
-    """Get access token from gcloud for consistent identity."""
-    result = subprocess.run(
-        ["gcloud", "auth", "print-access-token"],
-        capture_output=True,
-        text=True,
+# ---------------------------------------------------------------------------
+# Cloud Build helpers
+# ---------------------------------------------------------------------------
+
+def _prepare_build_dir(
+    repo_path: Path, image: str, entrypoint: str,
+    *, ref: str = "HEAD", auth_config: dict | None = None,
+    runtime_ref: str | None = None,
+) -> tuple[str, str, str]:
+    """Create temp dir with source archive and Dockerfile template.
+
+    Returns (build_dir, build_entrypoint, build_runtime_ref).
+    Caller owns the temp dir lifetime.
+    """
+    build_dir = tempfile.mkdtemp(prefix="gapp-build-")
+
+    archive = subprocess.Popen(
+        ["git", "archive", "--format=tar", ref],
+        stdout=subprocess.PIPE, cwd=repo_path,
     )
-    if result.returncode != 0:
-        raise RuntimeError("Failed to get access token. Run 'gcloud auth login' first.")
-    return result.stdout.strip()
-
-
-def _ensure_artifact_registry(project_id: str, region: str) -> None:
-    """Ensure Artifact Registry repo 'gapp' exists. Idempotent."""
     subprocess.run(
-        ["gcloud", "services", "enable", "artifactregistry.googleapis.com",
-         "--project", project_id],
-        capture_output=True,
-        text=True,
+        ["tar", "xf", "-", "-C", build_dir],
+        stdin=archive.stdout, check=True,
     )
+    archive.wait()
 
-    check = subprocess.run(
-        ["gcloud", "artifacts", "repositories", "describe", "gapp",
-         "--location", region, "--project", project_id],
-        capture_output=True,
-        text=True,
-    )
-    if check.returncode == 0:
-        return
+    build_runtime_ref = ""
 
-    result = subprocess.run(
-        ["gcloud", "artifacts", "repositories", "create", "gapp",
-         "--repository-format", "docker",
-         "--location", region,
-         "--project", project_id],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"Failed to create Artifact Registry repo: {result.stderr.strip()}")
+    if entrypoint == "__dockerfile__":
+        if not (Path(build_dir) / "Dockerfile").exists():
+            raise RuntimeError("Dockerfile sentinel set but no Dockerfile in repo.")
+        shutil.copy2(_get_template("cloudbuild.yaml"), Path(build_dir) / "cloudbuild.yaml")
+        build_entrypoint = ""
+    elif entrypoint == "__mcp_app__":
+        shutil.copy2(_get_template("Dockerfile"), Path(build_dir) / "Dockerfile")
+        shutil.copy2(_get_template("cloudbuild.yaml"), Path(build_dir) / "cloudbuild.yaml")
+        build_entrypoint = "__mcp_app_serve__"
+    elif entrypoint.startswith("__cmd__:"):
+        raw_cmd = entrypoint[len("__cmd__:"):]
+        shutil.copy2(_get_template("Dockerfile"), Path(build_dir) / "Dockerfile")
+        shutil.copy2(_get_template("cloudbuild.yaml"), Path(build_dir) / "cloudbuild.yaml")
+        build_entrypoint = f"__cmd__:{raw_cmd}"
+    else:
+        shutil.copy2(_get_template("Dockerfile"), Path(build_dir) / "Dockerfile")
+        shutil.copy2(_get_template("cloudbuild.yaml"), Path(build_dir) / "cloudbuild.yaml")
+        build_entrypoint = entrypoint
 
+        if auth_config:
+            if not runtime_ref:
+                raise RuntimeError(
+                    "Auth is enabled but no runtime version specified.\n"
+                    "  Add to gapp.yaml:\n"
+                    "    service:\n"
+                    "      runtime: main  # gapp git ref (tag, branch, or commit)"
+                )
+            build_entrypoint = "gapp_run.wrapper:app"
+            build_runtime_ref = runtime_ref
 
-def _resolve_ref(repo_path: Path, ref: str) -> str:
-    """Resolve a git ref (commit, tag, branch) to a short SHA."""
-    result = subprocess.run(
-        ["git", "rev-parse", "--short=12", ref],
-        capture_output=True,
-        text=True,
-        cwd=repo_path,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"Failed to resolve git ref '{ref}'. Is it a valid commit, tag, or branch?")
-    return result.stdout.strip()
-
-
-def _get_head_sha(repo_path: Path) -> str:
-    """Get short SHA of HEAD commit."""
-    return _resolve_ref(repo_path, "HEAD")
+    return build_dir, build_entrypoint, build_runtime_ref
 
 
-def _check_dirty_tree(repo_path: Path) -> None:
-    """Block deploy if working tree has uncommitted changes."""
-    result = subprocess.run(
-        ["git", "status", "--porcelain"],
-        capture_output=True,
-        text=True,
-        cwd=repo_path,
-    )
-    if result.stdout.strip():
-        raise RuntimeError(
-            "Working tree has uncommitted changes. Commit or stash before deploying."
-        )
-
-
-def _image_exists(
-    project_id: str, region: str, solution_name: str, tag: str,
-) -> bool:
-    """Check if image:tag already exists in Artifact Registry."""
-    result = subprocess.run(
-        ["gcloud", "artifacts", "docker", "images", "list",
-         f"{region}-docker.pkg.dev/{project_id}/gapp/{solution_name}",
-         "--filter", f"tags:{tag}",
-         "--format", "value(tags)",
-         "--project", project_id],
-        capture_output=True,
-        text=True,
-    )
-    return tag in result.stdout
-
-
-def _get_template(name: str) -> Path:
-    """Get the path to a gapp template file."""
-    return Path(__file__).resolve().parent.parent.parent / "templates" / name
-
-
-def _build_and_push(
+def _submit_build_sync(
     project_id: str, repo_path: Path, image: str, entrypoint: str,
     *, ref: str = "HEAD", auth_config: dict | None = None,
     runtime_ref: str | None = None,
 ) -> None:
-    """Build container via Cloud Build using git archive for source integrity.
-
-    Extracts git archive of the specified ref to a temp dir, copies gapp's
-    Dockerfile template into it, and submits to Cloud Build.
-
-    When auth is enabled and runtime_ref is set, the Dockerfile installs
-    gapp_run from the gapp GitHub repo at the specified ref.
-    """
-    with tempfile.TemporaryDirectory(prefix="gapp-build-") as build_dir:
-        # Extract committed source into temp dir
-        archive = subprocess.Popen(
-            ["git", "archive", "--format=tar", ref],
-            stdout=subprocess.PIPE,
-            cwd=repo_path,
-        )
-        subprocess.run(
-            ["tar", "xf", "-", "-C", build_dir],
-            stdin=archive.stdout,
-            check=True,
-        )
-        archive.wait()
-
-        # Determine Dockerfile source and entrypoint
-        build_runtime_ref = ""
-
-        if entrypoint == "__dockerfile__":
-            # Solution has its own Dockerfile — use it, skip gapp templates
-            if not (Path(build_dir) / "Dockerfile").exists():
-                raise RuntimeError("Dockerfile sentinel set but no Dockerfile in repo.")
-            shutil.copy2(_get_template("cloudbuild.yaml"), Path(build_dir) / "cloudbuild.yaml")
-            build_entrypoint = ""  # not used — Dockerfile has its own CMD
-        elif entrypoint == "__mcp_app__":
-            # mcp-app.yaml detected — use mcp-app serve as CMD
-            shutil.copy2(_get_template("Dockerfile"), Path(build_dir) / "Dockerfile")
-            shutil.copy2(_get_template("cloudbuild.yaml"), Path(build_dir) / "cloudbuild.yaml")
-            build_entrypoint = "__mcp_app_serve__"
-        elif entrypoint.startswith("__cmd__:"):
-            # Raw command from service.cmd
-            raw_cmd = entrypoint[len("__cmd__:"):]
-            shutil.copy2(_get_template("Dockerfile"), Path(build_dir) / "Dockerfile")
-            shutil.copy2(_get_template("cloudbuild.yaml"), Path(build_dir) / "cloudbuild.yaml")
-            build_entrypoint = f"__cmd__:{raw_cmd}"
-        else:
-            # Explicit ASGI entrypoint from gapp.yaml
-            shutil.copy2(_get_template("Dockerfile"), Path(build_dir) / "Dockerfile")
-            shutil.copy2(_get_template("cloudbuild.yaml"), Path(build_dir) / "cloudbuild.yaml")
-            build_entrypoint = entrypoint
-
-            # When auth enabled: swap entrypoint to the gapp_run wrapper
-            if auth_config:
-                if not runtime_ref:
-                    raise RuntimeError(
-                        "Auth is enabled but no runtime version specified.\n"
-                        "  Add to gapp.yaml:\n"
-                        "    service:\n"
-                        "      runtime: main  # gapp git ref (tag, branch, or commit)"
-                    )
-                build_entrypoint = "gapp_run.wrapper:app"
-                build_runtime_ref = runtime_ref
-
-        # Submit to Cloud Build with substitutions
+    """Build container via Cloud Build (blocking)."""
+    build_dir, build_entrypoint, build_runtime_ref = _prepare_build_dir(
+        repo_path, image, entrypoint,
+        ref=ref, auth_config=auth_config, runtime_ref=runtime_ref,
+    )
+    try:
         result = subprocess.run(
             ["gcloud", "builds", "submit",
              "--config", f"{build_dir}/cloudbuild.yaml",
@@ -459,12 +504,9 @@ def _build_and_push(
              f"_ENTRYPOINT={build_entrypoint},_IMAGE={image},_RUNTIME_REF={build_runtime_ref}",
              "--project", project_id,
              build_dir],
-            text=True,
-            capture_output=True,
+            text=True, capture_output=True,
         )
         if result.returncode != 0:
-            # Cloud Build may succeed but gcloud fails to stream logs (e.g., CI
-            # runner lacks log bucket access). Check if the image was pushed.
             check = subprocess.run(
                 ["gcloud", "artifacts", "docker", "images", "list",
                  "--include-tags", "--filter", f"tags:{image.rsplit(':', 1)[-1]}",
@@ -473,14 +515,122 @@ def _build_and_push(
                 capture_output=True, text=True,
             )
             if check.returncode == 0 and image.rsplit(":", 1)[-1] in check.stdout:
-                return  # Build succeeded despite log streaming failure
+                return
             raise RuntimeError(
                 f"Cloud Build failed.\n  {result.stderr.strip() if result.stderr else 'Check Cloud Build logs in GCP Console.'}"
             )
+    finally:
+        shutil.rmtree(build_dir, ignore_errors=True)
+
+
+def _submit_build_async(
+    project_id: str, repo_path: Path, image: str, entrypoint: str,
+    *, ref: str = "HEAD", auth_config: dict | None = None,
+    runtime_ref: str | None = None,
+) -> str:
+    """Submit Cloud Build with --async. Returns the build ID."""
+    build_dir, build_entrypoint, build_runtime_ref = _prepare_build_dir(
+        repo_path, image, entrypoint,
+        ref=ref, auth_config=auth_config, runtime_ref=runtime_ref,
+    )
+    try:
+        result = subprocess.run(
+            ["gcloud", "builds", "submit", "--async", "--format=json",
+             "--config", f"{build_dir}/cloudbuild.yaml",
+             "--substitutions",
+             f"_ENTRYPOINT={build_entrypoint},_IMAGE={image},_RUNTIME_REF={build_runtime_ref}",
+             "--project", project_id,
+             build_dir],
+            text=True, capture_output=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"Cloud Build submit failed.\n  {result.stderr.strip() if result.stderr else 'Unknown error.'}"
+            )
+        build = json.loads(result.stdout)
+        return build["id"]
+    finally:
+        shutil.rmtree(build_dir, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# GCP helpers
+# ---------------------------------------------------------------------------
+
+def _get_access_token() -> str:
+    result = subprocess.run(
+        ["gcloud", "auth", "print-access-token"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError("Failed to get access token. Run 'gcloud auth login' first.")
+    return result.stdout.strip()
+
+
+def _ensure_artifact_registry(project_id: str, region: str) -> None:
+    subprocess.run(
+        ["gcloud", "services", "enable", "artifactregistry.googleapis.com",
+         "--project", project_id],
+        capture_output=True, text=True,
+    )
+    check = subprocess.run(
+        ["gcloud", "artifacts", "repositories", "describe", "gapp",
+         "--location", region, "--project", project_id],
+        capture_output=True, text=True,
+    )
+    if check.returncode == 0:
+        return
+    result = subprocess.run(
+        ["gcloud", "artifacts", "repositories", "create", "gapp",
+         "--repository-format", "docker",
+         "--location", region,
+         "--project", project_id],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"Failed to create Artifact Registry repo: {result.stderr.strip()}")
+
+
+def _resolve_ref(repo_path: Path, ref: str) -> str:
+    result = subprocess.run(
+        ["git", "rev-parse", "--short=12", ref],
+        capture_output=True, text=True, cwd=repo_path,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"Failed to resolve git ref '{ref}'. Is it a valid commit, tag, or branch?")
+    return result.stdout.strip()
+
+
+def _get_head_sha(repo_path: Path) -> str:
+    return _resolve_ref(repo_path, "HEAD")
+
+
+def _check_dirty_tree(repo_path: Path) -> None:
+    result = subprocess.run(
+        ["git", "status", "--porcelain"],
+        capture_output=True, text=True, cwd=repo_path,
+    )
+    if result.stdout.strip():
+        raise RuntimeError("Working tree has uncommitted changes. Commit or stash before deploying.")
+
+
+def _image_exists(project_id: str, region: str, solution_name: str, tag: str) -> bool:
+    result = subprocess.run(
+        ["gcloud", "artifacts", "docker", "images", "list",
+         f"{region}-docker.pkg.dev/{project_id}/gapp/{solution_name}",
+         "--filter", f"tags:{tag}",
+         "--format", "value(tags)",
+         "--project", project_id],
+        capture_output=True, text=True,
+    )
+    return tag in result.stdout
+
+
+def _get_template(name: str) -> Path:
+    return Path(__file__).resolve().parent.parent.parent / "templates" / name
 
 
 def _secret_exists(project_id: str, secret_name: str) -> bool:
-    """Check if a secret exists in Secret Manager."""
     result = subprocess.run(
         ["gcloud", "secrets", "describe", secret_name, "--project", project_id],
         capture_output=True, text=True,
@@ -489,7 +639,6 @@ def _secret_exists(project_id: str, secret_name: str) -> bool:
 
 
 def _create_and_set_secret(project_id: str, secret_name: str, value: str) -> None:
-    """Create a secret in Secret Manager and set its initial value."""
     subprocess.run(
         ["gcloud", "secrets", "create", secret_name, "--project", project_id,
          "--replication-policy=automatic"],
@@ -503,13 +652,10 @@ def _create_and_set_secret(project_id: str, secret_name: str, value: str) -> Non
 
 
 def _secret_name_to_env_var(name: str) -> str:
-    """Convert kebab-case secret name to UPPER_SNAKE env var name."""
     return name.upper().replace("-", "_")
 
 
 def _get_tf_source_dir() -> Path:
-    """Get the path to gapp's static Terraform files."""
-    # Walk up from this file to find the repo root's terraform/ directory
     return Path(__file__).resolve().parent.parent.parent / "terraform"
 
 
@@ -523,15 +669,11 @@ def _build_tfvars(
     env_vars: list[dict] | None = None,
     public: bool | None = None,
 ) -> dict:
-    """Build the tfvars dict from manifest config."""
     from gapp.admin.sdk.manifest import resolve_env_vars
 
     bucket_name = f"gapp-{solution_name}-{project_id}"
-
-    # Start with legacy service.env (dict format)
     env = dict(service_config.get("env", {}))
 
-    # Resolve new-format env vars (list with {{VARIABLE}} substitution)
     if env_vars:
         gapp_vars = {
             "SOLUTION_DATA_PATH": "/mnt/data",
@@ -543,17 +685,14 @@ def _build_tfvars(
             name = entry["name"]
             secret_cfg = entry.get("secret")
             if secret_cfg:
-                # Secret-backed — derive secret manager name from env var name
                 secret_name = name.lower().replace("_", "-")
                 secret_env[name] = secret_name
             elif "value" in entry:
                 env[name] = entry["value"]
 
-    # When auth enabled, set GAPP_APP so the wrapper knows what to import
     if auth_config:
         env["GAPP_APP"] = service_config["entrypoint"]
 
-    # Merge legacy prerequisite secrets with new env-declared secrets
     all_secrets = {
         _secret_name_to_env_var(name): name
         for name in (secrets or {})
@@ -561,7 +700,7 @@ def _build_tfvars(
     if env_vars:
         all_secrets.update(secret_env)
 
-    tfvars = {
+    return {
         "project_id": project_id,
         "service_name": solution_name,
         "image": image,
@@ -574,11 +713,9 @@ def _build_tfvars(
         "public": bool(public) if public is not None else bool(auth_config),
         "auth_enabled": bool(auth_config),
     }
-    return tfvars
 
 
 def _get_staging_dir(solution_name: str) -> Path:
-    """Get the staging directory for a solution's Terraform files."""
     cache_base = os.environ.get("XDG_CACHE_HOME", os.path.expanduser("~/.cache"))
     return Path(cache_base) / "gapp" / solution_name / "terraform"
 
@@ -598,7 +735,6 @@ def _stage_and_apply(
     """Copy static TF files to staging dir, write tfvars.json, and apply."""
     env = {**os.environ, "GOOGLE_OAUTH_ACCESS_TOKEN": token}
 
-    # Stage: wipe and copy static TF files
     staging_dir = _get_staging_dir(solution_name)
     if staging_dir.exists():
         shutil.rmtree(staging_dir)
@@ -608,7 +744,6 @@ def _stage_and_apply(
     for tf_file in tf_source.glob("*.tf"):
         shutil.copy2(tf_file, staging_dir)
 
-    # Write tfvars.json
     from gapp.admin.sdk.manifest import get_env_vars, get_public
     env_vars = get_env_vars(manifest or {})
     public = get_public(manifest or {})
@@ -619,44 +754,28 @@ def _stage_and_apply(
     )
     (staging_dir / "terraform.tfvars.json").write_text(json.dumps(tfvars, indent=2))
 
-    # Terraform init with GCS backend (upgrade ensures latest module versions)
     init_result = subprocess.run(
         ["terraform", "init",
          f"-backend-config=bucket={bucket_name}",
          "-backend-config=prefix=terraform/state",
          "-input=false",
          "-upgrade"],
-        cwd=staging_dir,
-        env=env,
-        text=True,
+        cwd=staging_dir, env=env, text=True,
     )
     if init_result.returncode != 0:
         raise RuntimeError("Terraform init failed. Check output above.")
 
-    # Terraform apply
-    apply_cmd = [
-        "terraform", "apply",
-        "-input=false",
-    ]
+    apply_cmd = ["terraform", "apply", "-input=false"]
     if auto_approve:
         apply_cmd.append("-auto-approve")
 
-    apply_result = subprocess.run(
-        apply_cmd,
-        cwd=staging_dir,
-        env=env,
-        text=True,
-    )
+    apply_result = subprocess.run(apply_cmd, cwd=staging_dir, env=env, text=True)
     if apply_result.returncode != 0:
         raise RuntimeError("Terraform apply failed. Check output above.")
 
-    # Get service URL
     output_result = subprocess.run(
         ["terraform", "output", "-raw", "service_url"],
-        cwd=staging_dir,
-        env=env,
-        capture_output=True,
-        text=True,
+        cwd=staging_dir, env=env, capture_output=True, text=True,
     )
 
     return {

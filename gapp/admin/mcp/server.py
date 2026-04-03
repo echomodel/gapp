@@ -52,29 +52,52 @@ def gapp_setup(project_id: str | None = None, solution: str | None = None) -> di
 
 
 @mcp.tool()
+def gapp_build(solution: str | None = None) -> dict:
+    """Submit a Cloud Build for a gapp solution (always async).
+
+    Returns immediately with a build_id. Use gapp_deploy with
+    build_ref=<build_id> to poll for completion and run terraform.
+
+    Flow: gapp_build → gapp_deploy(build_ref=...) → done.
+
+    Prerequisites: gapp_init and gapp_setup must have been run first.
+
+    Args:
+        solution: Solution name. Defaults to current directory's solution.
+    """
+    from gapp.admin.sdk.deploy import start_build
+    return start_build(solution=solution)
+
+
+@mcp.tool()
 def gapp_deploy(
     auto_approve: bool = True,
     ref: str | None = None,
     solution: str | None = None,
-    deploy_ref: str | None = None,
+    build_ref: str | None = None,
+    build_check_timeout: int = 10,
 ) -> dict:
-    """Deploy a gapp solution to Cloud Run (local deploy path).
+    """Deploy a gapp solution to Cloud Run.
 
-    Builds container via Cloud Build and deploys via Terraform.
-    Requires terraform and gcloud installed locally, and a clean git
-    tree unless ref is specified.
+    Without build_ref: full blocking deploy (build + terraform).
+    With build_ref: poll for build completion, then run terraform.
+    If the build is still running when the timeout expires, returns
+    a "running" status — call again with the same build_ref to retry.
 
     Prerequisites: gapp_init and gapp_setup must have been run first.
-    If terraform is not available locally, use the CI/CD path instead
-    (gapp_ci_init → gapp_ci_setup → gapp_ci_trigger).
 
     Args:
         auto_approve: Skip Terraform confirmation prompt (default: True).
         ref: Git ref to deploy (commit, tag, branch). Skips dirty tree check.
         solution: Solution name. Defaults to current directory's solution.
+        build_ref: Cloud Build ID from a prior gapp_build call.
+        build_check_timeout: Max seconds to poll (default/minimum: 10).
     """
     from gapp.admin.sdk.deploy import deploy_solution
-    return deploy_solution(auto_approve=auto_approve, ref=ref, solution=solution, deploy_ref=deploy_ref)
+    return deploy_solution(
+        auto_approve=auto_approve, ref=ref, solution=solution,
+        build_ref=build_ref, build_check_timeout=build_check_timeout,
+    )
 
 
 @mcp.tool()

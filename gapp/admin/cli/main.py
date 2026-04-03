@@ -90,20 +90,25 @@ def deploy(ref, solution):
     click.echo()
 
 
-@main.command("quick-deploy")
-@click.option("--ref", default=None, help="Git ref to deploy.")
+@main.command("build")
 @click.option("--solution", default=None, help="Solution name.")
-def quick_deploy_cmd(ref, solution):
-    """Build + terraform (streams output). Prints deploy_ref for gapp_deploy hook."""
-    from gapp.admin.sdk.deploy import quick_deploy
+def build_cmd(solution):
+    """Submit async Cloud Build. Prints build_id."""
+    from gapp.admin.sdk.deploy import start_build
 
     try:
-        deploy_ref = quick_deploy(auto_approve=True, ref=ref, solution=solution)
+        result = start_build(solution=solution)
     except RuntimeError as e:
         click.echo(f"  Error: {e}", err=True)
         raise SystemExit(1)
 
-    click.echo(deploy_ref)
+    if result["status"] == "skipped":
+        click.echo(f"  Image already exists: {result['image']}")
+        return
+
+    click.echo(f"  Build submitted: {result['build_id']}")
+    click.echo(f"  Image: {result['image']}")
+    click.echo(f"  Status: {result['status']}")
 
 
 @main.command()
