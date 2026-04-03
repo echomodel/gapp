@@ -9,6 +9,17 @@
           }
         ]
       }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "mcp__gapp__gapp_deploy",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "input=$(cat); ref=$(echo \"$input\" | jq -r '.tool_input.ref // empty'); solution=$(echo \"$input\" | jq -r '.tool_input.solution // empty'); ref_arg=''; sol_arg=''; [ -n \"$ref\" ] && ref_arg=\"--ref $ref\"; [ -n \"$solution\" ] && sol_arg=\"--solution $solution\"; deploy_ref=$(gapp quick-deploy $ref_arg $sol_arg 2>&1 | tee /dev/stderr | tail -1); echo \"$input\" | jq --arg dr \"$deploy_ref\" '.tool_input.deploy_ref = $dr'"
+          }
+        ]
+      }
     ]
   }
 }
