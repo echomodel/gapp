@@ -80,13 +80,30 @@ def deploy(ref, solution):
         click.echo(f"  Error: {e}", err=True)
         raise SystemExit(1)
 
+    deploy_data = result.get("deploy", result)
     click.echo()
-    click.echo(f"  {result['name']} deployed to {result['project_id']}")
-    build_msg = "already exists, skipped build" if result.get("build_status") == "skipped" else "built"
-    click.echo(f"    Image: {result['image']} ({build_msg})")
-    if result.get("service_url"):
-        click.echo(f"    URL:   {result['service_url']}")
+    click.echo(f"  {deploy_data.get('name', 'unknown')} deployed to {deploy_data.get('project_id', 'unknown')}")
+    build_msg = "already exists, skipped build" if deploy_data.get("build_status") == "skipped" else "built"
+    click.echo(f"    Image: {deploy_data.get('image', 'unknown')} ({build_msg})")
+    if deploy_data.get("service_url"):
+        click.echo(f"    URL:   {deploy_data['service_url']}")
     click.echo()
+
+
+@main.command("quick-deploy")
+@click.option("--ref", default=None, help="Git ref to deploy.")
+@click.option("--solution", default=None, help="Solution name.")
+def quick_deploy_cmd(ref, solution):
+    """Build + terraform (streams output). Prints deploy_ref for gapp_deploy hook."""
+    from gapp.admin.sdk.deploy import quick_deploy
+
+    try:
+        deploy_ref = quick_deploy(auto_approve=True, ref=ref, solution=solution)
+    except RuntimeError as e:
+        click.echo(f"  Error: {e}", err=True)
+        raise SystemExit(1)
+
+    click.echo(deploy_ref)
 
 
 @main.command()

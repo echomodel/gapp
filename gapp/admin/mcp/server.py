@@ -56,6 +56,7 @@ def gapp_deploy(
     auto_approve: bool = True,
     ref: str | None = None,
     solution: str | None = None,
+    deploy_ref: str | None = None,
 ) -> dict:
     """Deploy a gapp solution to Cloud Run (local deploy path).
 
@@ -73,7 +74,7 @@ def gapp_deploy(
         solution: Solution name. Defaults to current directory's solution.
     """
     from gapp.admin.sdk.deploy import deploy_solution
-    return deploy_solution(auto_approve=auto_approve, ref=ref, solution=solution)
+    return deploy_solution(auto_approve=auto_approve, ref=ref, solution=solution, deploy_ref=deploy_ref)
 
 
 @mcp.tool()

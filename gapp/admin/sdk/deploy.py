@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import uuid
 from pathlib import Path
 
 from gapp.admin.sdk.context import resolve_solution
@@ -20,41 +21,32 @@ from gapp.admin.sdk.manifest import (
 )
 
 
-def deploy_solution(auto_approve: bool = False, ref: str | None = None, solution: str | None = None) -> dict:
-    """Deploy the current solution.
+def _deploy_cache_dir(solution_name: str) -> Path:
+    """Get the cache directory for deploy results."""
+    cache_base = os.environ.get("XDG_CACHE_HOME", os.path.expanduser("~/.cache"))
+    d = Path(cache_base) / "gapp" / solution_name / "deploy-results"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
 
-    Steps:
-    1. Resolve solution context and load manifest
-    2. Validate entrypoint and clean git tree (skipped when ref is provided)
-    3. Build container via Cloud Build (git archive, skip if image:sha exists)
-    4. Stage static Terraform + write tfvars.json
-    5. Terraform init with GCS backend + apply
 
-    Args:
-        auto_approve: Pass -auto-approve to terraform apply.
-        ref: Git ref (commit, tag, branch) to deploy. When provided, the dirty
-            tree check is skipped and the specified ref is used for both the
-            image tag and git archive source. When omitted, HEAD is used and
-            the working tree must be clean.
+def quick_deploy(auto_approve: bool = False, ref: str | None = None, solution: str | None = None) -> str:
+    """Run the build + terraform deploy, return a deploy_ref.
 
-    Returns dict describing what was done.
+    This is the heavy-lifting phase — streams output to stdout.
+    The result is cached so get_deploy_outcome() can retrieve it.
+    Not exposed as an MCP tool. Exposed as CLI subcommand for hooks.
     """
     ctx = resolve_solution(solution)
     if not ctx:
-        raise RuntimeError(
-            "Not inside a gapp solution. Run 'gapp init' first, or cd into a solution repo."
-        )
+        raise RuntimeError("Not inside a gapp solution. Run 'gapp init' first.")
 
     solution_name = ctx["name"]
     project_id = ctx.get("project_id")
     repo_path = ctx.get("repo_path")
 
     if not project_id:
-        raise RuntimeError(
-            "No GCP project attached. Run 'gapp setup <project-id>' first."
-        )
+        raise RuntimeError("No GCP project attached. Run 'gapp setup <project-id>' first.")
     if not repo_path:
-        # Fall back to cwd if it has a gapp.yaml (e.g., CI runner with checkout)
         from gapp.admin.sdk.context import get_git_root
         git_root = get_git_root()
         if git_root and (git_root / "gapp.yaml").is_file():
@@ -65,7 +57,7 @@ def deploy_solution(auto_approve: bool = False, ref: str | None = None, solution
     repo_path = Path(repo_path)
     manifest = load_manifest(repo_path)
 
-    # Workspace pattern: if manifest has paths:, deploy each as a separate service
+    # Workspace pattern
     paths = get_paths(manifest)
     if paths:
         results = []
@@ -76,12 +68,9 @@ def deploy_solution(auto_approve: bool = False, ref: str | None = None, solution
             sub_manifest = load_manifest(sub_dir)
             if not sub_manifest:
                 raise RuntimeError(f"No gapp.yaml found in '{sub_path}'.")
-            # Derive service name: explicit name > repo-path-segments
             sub_name = get_name(sub_manifest)
             if not sub_name:
                 sub_name = f"{repo_path.name}-{sub_path.replace('/', '-')}"
-            # Recurse: deploy the sub-path as its own service
-            # Re-resolve context with the sub-name and sub-manifest
             sub_result = _deploy_single_service(
                 solution_name=sub_name,
                 project_id=project_id,
@@ -92,17 +81,84 @@ def deploy_solution(auto_approve: bool = False, ref: str | None = None, solution
                 ref=ref,
             )
             results.append(sub_result)
-        return {"services": results}
+        combined = {"services": results}
+    else:
+        combined = _deploy_single_service(
+            solution_name=solution_name,
+            project_id=project_id,
+            repo_path=repo_path,
+            manifest=manifest,
+            auto_approve=auto_approve,
+            ref=ref,
+        )
 
-    # Single-service deploy (no paths)
-    return _deploy_single_service(
-        solution_name=solution_name,
-        project_id=project_id,
-        repo_path=repo_path,
-        manifest=manifest,
-        auto_approve=auto_approve,
-        ref=ref,
-    )
+    # Cache result and return deploy_ref
+    deploy_ref = uuid.uuid4().hex[:12]
+    cache_file = _deploy_cache_dir(solution_name) / f"{deploy_ref}.json"
+    cache_file.write_text(json.dumps(combined, indent=2))
+    return deploy_ref
+
+
+def get_deploy_outcome(deploy_ref: str, solution: str | None = None) -> dict:
+    """Retrieve cached deploy result and combine with current status.
+
+    Reads and deletes the cached result (one-time use), then calls
+    gapp_status for current state. Returns combined picture.
+    """
+    ctx = resolve_solution(solution)
+    if not ctx:
+        raise RuntimeError("Not inside a gapp solution.")
+
+    solution_name = ctx["name"]
+    cache_file = _deploy_cache_dir(solution_name) / f"{deploy_ref}.json"
+
+    if not cache_file.exists():
+        return {"error": f"Deploy ref '{deploy_ref}' not found. It may have already been consumed or the deploy didn't complete."}
+
+    # Read and delete immediately (one-time use)
+    deploy_result = json.loads(cache_file.read_text())
+    cache_file.unlink()
+
+    # Get current status
+    from gapp.admin.sdk.status import get_solution_status
+    try:
+        status = get_solution_status(solution)
+        if hasattr(status, "model_dump"):
+            status = status.model_dump()
+    except Exception:
+        status = None
+
+    return {
+        "deploy": deploy_result,
+        "status": status,
+    }
+
+
+def deploy_solution(
+    auto_approve: bool = False,
+    ref: str | None = None,
+    solution: str | None = None,
+    deploy_ref: str | None = None,
+) -> dict:
+    """Deploy the current solution.
+
+    Args:
+        auto_approve: Pass -auto-approve to terraform apply.
+        ref: Git ref (commit, tag, branch) to deploy.
+        solution: Solution name. Defaults to current directory.
+        deploy_ref: If provided, skip the build+terraform phase and
+            retrieve the outcome from a prior quick_deploy() call.
+            Set by PreToolUse hooks — not intended for direct use.
+
+    Returns dict describing what was done.
+    """
+    # If deploy_ref is provided, the heavy lifting already happened
+    if deploy_ref:
+        return get_deploy_outcome(deploy_ref, solution)
+
+    # Otherwise, do the full deploy: quick_deploy + get_deploy_outcome
+    ref_id = quick_deploy(auto_approve=auto_approve, ref=ref, solution=solution)
+    return get_deploy_outcome(ref_id, solution)
 
 
 def _deploy_single_service(
