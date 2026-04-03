@@ -10,7 +10,12 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
 COPY . /app
 
 ARG RUNTIME_REF
-RUN uv pip install --system -e . \
+RUN if [ -f pyproject.toml ] || [ -f setup.py ]; then \
+      uv pip install --system -e .; \
+    else \
+      find /app -name pyproject.toml -maxdepth 2 -exec dirname {} \; | \
+        xargs -I {} uv pip install --system -e {}; \
+    fi \
     && if [ -n "$RUNTIME_REF" ]; then uv pip install --system "gapp-run @ git+https://github.com/krisrowe/gapp.git@${RUNTIME_REF}#subdirectory=run"; fi
 
 ARG ENTRYPOINT

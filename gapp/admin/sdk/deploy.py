@@ -11,6 +11,8 @@ from gapp.admin.sdk.context import resolve_solution
 from gapp.admin.sdk.manifest import (
     get_auth_config,
     get_entrypoint,
+    get_name,
+    get_paths,
     get_prerequisite_secrets,
     get_runtime_ref,
     get_service_config,
@@ -62,16 +64,77 @@ def deploy_solution(auto_approve: bool = False, ref: str | None = None, solution
 
     repo_path = Path(repo_path)
     manifest = load_manifest(repo_path)
+
+    # Workspace pattern: if manifest has paths:, deploy each as a separate service
+    paths = get_paths(manifest)
+    if paths:
+        results = []
+        for sub_path in paths:
+            sub_dir = repo_path / sub_path
+            if not sub_dir.is_dir():
+                raise RuntimeError(f"Path '{sub_path}' declared in gapp.yaml but directory does not exist.")
+            sub_manifest = load_manifest(sub_dir)
+            if not sub_manifest:
+                raise RuntimeError(f"No gapp.yaml found in '{sub_path}'.")
+            # Derive service name: explicit name > repo-path-segments
+            sub_name = get_name(sub_manifest)
+            if not sub_name:
+                sub_name = f"{repo_path.name}-{sub_path.replace('/', '-')}"
+            # Recurse: deploy the sub-path as its own service
+            # Re-resolve context with the sub-name and sub-manifest
+            sub_result = _deploy_single_service(
+                solution_name=sub_name,
+                project_id=project_id,
+                repo_path=repo_path,
+                manifest=sub_manifest,
+                service_path=sub_path,
+                auto_approve=auto_approve,
+                ref=ref,
+            )
+            results.append(sub_result)
+        return {"services": results}
+
+    # Single-service deploy (no paths)
+    return _deploy_single_service(
+        solution_name=solution_name,
+        project_id=project_id,
+        repo_path=repo_path,
+        manifest=manifest,
+        auto_approve=auto_approve,
+        ref=ref,
+    )
+
+
+def _deploy_single_service(
+    solution_name: str,
+    project_id: str,
+    repo_path: Path,
+    manifest: dict,
+    *,
+    service_path: str | None = None,
+    auto_approve: bool = False,
+    ref: str | None = None,
+) -> dict:
+    """Deploy a single service from a manifest.
+
+    Args:
+        solution_name: Cloud Run service name.
+        project_id: GCP project ID.
+        repo_path: Git repo root (always the full repo).
+        manifest: Parsed gapp.yaml for this service.
+        service_path: Subdirectory within repo (for multi-service repos).
+        auto_approve: Skip Terraform confirmation.
+        ref: Git ref to deploy.
+    """
+    # Resolve the service root for entrypoint detection
+    service_root = repo_path / service_path if service_path else repo_path
+
     entrypoint = get_entrypoint(manifest)
 
     # Entrypoint detection priority:
-    # 1. service.entrypoint in gapp.yaml (explicit ASGI module:app)
-    # 2. mcp-app.yaml exists → "mcp-app serve" (framework handles everything)
-    # 3. Dockerfile exists → gapp uses it as-is, no entrypoint needed
-    # Detection priority:
     # 1. service.entrypoint or service.cmd in gapp.yaml (mutually exclusive, trumps all)
-    # 2. Dockerfile in repo → use as-is
-    # 3. mcp-app.yaml → mcp-app serve
+    # 2. Dockerfile in service root → use as-is
+    # 3. mcp-app.yaml in service root → mcp-app serve
     # 4. Error
     from gapp.admin.sdk.manifest import get_cmd
     cmd = get_cmd(manifest)
@@ -83,9 +146,9 @@ def deploy_solution(auto_approve: bool = False, ref: str | None = None, solution
         pass  # ASGI module:app for uvicorn
     elif cmd:
         entrypoint = f"__cmd__:{cmd}"
-    elif (repo_path / "Dockerfile").exists():
+    elif (service_root / "Dockerfile").exists():
         entrypoint = "__dockerfile__"
-    elif (repo_path / "mcp-app.yaml").exists():
+    elif (service_root / "mcp-app.yaml").exists() or (repo_path / "mcp-app.yaml").exists():
         entrypoint = "__mcp_app__"
     else:
         raise RuntimeError(
