@@ -81,17 +81,29 @@ def start_build(solution: str | None = None) -> dict:
 def check_build(build_id: str, project_id: str) -> dict:
     """Check the status of a Cloud Build by ID.
 
-    Returns status, image, and log URL. Does not modify any state.
+    Runs describe and log fetch in parallel. Returns status, image,
+    log progress, and log URL. Does not modify any state.
     """
-    result = subprocess.run(
+    # Fire both gcloud calls at once — they're independent read-only APIs
+    describe_proc = subprocess.Popen(
         ["gcloud", "builds", "describe", build_id,
          "--project", project_id, "--format=json"],
-        capture_output=True, text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )
-    if result.returncode != 0:
-        return {"error": f"Failed to describe build {build_id}: {result.stderr.strip()}"}
+    log_proc = subprocess.Popen(
+        ["gcloud", "builds", "log", build_id, "--project", project_id],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
 
-    build = json.loads(result.stdout)
+    describe_out, describe_err = describe_proc.communicate()
+    log_out, _ = log_proc.communicate()
+
+    if describe_proc.returncode != 0:
+        return {"error": f"Failed to describe build {build_id}: {describe_err.strip()}"}
+
+    result = describe_out
+
+    build = json.loads(result)
     raw_status = build.get("status", "UNKNOWN")
 
     if raw_status == "SUCCESS":
@@ -116,13 +128,9 @@ def check_build(build_id: str, project_id: str) -> dict:
     elif build.get("images"):
         out["image"] = build["images"][0]
 
-    # Fetch build log progress
-    log_result = subprocess.run(
-        ["gcloud", "builds", "log", build_id, "--project", project_id],
-        capture_output=True, text=True,
-    )
-    if log_result.returncode == 0 and log_result.stdout.strip():
-        lines = log_result.stdout.strip().splitlines()
+    # Attach log progress from parallel fetch
+    if log_out.strip():
+        lines = log_out.strip().splitlines()
         out["log_lines"] = len(lines)
         out["log_tail"] = lines[-3:] if len(lines) >= 3 else lines
 
