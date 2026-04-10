@@ -105,7 +105,7 @@ pyproject.toml) take precedence over gapp.yaml.
 
 `public: true` grants allUsers Cloud Run IAM. Default is
 non-public (locked down). Solutions handling their own auth
-(app-user, custom) need `public: true`. Use `gapp_status` to
+(mcp-app, custom) need `public: true`. Use `gapp_status` to
 check current public state. `gapp_deploy(public=true)` can
 override per-deploy without changing the yaml.
 
@@ -167,7 +167,7 @@ a quick check of deployment state without reading files.
 
 #### After deployment
 
-If the solution uses app-user or similar auth framework, hand
+If the solution uses mcp-app or similar auth framework, hand
 off to the **user-management** skill for registering users
 and testing the deployed service.
 
