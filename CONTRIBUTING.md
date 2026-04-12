@@ -147,6 +147,8 @@ service:
 
 **Auth is not gapp's concern.** gapp used to bundle auth middleware (`gapp_run` wrapper) and user management. These moved to `mcp-app` — a framework solutions import directly. gapp is purely a deployment tool. It deploys containers, manages secrets, mounts data volumes. How the solution handles auth internally is the solution's business.
 
+**gapp's boundary is "service is up."** `gapp_status` checks `/health` as a liveness convenience — it confirms the container started and accepts HTTP. Everything beyond that (auth verification, tool enumeration, user management, MCP client registration) is the app's concern, handled by the app's own admin CLI and skills. gapp does not probe app-specific endpoints or understand app-layer auth models.
+
 **`public` is decoupled from auth.** Previously, public access (Cloud Run `allUsers` IAM) was automatically granted when `auth_enabled=true` — because gapp's wrapper handled auth, so Cloud Run could be open. Now that solutions handle their own auth, `public` is an independent flag. Default is non-public (safe). Priority on each deploy: CLI/MCP arg → gapp.yaml `public:` → default false.
 
 **`service.entrypoint` and `service.cmd` are mutually exclusive.** `entrypoint` is an ASGI module:app path — gapp wraps it with uvicorn. `cmd` is a raw command — gapp passes it through as the Dockerfile CMD. Having both is ambiguous, so gapp rejects it.
