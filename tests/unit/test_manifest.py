@@ -113,7 +113,18 @@ def test_auth_config_absent():
 
 # --- New env var support ---
 
-from gapp.admin.sdk.manifest import get_env_vars, resolve_env_vars, get_auth_framework
+from gapp.admin.sdk.manifest import get_domain, get_env_vars, resolve_env_vars, get_auth_framework
+
+
+def test_get_domain():
+    assert get_domain({"domain": "mcp.example.com"}) == "mcp.example.com"
+
+
+def test_get_domain_absent():
+    assert get_domain({}) is None
+
+
+# --- New env var support ---
 
 
 def test_get_env_vars_new_format():

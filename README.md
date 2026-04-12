@@ -143,6 +143,8 @@ If multiple options are present, gapp uses the first match:
 ```yaml
 public: false         # default — allow unauthenticated HTTP access?
 
+domain: mcp.example.com  # optional — custom domain (subdomain only)
+
 env:                  # environment variables
   - name: LOG_LEVEL
     value: INFO
@@ -160,6 +162,22 @@ prerequisites:
     api-token:
       description: "API authentication token"
 ```
+
+### Custom Domain
+
+Set `domain` in `gapp.yaml` to map a custom subdomain to your Cloud Run service:
+
+```yaml
+domain: mcp.example.com
+```
+
+On the next `gapp deploy`, gapp creates a Cloud Run domain mapping. Add a CNAME record at your domain registrar:
+
+```
+CNAME  mcp.example.com  →  ghs.googlehosted.com
+```
+
+`gapp status` reports the domain state: `pending_dns`, `pending_cert`, or `active`. The default `.run.app` URL always works — the custom domain is an additional endpoint, not a replacement. Only subdomains are supported (not bare/apex domains).
 
 ### Multi-Service Repos
 
