@@ -25,6 +25,7 @@ module "service" {
 
 resource "google_cloud_run_domain_mapping" "custom" {
   count    = var.custom_domain != "" ? 1 : 0
+  project  = var.project_id
   location = "us-central1"
   name     = var.custom_domain
 
