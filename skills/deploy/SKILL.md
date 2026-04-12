@@ -84,22 +84,23 @@ Evaluate whether the repo is a good candidate for gapp:
 ### gapp.yaml — Minimal Configuration Philosophy
 
 **Goal: as little in gapp.yaml as possible.** gapp derives what
-it can. The solution's own files (Dockerfile, mcp-app.yaml,
-pyproject.toml) take precedence over gapp.yaml.
+it can. The solution's own files (Dockerfile, pyproject.toml)
+take precedence over gapp.yaml.
 
 #### What gapp needs to know (in priority order)
 
 **How to build and run the container:**
 
 1. Solution has a **Dockerfile** → gapp builds it as-is. No
-   `service.entrypoint` needed. No `service.cmd` needed.
-2. Solution has **mcp-app.yaml** (future) → gapp generates
-   Dockerfile with `CMD ["mcp-app", "serve"]`. No entrypoint
-   needed.
-3. Neither → `service.entrypoint` in gapp.yaml is required.
-   This is the ASGI module:app path (e.g.,
-   `food_agent.mcp.server:app`). gapp wraps it with uvicorn
-   in the generated Dockerfile.
+   `service.entrypoint` or `service.cmd` needed.
+2. Solution has its own serve command (e.g., a CLI entry point
+   that starts the server) → `service.cmd` in gapp.yaml. gapp
+   generates a Dockerfile with this as the CMD.
+3. Solution exposes an ASGI app variable at module level →
+   `service.entrypoint` in gapp.yaml (e.g.,
+   `my_package.server:app`). gapp wraps it with uvicorn in
+   the generated Dockerfile.
+4. Neither → one of the above must be provided.
 
 **Whether to allow public access:**
 
@@ -158,9 +159,11 @@ env:
 #### Complete gapp.yaml reference
 
 ```yaml
-# Required only when no Dockerfile and no mcp-app.yaml:
+# Required when no Dockerfile — pick one:
 service:
-  entrypoint: my_package.mcp.server:app
+  cmd: my-app-mcp serve           # app has its own serve command
+  # OR
+  entrypoint: my_package.server:app  # ASGI module:app for uvicorn
 
 # Optional — default false:
 public: true
