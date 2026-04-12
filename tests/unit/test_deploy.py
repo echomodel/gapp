@@ -143,6 +143,34 @@ def test_build_tfvars_data_bucket_always_set():
     assert tfvars["auth_enabled"] is False
 
 
+def test_build_tfvars_with_domain():
+    """Domain is passed through as custom_domain when set."""
+    config = {
+        "entrypoint": "app:main",
+        "port": 8080,
+        "memory": "512Mi",
+        "cpu": "1",
+        "max_instances": 1,
+        "env": {},
+    }
+    tfvars = _build_tfvars("my-app", "proj", "img:abc123", config, domain="mcp.example.com")
+    assert tfvars["custom_domain"] == "mcp.example.com"
+
+
+def test_build_tfvars_without_domain():
+    """No custom_domain key when domain is not set."""
+    config = {
+        "entrypoint": "app:main",
+        "port": 8080,
+        "memory": "512Mi",
+        "cpu": "1",
+        "max_instances": 1,
+        "env": {},
+    }
+    tfvars = _build_tfvars("my-app", "proj", "img:abc123", config)
+    assert "custom_domain" not in tfvars
+
+
 def test_dockerfile_template_supports_runtime_install():
     path = _get_template("Dockerfile")
     content = path.read_text()
