@@ -16,6 +16,7 @@ def init_solution(
     auth: str | None = None,
     runtime: str | None = None,
     secrets: dict | None = None,
+    domain: str | None = None,
 ) -> dict:
     """Initialize a gapp solution in the current repo.
 
@@ -31,6 +32,7 @@ def init_solution(
         auth: Auth strategy — "bearer" or "google_oauth2". Absent means no auth.
         runtime: gapp git ref for the runtime wrapper.
         secrets: Dict of secret names to descriptions for prerequisites.
+        domain: Custom domain to map to the service (e.g., mcp.example.com).
 
     Returns a dict describing what was done:
         name: solution name
@@ -83,6 +85,13 @@ def init_solution(
 
     if effective_runtime is not None and service.get("runtime") != effective_runtime:
         service["runtime"] = effective_runtime
+        changed = True
+
+    if domain is not None and manifest.get("domain") != domain:
+        if domain:
+            manifest["domain"] = domain
+        else:
+            manifest.pop("domain", None)
         changed = True
 
     if secrets is not None:

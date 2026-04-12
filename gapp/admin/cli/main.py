@@ -87,6 +87,8 @@ def deploy(ref, solution):
     click.echo(f"    Image: {deploy_data.get('image', 'unknown')} ({build_msg})")
     if deploy_data.get("service_url"):
         click.echo(f"    URL:   {deploy_data['service_url']}")
+    if deploy_data.get("custom_domain"):
+        click.echo(f"    Domain: {deploy_data['custom_domain']}")
     click.echo()
 
 
@@ -156,6 +158,15 @@ def status(name, as_json):
             click.echo(f"    Auth:   enabled")
         if svc.mcp_path:
             click.echo(f"    MCP:    {svc.mcp_path} (run gapp mcp status for tools)")
+
+    if result.domain:
+        d = result.domain
+        click.echo(f"  Domain: {d.name}")
+        click.echo(f"    Status: {d.status}")
+        if d.status != "active":
+            click.echo(f"    CNAME:  {d.name} \u2192 {d.cname_target}")
+        if d.detail:
+            click.echo(f"    Detail: {d.detail}")
 
     click.echo()
 

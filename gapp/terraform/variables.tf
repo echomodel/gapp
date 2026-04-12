@@ -60,3 +60,9 @@ variable "auth_enabled" {
   type        = bool
   default     = false
 }
+
+variable "custom_domain" {
+  description = "Custom domain to map to the Cloud Run service (e.g., mcp.example.com)"
+  type        = string
+  default     = ""
+}

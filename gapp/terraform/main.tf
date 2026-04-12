@@ -23,6 +23,24 @@ module "service" {
   auth_enabled  = var.auth_enabled
 }
 
+resource "google_cloud_run_domain_mapping" "custom" {
+  count    = var.custom_domain != "" ? 1 : 0
+  location = "us-central1"
+  name     = var.custom_domain
+
+  metadata {
+    namespace = var.project_id
+  }
+
+  spec {
+    route_name = module.service.service_name
+  }
+}
+
 output "service_url" {
   value = module.service.service_url
+}
+
+output "custom_domain" {
+  value = var.custom_domain
 }

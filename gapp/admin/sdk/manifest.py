@@ -138,6 +138,11 @@ def get_env_vars(manifest: dict) -> list[dict]:
     return []
 
 
+def get_domain(manifest: dict) -> str | None:
+    """Return the custom domain if configured, else None."""
+    return manifest.get("domain")
+
+
 def get_public(manifest: dict) -> bool | None:
     """Return the public access setting if configured, else None."""
     val = manifest.get("public")

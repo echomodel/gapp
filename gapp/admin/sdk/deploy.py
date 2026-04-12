@@ -11,6 +11,7 @@ from pathlib import Path
 from gapp.admin.sdk.context import resolve_solution
 from gapp.admin.sdk.manifest import (
     get_auth_config,
+    get_domain,
     get_entrypoint,
     get_name,
     get_paths,
@@ -293,6 +294,7 @@ def _deploy_from_build(
         "build_id": build_ref,
         "terraform_status": tf_result["status"],
         "service_url": tf_result.get("service_url"),
+        "custom_domain": tf_result.get("custom_domain"),
     }
 
 
@@ -387,6 +389,7 @@ def _deploy_single_service(
         "build_status": None,
         "terraform_status": None,
         "service_url": None,
+        "custom_domain": None,
     }
 
     token = _get_access_token()
@@ -429,6 +432,7 @@ def _deploy_single_service(
     )
     result["terraform_status"] = tf_result["status"]
     result["service_url"] = tf_result.get("service_url")
+    result["custom_domain"] = tf_result.get("custom_domain")
 
     return result
 
@@ -676,6 +680,7 @@ def _build_tfvars(
     auth_config: dict | None = None,
     env_vars: list[dict] | None = None,
     public: bool | None = None,
+    domain: str | None = None,
 ) -> dict:
     from gapp.admin.sdk.manifest import resolve_env_vars
 
@@ -708,7 +713,7 @@ def _build_tfvars(
     if env_vars:
         all_secrets.update(secret_env)
 
-    return {
+    tfvars = {
         "project_id": project_id,
         "service_name": solution_name,
         "image": image,
@@ -721,6 +726,9 @@ def _build_tfvars(
         "public": bool(public) if public is not None else bool(auth_config),
         "auth_enabled": bool(auth_config),
     }
+    if domain:
+        tfvars["custom_domain"] = domain
+    return tfvars
 
 
 def _get_staging_dir(solution_name: str) -> Path:
@@ -755,10 +763,12 @@ def _stage_and_apply(
     from gapp.admin.sdk.manifest import get_env_vars, get_public
     env_vars = get_env_vars(manifest or {})
     public = get_public(manifest or {})
+    domain = get_domain(manifest or {})
     tfvars = _build_tfvars(
         solution_name, project_id, image, service_config, secrets, auth_config,
         env_vars=env_vars,
         public=public,
+        domain=domain,
     )
     (staging_dir / "terraform.tfvars.json").write_text(json.dumps(tfvars, indent=2))
 
@@ -782,11 +792,17 @@ def _stage_and_apply(
         raise RuntimeError("Terraform apply failed. Check output above.")
 
     output_result = subprocess.run(
-        ["terraform", "output", "-raw", "service_url"],
+        ["terraform", "output", "-json"],
         cwd=staging_dir, env=env, capture_output=True, text=True,
     )
 
-    return {
-        "status": "applied",
-        "service_url": output_result.stdout.strip() if output_result.returncode == 0 else None,
-    }
+    result = {"status": "applied", "service_url": None, "custom_domain": None}
+    if output_result.returncode == 0:
+        try:
+            outputs = json.loads(output_result.stdout)
+            result["service_url"] = outputs.get("service_url", {}).get("value")
+            result["custom_domain"] = outputs.get("custom_domain", {}).get("value") or None
+        except json.JSONDecodeError:
+            pass
+
+    return result

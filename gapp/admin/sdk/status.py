@@ -8,8 +8,8 @@ from pathlib import Path
 
 from gapp.admin.sdk.context import resolve_solution
 from gapp.admin.sdk.deploy import _get_staging_dir, _get_tf_source_dir
-from gapp.admin.sdk.manifest import get_auth_config, get_mcp_path, load_manifest
-from gapp.admin.sdk.models import DeploymentInfo, NextStep, ServiceStatus, StatusResult
+from gapp.admin.sdk.manifest import get_auth_config, get_domain, get_mcp_path, load_manifest
+from gapp.admin.sdk.models import DeploymentInfo, DomainStatus, NextStep, ServiceStatus, StatusResult
 
 
 class TerraformNotFoundError(RuntimeError):
@@ -60,10 +60,12 @@ def get_status(name: str | None = None) -> StatusResult:
 
     mcp_path = None
     auth_enabled = False
+    domain = None
     if ctx.get("repo_path"):
         manifest = load_manifest(Path(ctx["repo_path"]).expanduser())
         mcp_path = get_mcp_path(manifest)
         auth_enabled = bool(get_auth_config(manifest))
+        domain = get_domain(manifest)
 
     try:
         tf_outputs = _get_tf_outputs(ctx["name"], project_id)
@@ -98,6 +100,9 @@ def get_status(name: str | None = None) -> StatusResult:
             mcp_path=mcp_path,
         )
         result.deployment.services.append(service)
+
+    if domain:
+        result.domain = _check_domain_status(domain)
 
     return result
 
@@ -161,6 +166,57 @@ def _get_tf_outputs(solution_name: str, project_id: str) -> dict | None:
         return None
 
     return {k: v.get("value") for k, v in raw.items()}
+
+
+def _check_domain_status(domain: str) -> DomainStatus:
+    """Check DNS resolution and determine domain mapping status."""
+    cname_target = "ghs.googlehosted.com"
+    try:
+        result = subprocess.run(
+            ["dig", "+short", "CNAME", domain],
+            capture_output=True, text=True, timeout=10,
+        )
+        cname = result.stdout.strip().rstrip(".")
+        if not cname:
+            return DomainStatus(
+                name=domain,
+                status="pending_dns",
+                detail=f"No CNAME record found. Add: CNAME {domain} → {cname_target}",
+            )
+        if cname == cname_target:
+            # DNS is correct — check if HTTPS works (cert provisioned)
+            cert_ok = _check_domain_https(domain)
+            if cert_ok:
+                return DomainStatus(name=domain, status="active")
+            return DomainStatus(
+                name=domain,
+                status="pending_cert",
+                detail="DNS is correct. SSL certificate is being provisioned.",
+            )
+        return DomainStatus(
+            name=domain,
+            status="pending_dns",
+            detail=f"CNAME points to {cname}, expected {cname_target}",
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return DomainStatus(
+            name=domain,
+            status="pending_dns",
+            detail="Could not check DNS (dig not available or timed out).",
+        )
+
+
+def _check_domain_https(domain: str) -> bool:
+    """Check if HTTPS is working on the custom domain."""
+    try:
+        result = subprocess.run(
+            ["curl", "-sf", "-o", "/dev/null", "-w", "%{http_code}",
+             f"https://{domain}/health"],
+            capture_output=True, text=True, timeout=10,
+        )
+        return result.returncode == 0
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False
 
 
 def _check_health(service_url: str) -> bool:

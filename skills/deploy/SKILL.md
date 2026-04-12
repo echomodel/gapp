@@ -168,6 +168,9 @@ service:
 # Optional — default false:
 public: true
 
+# Optional — custom domain (subdomain, requires CNAME):
+domain: mcp.example.com
+
 # Optional — env vars and secrets:
 env:
   - name: SIGNING_KEY
@@ -185,7 +188,7 @@ env:
 #### MCP tools for gapp.yaml management
 
 - `gapp_init` — creates or updates gapp.yaml (entrypoint,
-  auth, secrets, mcp_path)
+  auth, secrets, mcp_path, domain)
 - `gapp_status` — shows current config, deployment state,
   public access, next step
 - `gapp_secret_set` — stores a secret value in Secret Manager
@@ -526,6 +529,46 @@ The `gapp_mcp_connect` tool shows:
 - Whether each client already has the service registered
 - With `user` param, mints a real PAT inline
 
+## Custom Domain Setup
+
+If the user wants a custom domain (e.g., `mcp.example.com`):
+
+1. **Set the domain** — `gapp_init(domain="mcp.example.com")`
+   or edit `domain:` in gapp.yaml directly.
+2. **Deploy** — the next `gapp deploy` creates the Cloud Run
+   domain mapping. The default `.run.app` URL continues working
+   throughout — the user is never without a working endpoint.
+3. **Configure DNS** — the user needs to add a CNAME record at
+   their domain registrar:
+   ```
+   CNAME  mcp.example.com  →  ghs.googlehosted.com
+   ```
+   Walk the user through this. Ask which registrar they use and
+   help them find the DNS settings. This is the one manual step
+   that gapp cannot automate.
+4. **Check status** — `gapp_status` shows domain status:
+   - `pending_dns` — CNAME not yet configured or not propagated
+   - `pending_cert` — DNS is correct, SSL cert being provisioned
+   - `active` — fully operational on the custom domain
+
+DNS propagation can take minutes to hours. The `.run.app` URL
+works immediately and always. The custom domain becomes usable
+once DNS propagates and Cloud Run provisions the SSL cert
+(automatic, no user action needed after DNS).
+
+**Only subdomains are supported** (e.g., `mcp.example.com`),
+not apex/bare domains (`example.com`). Apex domains require
+A records instead of CNAME, which Cloud Run domain mapping
+doesn't handle cleanly.
+
+To **remove** a custom domain, clear the `domain` field from
+gapp.yaml (or `gapp_init(domain="")`) and redeploy. Terraform
+destroys the mapping.
+
+To **change** a custom domain, update the `domain` field and
+redeploy. Terraform replaces the old mapping with the new one.
+Update the CNAME at the registrar to match.
+
 ## Ongoing Operations
 
 ### Check status
@@ -588,7 +631,7 @@ workflow as needed:
 
 | Tool | Purpose |
 |------|---------|
-| `gapp_init` | Initialize a solution (create gapp.yaml, Dockerfile) |
+| `gapp_init` | Initialize a solution (create gapp.yaml, Dockerfile, domain) |
 | `gapp_setup` | GCP foundation (APIs, bucket, labels) |
 | `gapp_build` | Submit async Cloud Build, returns build_id |
 | `gapp_deploy` | Poll build + Terraform apply (use with build_ref) |

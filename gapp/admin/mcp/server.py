@@ -12,13 +12,15 @@ def gapp_init(
     auth: str | None = None,
     runtime: str | None = None,
     secrets: dict | None = None,
+    domain: str | None = None,
 ) -> dict:
     """Initialize or configure a gapp solution in the current repo.
 
     Idempotent. Creates gapp.yaml on first call. Also used to update
     gapp configuration settings later — e.g., enable auth, change
-    entrypoint, add secrets. Only non-None parameters are written;
-    omitted parameters leave existing values unchanged.
+    entrypoint, add secrets, set custom domain. Only non-None
+    parameters are written; omitted parameters leave existing values
+    unchanged.
 
     Args:
         entrypoint: ASGI entrypoint (module:app).
@@ -26,6 +28,9 @@ def gapp_init(
         auth: Auth strategy — "bearer" or "google_oauth2". Absent means no auth.
         runtime: gapp git ref for the runtime wrapper version.
         secrets: Dict of secret name to description for prerequisites.
+        domain: Custom domain to map to the service (e.g., mcp.example.com).
+            Requires a CNAME record pointing to ghs.googlehosted.com.
+            Pass empty string to remove an existing domain mapping.
     """
     from gapp.admin.sdk.init import init_solution
     return init_solution(
@@ -34,6 +39,7 @@ def gapp_init(
         auth=auth,
         runtime=runtime,
         secrets=secrets,
+        domain=domain,
     )
 
 
