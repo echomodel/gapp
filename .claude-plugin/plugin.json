@@ -1,5 +1,5 @@
 {
   "name": "gapp",
   "description": "Deploy and manage Python MCP servers on Google Cloud Run — infrastructure, secrets, auth, and user management via gapp admin tools.",
-  "version": "1.2.3"
+  "version": "1.2.4"
 }
