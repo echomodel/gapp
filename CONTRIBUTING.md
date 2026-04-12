@@ -353,15 +353,28 @@ These approaches were evaluated during the credential mediation design:
 
 ## External Framework Awareness
 
-gapp skills (`.md` files in `skills/`) may reference external frameworks like `app-user` (`krisrowe/app-user`) by name — documenting how to use them, CLI commands, handoff patterns, etc. This is intentional.
+gapp is a deployment tool. It deploys containers, manages secrets,
+and mounts data volumes. It does not know or care what framework
+the solution uses — mcp-app, FastMCP, FastAPI, or anything else.
 
-**However, gapp MUST NEVER:**
-- Import `app-user` or any external auth/user framework in Python code
-- List it in `pyproject.toml`, `setup.py`, `requirements*.txt`, or any dependency file
-- `pip install` it as part of gapp's installation
-- Statically link to or bundle any of its code
+**Code:** gapp must never import, depend on, or bundle any
+external app framework. No references in `pyproject.toml`,
+`requirements*.txt`, or Python code.
 
-Skills (`.md` files) are the ONLY artifacts in gapp that are aware of external frameworks. This is documentation-level coupling, not code coupling. If `app-user` changes its interface, only the skill `.md` files need updating — no code changes, no version pins, no dependency conflicts.
+**Skills and documentation:** the deploy skill and README may
+mention an external framework parenthetically as an example
+(e.g., "solutions handling their own auth, such as mcp-app")
+but must never contain framework-specific configuration,
+commands, or workflows. The skill describes gapp's capabilities
+generically — how to map env vars, secrets, persistent storage,
+and service config. It relies on the agent to carry the app's
+runtime requirements from the app's own skill or documentation
+and map them to gapp's primitives. Neither skill needs to be
+intimately aware of the other's details.
+
+Universal tools like Docker are the exception — Docker examples
+serve both practical and illustrative purposes and don't create
+coupling to a specific app framework.
 
 ## Design Principles
 

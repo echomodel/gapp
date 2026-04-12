@@ -111,6 +111,32 @@ override per-deploy without changing the yaml.
 
 **Environment variables and secrets:**
 
+Before writing `env` entries, understand what the app needs from
+its environment. The app's documentation, README, or framework
+should declare its runtime requirements — required env vars,
+secrets, persistent storage paths, etc. Map each requirement to
+the appropriate gapp.yaml pattern:
+
+- **Secrets** (signing keys, API tokens, credentials) →
+  `secret: true` or `secret: { generate: true }`. gapp stores
+  the value in GCP Secret Manager and injects it as an env var
+  at runtime. The value never appears in the repo.
+- **Persistent storage paths** → use `{{SOLUTION_DATA_PATH}}`
+  which resolves to the GCS FUSE mount path (`/mnt/data`). Data
+  written here survives container restarts and redeploys.
+- **Plain config values** → `value: "..."` for non-secret
+  configuration.
+
+If the app requires a secret, decide with the user: should gapp
+generate it (`generate: true` — good for signing keys that just
+need to be strong and random), or does the user need to provide
+it (`secret: true` — for API keys, upstream credentials)?
+
+If the app requires persistent storage, map the app's data path
+env var to a subdirectory under `{{SOLUTION_DATA_PATH}}`. The
+app will write to this path inside the container; gapp ensures
+it's backed by durable GCS storage.
+
 ```yaml
 env:
   - name: SIGNING_KEY
@@ -167,9 +193,9 @@ a quick check of deployment state without reading files.
 
 #### After deployment
 
-If the solution uses mcp-app or similar auth framework, hand
-off to the **user-management** skill for registering users
-and testing the deployed service.
+Continue with the app's own post-deploy workflow — user
+registration, auth verification, and testing. The app or its
+framework documentation will describe what's needed.
 
 ### Cloud Readiness Check (MCP servers)
 
@@ -514,7 +540,22 @@ Use `gapp_mcp_status` to check MCP-specific health:
 
 ### Redeploy with changes
 
-After code changes are committed:
+Before redeploying, check whether the code changes affect how
+the app reads or writes data. If the data format, directory
+structure, or storage schema has changed, inspect the existing
+data on the solution's GCS bucket to confirm compatibility.
+Use `gapp_status` to get the project and solution name, then
+inspect the data volume:
+
+```bash
+gsutil ls gs://gapp-{name}-{project-id}/data/
+```
+
+If existing data is incompatible with the new code, present
+findings to the user before proceeding. They may need to
+migrate, reorganize, or back up data before the redeploy.
+
+After confirming data compatibility (or for code-only changes):
 
 - **Path A:** `gapp_build` then `gapp_deploy(build_ref=...)` — rebuilds if the commit SHA changed
 - **Path B:** `gapp_ci_trigger` — dispatches GitHub Actions
