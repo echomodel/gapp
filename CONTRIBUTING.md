@@ -129,6 +129,7 @@ Key decisions:
 - **Port 8080 is hardcoded** — not configurable. All Cloud Run services use 8080.
 - **No `prerequisites.apis`** — foundation APIs are hardcoded in `gapp setup`.
 - **Secrets use kebab-case** — gapp auto-derives the UPPER_SNAKE env var name (`api-token` → `API_TOKEN`).
+- **Custom domains are subdomains only** — `domain` in gapp.yaml creates a Cloud Run domain mapping with a CNAME record. Apex/bare domains (`example.com`) are not supported because they require A records instead of CNAME, adding complexity for a scenario that's unlikely — MCP servers and web API services are virtually always hosted on subdomains (`mcp.example.com`, `api.example.com`).
 
 Optional overrides with defaults:
 
