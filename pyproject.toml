@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gapp"
-version = "1.4.0"
+version = "1.5.0"
 description = "GCP App Deployer — CLI tool for deploying Cloud Run services with Terraform"
 requires-python = ">=3.10"
 dependencies = [
@@ -23,7 +23,7 @@ dev = [
 ]
 
 [project.scripts]
-gapp = "gapp.admin.cli.main:main"
+gapp = "gapp.admin.cli.main:cli_entry"
 gapp-mcp = "gapp.admin.mcp.server:main"
 
 [tool.setuptools.packages.find]

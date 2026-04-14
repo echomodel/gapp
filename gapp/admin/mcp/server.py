@@ -1,11 +1,49 @@
-"""gapp admin MCP server — stdio-only, exposes admin SDK operations as tools."""
+"""gapp admin MCP server — stdio-only, exposes admin SDK operations as tools.
+
+Every tool is wrapped with `_catch_manifest_errors` so schema validation
+failures from gapp.yaml surface as structured JSON (identical payload
+to the CLI's stderr output and the SDK's `ManifestValidationError.to_dict()`).
+"""
+
+from functools import wraps
 
 from mcp.server.fastmcp import FastMCP
+
+from gapp.admin.sdk.schema import ManifestValidationError
 
 mcp = FastMCP("gapp-admin")
 
 
-@mcp.tool()
+def _catch_manifest_errors(fn):
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except ManifestValidationError as e:
+            return e.to_dict()
+    return wrapper
+
+
+def _tool():
+    """Decorator stack: @_tool() applies manifest error catching then registers with MCP."""
+    def decorator(fn):
+        return mcp.tool()(_catch_manifest_errors(fn))
+    return decorator
+
+
+@_tool()
+def gapp_schema() -> dict:
+    """Return the live gapp.yaml JSON Schema (from the Pydantic model).
+
+    Use this to see every valid field, its type, whether it's required,
+    and its description. This is the single source of truth; all
+    validation and error responses derive from the same model.
+    """
+    from gapp.admin.sdk.schema import get_schema
+    return get_schema()
+
+
+@_tool()
 def gapp_init(
     entrypoint: str | None = None,
     mcp_path: str | None = None,
@@ -43,7 +81,7 @@ def gapp_init(
     )
 
 
-@mcp.tool()
+@_tool()
 def gapp_setup(project_id: str | None = None, solution: str | None = None) -> dict:
     """Set up GCP foundation for a gapp solution.
 
@@ -57,7 +95,7 @@ def gapp_setup(project_id: str | None = None, solution: str | None = None) -> di
     return setup_solution(project_id, solution=solution)
 
 
-@mcp.tool()
+@_tool()
 def gapp_build(solution: str | None = None) -> dict:
     """Submit a Cloud Build for a gapp solution (always async).
 
@@ -75,7 +113,7 @@ def gapp_build(solution: str | None = None) -> dict:
     return start_build(solution=solution)
 
 
-@mcp.tool()
+@_tool()
 def gapp_deploy(
     auto_approve: bool = True,
     ref: str | None = None,
@@ -106,7 +144,7 @@ def gapp_deploy(
     )
 
 
-@mcp.tool()
+@_tool()
 def gapp_secret_get(name: str, plaintext: bool = False, solution: str | None = None) -> dict:
     """Get a secret from GCP Secret Manager.
 
@@ -139,7 +177,7 @@ def gapp_secret_get(name: str, plaintext: bool = False, solution: str | None = N
     return get_secret(name, plaintext=plaintext, solution=solution)
 
 
-@mcp.tool()
+@_tool()
 def gapp_secret_set(name: str, value: str, solution: str | None = None) -> dict:
     """Store a secret value in GCP Secret Manager for a deployed solution.
 
@@ -164,7 +202,7 @@ def gapp_secret_set(name: str, value: str, solution: str | None = None) -> dict:
     return set_secret(name, value, solution=solution)
 
 
-@mcp.tool()
+@_tool()
 def gapp_secret_list(solution: str | None = None) -> dict:
     """List all secret-backed env vars and whether they are ready for deploy.
 
@@ -189,7 +227,7 @@ def gapp_secret_list(solution: str | None = None) -> dict:
     return list_secrets(solution=solution)
 
 
-@mcp.tool()
+@_tool()
 def gapp_ci_status(solution: str | None = None) -> dict:
     """Check CI/CD readiness for the current solution.
 
@@ -214,7 +252,7 @@ def gapp_ci_status(solution: str | None = None) -> dict:
     return get_ci_status(solution=solution)
 
 
-@mcp.tool()
+@_tool()
 def gapp_ci_init(repo: str, local_only: bool = False) -> dict:
     """Designate the operator's CI repo for GitHub Actions deployments.
 
@@ -232,7 +270,7 @@ def gapp_ci_init(repo: str, local_only: bool = False) -> dict:
     return init_ci(repo, local_only=local_only)
 
 
-@mcp.tool()
+@_tool()
 def gapp_ci_setup(solution: str | None = None) -> dict:
     """Wire a solution for CI/CD deployment.
 
@@ -251,7 +289,7 @@ def gapp_ci_setup(solution: str | None = None) -> dict:
     return setup_ci(solution=solution)
 
 
-@mcp.tool()
+@_tool()
 def gapp_ci_trigger(
     solution: str | None = None,
     ref: str = "main",
@@ -273,7 +311,7 @@ def gapp_ci_trigger(
     return trigger_ci(solution=solution, ref=ref, watch=watch)
 
 
-@mcp.tool()
+@_tool()
 def gapp_status(solution: str | None = None) -> dict:
     """Infrastructure health check for a gapp solution.
 
@@ -292,7 +330,7 @@ def gapp_status(solution: str | None = None) -> dict:
     return get_status(solution).model_dump()
 
 
-@mcp.tool()
+@_tool()
 def gapp_deployments_list() -> dict:
     """List GCP projects with deployed gapp solutions.
 
@@ -304,7 +342,7 @@ def gapp_deployments_list() -> dict:
     return list_deployments()
 
 
-@mcp.tool()
+@_tool()
 def gapp_list(available: bool = False) -> list[dict]:
     """List registered gapp solutions.
 
@@ -315,7 +353,7 @@ def gapp_list(available: bool = False) -> list[dict]:
     return list_solutions(include_remote=available)
 
 
-@mcp.tool()
+@_tool()
 def gapp_mcp_status(solution: str | None = None) -> dict:
     """MCP health check with tool enumeration for a gapp solution.
 
@@ -325,14 +363,14 @@ def gapp_mcp_status(solution: str | None = None) -> dict:
     return mcp_status(solution).model_dump()
 
 
-@mcp.tool()
+@_tool()
 def gapp_mcp_list() -> list[dict]:
     """List gapp solutions that have MCP endpoints configured."""
     from gapp.admin.sdk.mcp_status import mcp_list
     return [s.model_dump() for s in mcp_list()]
 
 
-@mcp.tool()
+@_tool()
 def gapp_mcp_connect(solution: str | None = None, user: str | None = None) -> dict:
     """Generate MCP client connection info for a gapp solution.
 
@@ -347,7 +385,7 @@ def gapp_mcp_connect(solution: str | None = None, user: str | None = None) -> di
     return mcp_connect(solution, user=user).model_dump()
 
 
-@mcp.tool()
+@_tool()
 def gapp_users_list(solution: str | None = None, limit: int = 10) -> dict:
     """List registered users for a gapp solution.
 
@@ -359,7 +397,7 @@ def gapp_users_list(solution: str | None = None, limit: int = 10) -> dict:
     return list_users(limit=limit)
 
 
-@mcp.tool()
+@_tool()
 def gapp_users_register(
     email: str,
     credential: str,
@@ -376,7 +414,7 @@ def gapp_users_register(
     return register_user(email, credential, strategy)
 
 
-@mcp.tool()
+@_tool()
 def gapp_tokens_create(email: str, solution: str | None = None, duration_days: int = 3650) -> dict:
     """Create a signed PAT (JWT) for a registered user.
 
@@ -389,7 +427,7 @@ def gapp_tokens_create(email: str, solution: str | None = None, duration_days: i
     return create_token(email, duration_days=duration_days, solution=solution)
 
 
-@mcp.tool()
+@_tool()
 def gapp_tokens_revoke(email: str, solution: str | None = None) -> dict:
     """Invalidate all PATs for a user by setting revoke_before to now.
 
@@ -401,7 +439,7 @@ def gapp_tokens_revoke(email: str, solution: str | None = None) -> dict:
     return revoke_tokens(email, solution=solution)
 
 
-@mcp.tool()
+@_tool()
 def gapp_users_update(
     email: str,
     credential: str | None = None,
@@ -420,7 +458,7 @@ def gapp_users_update(
     return update_user(email, credential=credential, revoke_before=revoke_before, solution=solution)
 
 
-@mcp.tool()
+@_tool()
 def gapp_users_revoke(email: str, solution: str | None = None) -> dict:
     """Revoke a user by deleting their credential file from GCS.
 

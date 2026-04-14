@@ -830,3 +830,85 @@ def mcp_connect_cmd(name, user, claude, gemini, as_json):
         click.echo("  Claude.ai (manual)")
         click.echo(f"    URL: {clients.claude_ai.url}")
         click.echo()
+
+
+@main.group("manifest")
+def manifest_group():
+    """Inspect and verify gapp.yaml."""
+
+
+@manifest_group.command("schema")
+def manifest_schema_cmd():
+    """Print the live gapp.yaml JSON Schema (from the Pydantic model)."""
+    from gapp.admin.sdk.schema import get_schema
+    click.echo(json_mod.dumps(get_schema(), indent=2))
+
+
+@manifest_group.command("verify")
+@click.option("--json", "as_json", is_flag=True, help="Emit the full schema + result as JSON.")
+def manifest_verify_cmd(as_json):
+    """Validate the gapp.yaml in the current directory against the schema.
+
+    Does not touch GCP or run terraform. If no gapp.yaml exists, reports
+    that and still prints the schema so you know what a valid one looks
+    like. Exits 0 on valid, 1 on invalid or missing.
+    """
+    import sys
+    from pathlib import Path
+    from gapp.admin.sdk.schema import (
+        ManifestValidationError,
+        get_schema,
+        validate_manifest,
+    )
+    import yaml
+
+    cwd = Path.cwd()
+    path = cwd / "gapp.yaml"
+
+    if not path.exists():
+        payload = {
+            "status": "missing",
+            "path": str(path),
+            "message": "No gapp.yaml in current directory.",
+            "hint": "Run `gapp init` to scaffold one, then re-run `gapp manifest verify`.",
+            "schema": get_schema(),
+        }
+        if as_json:
+            click.echo(json_mod.dumps(payload, indent=2))
+        else:
+            click.echo(f"  No gapp.yaml at {path}")
+            click.echo("  Run `gapp init` to scaffold one, or `gapp manifest schema` to see valid fields.")
+        raise SystemExit(1)
+
+    with open(path) as f:
+        data = yaml.safe_load(f) or {}
+
+    try:
+        validate_manifest(data)
+    except ManifestValidationError as e:
+        if as_json:
+            click.echo(json_mod.dumps({"status": "invalid", "path": str(path), **e.to_dict()}, indent=2))
+        else:
+            click.echo(f"  {path}: invalid", err=True)
+            for issue in e.issues:
+                click.echo(f"    {issue['path']}: {issue['message']}", err=True)
+            click.echo("", err=True)
+            click.echo("  Run `gapp manifest schema` for the full list of valid fields.", err=True)
+        raise SystemExit(1)
+
+    if as_json:
+        click.echo(json_mod.dumps({"status": "valid", "path": str(path), "schema": get_schema()}, indent=2))
+    else:
+        click.echo(f"  {path}: valid \u2713")
+
+
+def cli_entry():
+    """Console-script wrapper. Surfaces schema errors as JSON to stderr
+    so the CLI and MCP layers deliver identical payloads."""
+    import sys
+    from gapp.admin.sdk.schema import ManifestValidationError
+    try:
+        main(standalone_mode=True)
+    except ManifestValidationError as e:
+        click.echo(json_mod.dumps(e.to_dict(), indent=2), err=True)
+        sys.exit(1)

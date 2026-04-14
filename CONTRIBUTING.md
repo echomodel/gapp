@@ -130,6 +130,21 @@ Key decisions:
 - **No `prerequisites.apis`** — foundation APIs are hardcoded in `gapp setup`.
 - **Secrets require an explicit `name`** — the `name` field under `secret:` is the short name in Secret Manager. gapp prefixes it with the solution name: `name: signing-key` on solution `my-app` → `my-app-signing-key` in Secret Manager. No auto-derivation from the env var name.
 - **Custom domains are subdomains only** — `domain` in gapp.yaml creates a Cloud Run domain mapping with a CNAME record. Apex/bare domains (`example.com`) are not supported because they require A records instead of CNAME, adding complexity for a scenario that's unlikely — MCP servers and web API services are virtually always hosted on subdomains (`mcp.example.com`, `api.example.com`).
+- **gapp.yaml has exactly ONE source of truth: `gapp/admin/sdk/schema.py`.** The Pydantic `Manifest` model (and its submodels: `ServiceSpec`, `EnvEntry`, `SecretSpec`, `Prerequisites`, etc.) is the sole authority for every field, type, required flag, and enum value. Everything else derives from it at call time:
+
+  | Consumer                              | How it derives from the model                                                         |
+  |---------------------------------------|---------------------------------------------------------------------------------------|
+  | Runtime validation (every load, deploy, etc.) | `load_manifest` → `validate_manifest` → `Manifest.model_validate()`                |
+  | Error responses (CLI + MCP + SDK)     | `ManifestValidationError.to_dict()` embeds `Manifest.model_json_schema()` live       |
+  | CLI schema dump                       | `gapp manifest schema` → `get_schema()` → `Manifest.model_json_schema()`                       |
+  | MCP schema tool                       | `gapp_schema` → `get_schema()` → `Manifest.model_json_schema()`                       |
+  | Editor / JSON-Schema tooling          | Run `gapp manifest schema` on demand. **No JSON file is committed.**                           |
+  | README / CONTRIBUTING / SKILL docs    | Reference `gapp manifest schema` (CLI example) rather than re-listing fields.                  |
+  | Unit tests                            | Import models (`Manifest`, `EnvEntry`, etc.) from `schema.py`; never re-declare fields. |
+
+  **Rule:** no other file in this repo — code, markdown, tests, generated artifact — may independently enumerate gapp.yaml fields. If documentation needs to show the schema, point at `gapp manifest schema`. If tests need a field list, import it from `schema.py`. If error payloads need field info, embed `Manifest.model_json_schema()`. Changing a field means editing exactly one Python file.
+
+  Unknown fields are rejected (`extra="forbid"`) so typos surface as validation errors with the offending yaml path.
 
 Optional overrides with defaults:
 

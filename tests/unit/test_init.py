@@ -39,7 +39,7 @@ def test_init_creates_manifest(mock_topic, tmp_path):
 @patch("gapp.admin.sdk.init._add_github_topic", return_value="skipped")
 def test_init_existing_manifest(mock_topic, tmp_path):
     repo = _make_git_repo(tmp_path / "my-app")
-    (repo / "gapp.yaml").write_text("solution:\n  name: custom\n")
+    (repo / "gapp.yaml").write_text("name: custom\n")
 
     result = init_solution(repo_path=repo)
 
