@@ -129,6 +129,24 @@ Key decisions:
 - **Port 8080 is hardcoded** — not configurable. All Cloud Run services use 8080.
 - **No `prerequisites.apis`** — foundation APIs are hardcoded in `gapp setup`.
 - **Secrets require an explicit `name`** — the `name` field under `secret:` is the short name in Secret Manager. gapp prefixes it with the solution name: `name: signing-key` on solution `my-app` → `my-app-signing-key` in Secret Manager. No auto-derivation from the env var name.
+- **Every gapp-managed secret is stamped with `gapp-solution=<name>`** — the label is the machine-readable ownership signal. `gapp secrets list`, the pre-deploy validator, and any future tooling query Secret Manager by `labels.gapp-solution=<solution>` (one call) and diff against gapp.yaml declarations.
+- **gapp never implicitly takes over pre-existing secrets** — if `gapp secrets set` or a deploy-time generate path tries to create `<solution>-<short-name>` and a secret at that ID already exists without a matching `gapp-solution=<solution>` label, the operation fails with an actionable error. Every secret gapp manages is labeled; the absence of a label (or a different owner label) means something outside gapp's lifecycle put it there, and silently adopting it would be a security-sensitive side-effect. The user must investigate manually with `gcloud secrets describe` and either delete the existing secret (so gapp can reclaim the name) or resolve the ownership conflict another way.
+
+  ```bash
+  # 1. Copy the value from the legacy secret to the solution-scoped name,
+  #    stamping the label in one shot.
+  gcloud secrets versions access latest \
+      --secret=<legacy-name> --project=$PROJECT | \
+    gcloud secrets create <solution>-<short-name> --project=$PROJECT \
+      --data-file=- --labels=gapp-solution=<solution>
+
+  # 2. Redeploy — terraform now mounts the new name.
+  gapp deploy
+
+  # 3. After verification, delete the legacy secret
+  #    (only once no solution still mounts it).
+  gcloud secrets delete <legacy-name> --project=$PROJECT
+  ```
 - **Custom domains are subdomains only** — `domain` in gapp.yaml creates a Cloud Run domain mapping with a CNAME record. Apex/bare domains (`example.com`) are not supported because they require A records instead of CNAME, adding complexity for a scenario that's unlikely — MCP servers and web API services are virtually always hosted on subdomains (`mcp.example.com`, `api.example.com`).
 - **gapp.yaml has exactly ONE source of truth: `gapp/admin/sdk/schema.py`.** The Pydantic `Manifest` model (and its submodels: `ServiceSpec`, `EnvEntry`, `SecretSpec`, `Prerequisites`, etc.) is the sole authority for every field, type, required flag, and enum value. Everything else derives from it at call time:
 

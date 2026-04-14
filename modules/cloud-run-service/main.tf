@@ -31,6 +31,10 @@ resource "google_secret_manager_secret" "signing_key" {
   project   = var.project_id
   secret_id = "${var.service_name}-signing-key"
 
+  labels = {
+    "gapp-solution" = var.service_name
+  }
+
   replication {
     auto {}
   }

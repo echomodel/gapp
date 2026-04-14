@@ -120,12 +120,12 @@ def test_build_tfvars_with_env_vars_list():
     env_vars = [
         {"name": "APP_DATA_PATH", "value": "{{SOLUTION_DATA_PATH}}/users"},
         {"name": "LOG_LEVEL", "value": "INFO"},
-        {"name": "SIGNING_KEY", "secret": {"generate": True}},
+        {"name": "SIGNING_KEY", "secret": {"name": "signing-key", "generate": True}},
     ]
     tfvars = _build_tfvars("my-app", "proj", "img:abc123", config, env_vars=env_vars)
     assert tfvars["env"]["APP_DATA_PATH"] == "/mnt/data/users"
     assert tfvars["env"]["LOG_LEVEL"] == "INFO"
-    assert tfvars["secrets"]["SIGNING_KEY"] == "signing-key"
+    assert tfvars["secrets"]["SIGNING_KEY"] == "my-app-signing-key"
 
 
 def test_build_tfvars_data_bucket_always_set():
