@@ -261,15 +261,10 @@ def _deploy_from_build(
     secrets = get_prerequisite_secrets(manifest)
     auth_config = get_auth_config(manifest)
 
-    # Auto-generate secrets
-    from gapp.admin.sdk.manifest import get_env_vars
-    for entry in get_env_vars(manifest):
-        secret_cfg = entry.get("secret")
-        if isinstance(secret_cfg, dict) and secret_cfg.get("generate"):
-            secret_name = entry["name"].lower().replace("_", "-")
-            if not _secret_exists(project_id, secret_name):
-                import secrets as secrets_mod
-                _create_and_set_secret(project_id, secret_name, secrets_mod.token_urlsafe(32))
+    # Validate non-generate declared secrets exist; auto-generate the rest.
+    from gapp.admin.sdk.secrets import validate_declared_secrets
+    validate_declared_secrets(project_id, solution_name, manifest)
+    _generate_declared_secrets(project_id, solution_name, manifest)
 
     token = _get_access_token()
     bucket_name = f"gapp-{solution_name}-{project_id}"
@@ -407,15 +402,10 @@ def _deploy_single_service(
         result["build_status"] = "built"
     result["image"] = image
 
-    # Auto-generate secrets
-    from gapp.admin.sdk.manifest import get_env_vars
-    for entry in get_env_vars(manifest):
-        secret_cfg = entry.get("secret")
-        if isinstance(secret_cfg, dict) and secret_cfg.get("generate"):
-            secret_name = entry["name"].lower().replace("_", "-")
-            if not _secret_exists(project_id, secret_name):
-                import secrets as secrets_mod
-                _create_and_set_secret(project_id, secret_name, secrets_mod.token_urlsafe(32))
+    # Validate non-generate declared secrets exist; auto-generate the rest.
+    from gapp.admin.sdk.secrets import validate_declared_secrets
+    validate_declared_secrets(project_id, solution_name, manifest)
+    _generate_declared_secrets(project_id, solution_name, manifest)
 
     bucket_name = f"gapp-{solution_name}-{project_id}"
     tf_result = _stage_and_apply(
@@ -642,25 +632,26 @@ def _get_template(name: str) -> Path:
     return Path(__file__).resolve().parent.parent.parent / "templates" / name
 
 
-def _secret_exists(project_id: str, secret_name: str) -> bool:
-    result = subprocess.run(
-        ["gcloud", "secrets", "describe", secret_name, "--project", project_id],
-        capture_output=True, text=True,
-    )
-    return result.returncode == 0
+def _generate_declared_secrets(project_id: str, solution_name: str, manifest: dict) -> None:
+    """Auto-create secrets declared with `generate: true`, stamping the solution label.
 
+    Idempotent: uses the SDK `_ensure_secret` which updates labels on
+    existing secrets and only adds a version on first create.
+    """
+    from gapp.admin.sdk.manifest import get_env_vars
+    from gapp.admin.sdk.secrets import _ensure_secret, _add_secret_version, list_secrets_by_label
+    import secrets as secrets_mod
 
-def _create_and_set_secret(project_id: str, secret_name: str, value: str) -> None:
-    subprocess.run(
-        ["gcloud", "secrets", "create", secret_name, "--project", project_id,
-         "--replication-policy=automatic"],
-        capture_output=True, text=True,
-    )
-    subprocess.run(
-        ["gcloud", "secrets", "versions", "add", secret_name, "--project", project_id,
-         "--data-file=-"],
-        input=value, capture_output=True, text=True,
-    )
+    present = {s["id"] for s in list_secrets_by_label(project_id, solution_name)}
+    for entry in get_env_vars(manifest):
+        secret_cfg = entry.get("secret")
+        if not isinstance(secret_cfg, dict) or not secret_cfg.get("generate"):
+            continue
+        secret_id = f"{solution_name}-{secret_cfg['name']}"
+        if secret_id in present:
+            continue
+        _ensure_secret(project_id, secret_id, solution_name)
+        _add_secret_version(project_id, secret_id, secrets_mod.token_urlsafe(32))
 
 
 def _secret_name_to_env_var(name: str) -> str:
@@ -697,9 +688,8 @@ def _build_tfvars(
         for entry in resolved:
             name = entry["name"]
             secret_cfg = entry.get("secret")
-            if secret_cfg:
-                secret_name = name.lower().replace("_", "-")
-                secret_env[name] = secret_name
+            if isinstance(secret_cfg, dict):
+                secret_env[name] = f"{solution_name}-{secret_cfg['name']}"
             elif "value" in entry:
                 env[name] = entry["value"]
 

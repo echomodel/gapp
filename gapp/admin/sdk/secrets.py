@@ -1,17 +1,24 @@
-"""gapp secret management — store secrets in Secret Manager."""
+"""gapp secret management — store secrets in Secret Manager.
+
+Every secret gapp creates or updates is stamped with the label
+`gapp-solution=<solution-name>` so ownership is machine-readable.
+Listing and pre-deploy validation use a single label-filtered
+`gcloud secrets list` call instead of N per-secret describes.
+See issue #27 for the full design rationale.
+"""
 
 import subprocess
 from pathlib import Path
 
 from gapp.admin.sdk.context import resolve_solution
-from gapp.admin.sdk.manifest import get_env_vars, get_prerequisite_secrets, load_manifest, save_manifest
+from gapp.admin.sdk.manifest import get_env_vars, load_manifest, save_manifest
+
+
+GAPP_SOLUTION_LABEL = "gapp-solution"
 
 
 def add_secret(secret_name: str, description: str, value: str | None = None, solution: str | None = None) -> dict:
-    """Add a secret declaration to gapp.yaml and optionally set its value.
-
-    Returns dict describing what was done.
-    """
+    """Add a secret declaration to gapp.yaml and optionally set its value."""
     ctx = resolve_solution(solution)
     if not ctx:
         raise RuntimeError(
@@ -25,7 +32,6 @@ def add_secret(secret_name: str, description: str, value: str | None = None, sol
     repo_path = Path(repo_path)
     manifest = load_manifest(repo_path)
 
-    # Add to manifest
     if "prerequisites" not in manifest:
         manifest["prerequisites"] = {}
     if "secrets" not in manifest["prerequisites"]:
@@ -41,13 +47,12 @@ def add_secret(secret_name: str, description: str, value: str | None = None, sol
         "value_status": None,
     }
 
-    # Optionally set the value
     if value is not None:
         project_id = ctx.get("project_id")
         if not project_id:
             result["value_status"] = "skipped (no project attached)"
         else:
-            _ensure_secret(project_id, secret_name)
+            _ensure_secret(project_id, secret_name, ctx["name"])
             _add_secret_version(project_id, secret_name, value)
             result["value_status"] = "set"
 
@@ -55,10 +60,7 @@ def add_secret(secret_name: str, description: str, value: str | None = None, sol
 
 
 def remove_secret(secret_name: str, solution: str | None = None) -> dict:
-    """Remove a secret declaration from gapp.yaml.
-
-    Does NOT delete the secret from Secret Manager.
-    """
+    """Remove a secret declaration from gapp.yaml. Does NOT delete from Secret Manager."""
     ctx = resolve_solution(solution)
     if not ctx:
         raise RuntimeError(
@@ -77,7 +79,6 @@ def remove_secret(secret_name: str, solution: str | None = None) -> dict:
         raise RuntimeError(f"Secret '{secret_name}' not found in gapp.yaml.")
 
     del manifest["prerequisites"]["secrets"][secret_name]
-    # Clean up empty sections
     if not manifest["prerequisites"]["secrets"]:
         del manifest["prerequisites"]["secrets"]
     if not manifest["prerequisites"]:
@@ -88,13 +89,7 @@ def remove_secret(secret_name: str, solution: str | None = None) -> dict:
 
 
 def set_secret(name: str, value: str, solution: str | None = None) -> dict:
-    """Store a secret value in Secret Manager by its name.
-
-    The name is the secret's short name as declared in gapp.yaml
-    (e.g. "signing-key"), not the env var name.
-
-    Creates the secret in Secret Manager if needed, then adds
-    a new version with the given value.
+    """Store a secret value in Secret Manager, stamping the solution label.
 
     Returns dict with: name, secret_id, project_id, secret_status.
     """
@@ -104,7 +99,8 @@ def set_secret(name: str, value: str, solution: str | None = None) -> dict:
         raise RuntimeError("No GCP project attached. Run 'gapp setup <project-id>' first.")
 
     secret_id = resolved["secret_id"]
-    secret_status = _ensure_secret(project_id, secret_id)
+    solution_name = resolved["solution"]
+    secret_status = _ensure_secret(project_id, secret_id, solution_name)
     _add_secret_version(project_id, secret_id, value)
 
     return {
@@ -116,9 +112,14 @@ def set_secret(name: str, value: str, solution: str | None = None) -> dict:
 
 
 def list_secrets(solution: str | None = None) -> dict:
-    """List secret-backed env vars and their status in Secret Manager.
+    """List secret-backed env vars and diff them against what exists in GCP.
 
-    Returns dict with solution info and list of secrets with status.
+    Uses a single label-filtered `gcloud secrets list` call to enumerate
+    secrets owned by this solution, then diffs against what gapp.yaml
+    declares. Reports each as:
+        ready     — declared and present in GCP with our label
+        missing   — declared but not present in GCP (must be set or generated)
+        orphan    — present in GCP with our label but not declared in gapp.yaml
     """
     ctx = resolve_solution(solution)
     if not ctx:
@@ -131,21 +132,29 @@ def list_secrets(solution: str | None = None) -> dict:
     manifest = load_manifest(Path(repo_path).expanduser()) if repo_path else {}
     env_entries = get_env_vars(manifest)
 
+    present_ids = set()
+    if project_id:
+        present_ids = {s["id"] for s in list_secrets_by_label(project_id, ctx["name"])}
+
     secrets = []
+    declared_ids = set()
     for entry in env_entries:
         secret_cfg = entry.get("secret")
-        if not secret_cfg or not isinstance(secret_cfg, dict):
+        if not isinstance(secret_cfg, dict):
             continue
-
-        secret_name = secret_cfg.get("name")
-        if not secret_name:
-            continue
-
+        secret_name = secret_cfg["name"]  # required by schema
         secret_id = f"{ctx['name']}-{secret_name}"
+        declared_ids.add(secret_id)
         generate = secret_cfg.get("generate", False)
-        status = "not set"
-        if project_id:
-            status = _check_secret_status(project_id, secret_id)
+
+        if not project_id:
+            status = "no project attached"
+        elif secret_id in present_ids:
+            status = "ready"
+        elif generate:
+            status = "missing (will be generated on deploy)"
+        else:
+            status = "missing (run `gapp secrets set`)"
 
         secrets.append({
             "name": secret_name,
@@ -155,23 +164,74 @@ def list_secrets(solution: str | None = None) -> dict:
             "status": status,
         })
 
+    orphans = sorted(present_ids - declared_ids)
+
     return {
         "solution": ctx["name"],
         "project_id": project_id,
         "secrets": secrets,
+        "orphans": orphans,
     }
 
 
-def _find_secret(name: str, solution: str | None = None) -> dict:
-    """Find a secret by its name as declared in gapp.yaml.
+def list_secrets_by_label(project_id: str, solution_name: str) -> list[dict]:
+    """Query Secret Manager for every secret labeled with this solution.
 
-    Looks up the secret.name field in gapp.yaml's env section.
-    The name is the short name (e.g. "signing-key"), not the env var.
-    Prefixes with the solution name to produce the full Secret Manager
-    ID: {solution}-{name}.
-
-    Returns dict with: name, env_var, secret_id, solution, generate, project_id.
+    Returns [{"id": "<secret-id>", "labels": {...}}]. On API failure,
+    returns [] and logs a warning — the caller decides whether that's
+    load-bearing.
     """
+    filter_expr = f"labels.{GAPP_SOLUTION_LABEL}={solution_name}"
+    result = subprocess.run(
+        ["gcloud", "secrets", "list",
+         "--project", project_id,
+         "--filter", filter_expr,
+         "--format", "value(name)"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        import logging
+        logging.warning("Failed to list labeled secrets: %s", result.stderr.strip())
+        return []
+
+    ids = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    return [{"id": sid, "labels": {GAPP_SOLUTION_LABEL: solution_name}} for sid in ids]
+
+
+def validate_declared_secrets(project_id: str, solution_name: str, manifest: dict) -> None:
+    """Fast-fail before deploy if non-generate declared secrets are missing.
+
+    Uses one label-filtered query to get the present set, then diffs against
+    what gapp.yaml declares. Closes #24 using the same label query as
+    `list_secrets`.
+    """
+    present_ids = {s["id"] for s in list_secrets_by_label(project_id, solution_name)}
+
+    missing = []
+    for entry in get_env_vars(manifest):
+        secret_cfg = entry.get("secret")
+        if not isinstance(secret_cfg, dict):
+            continue
+        if secret_cfg.get("generate"):
+            continue
+        secret_name = secret_cfg["name"]
+        secret_id = f"{solution_name}-{secret_name}"
+        if secret_id not in present_ids:
+            missing.append({"name": secret_name, "env_var": entry["name"], "secret_id": secret_id})
+
+    if missing:
+        lines = [
+            f"{len(missing)} secret(s) declared in gapp.yaml are missing in GCP:",
+        ]
+        for m in missing:
+            lines.append(f"  {m['env_var']} → {m['secret_id']}")
+            lines.append(f"    Set it: gapp secrets set {m['name']} <value>")
+        raise RuntimeError("\n".join(lines))
+
+
+def _find_secret(name: str, solution: str | None = None) -> dict:
+    """Look up a secret by its short name as declared in gapp.yaml."""
     ctx = resolve_solution(solution)
     if not ctx:
         raise RuntimeError(
@@ -188,13 +248,9 @@ def _find_secret(name: str, solution: str | None = None) -> dict:
     known = []
     for entry in env_entries:
         secret_cfg = entry.get("secret")
-        if not secret_cfg or not isinstance(secret_cfg, dict):
+        if not isinstance(secret_cfg, dict):
             continue
-
-        secret_name = secret_cfg.get("name")
-        if not secret_name:
-            continue
-
+        secret_name = secret_cfg["name"]
         known.append(secret_name)
 
         if secret_name == name:
@@ -214,18 +270,7 @@ def _find_secret(name: str, solution: str | None = None) -> dict:
 
 
 def get_secret(name: str, plaintext: bool = False, solution: str | None = None) -> dict:
-    """Get a secret from Secret Manager by its name.
-
-    The name is the secret's short name as declared in gapp.yaml
-    (e.g. "signing-key"), not the env var name.
-
-    By default returns a SHA-256 hash prefix and length — enough to
-    confirm the secret exists and verify it matches without exposing
-    the value. Pass plaintext=True to include the actual value.
-
-    Returns dict with: name, secret_id, length, hash. Includes
-    'value' only when plaintext=True.
-    """
+    """Get a secret from Secret Manager by its short name."""
     import hashlib
 
     resolved = _find_secret(name, solution=solution)
@@ -242,10 +287,7 @@ def get_secret(name: str, plaintext: bool = False, solution: str | None = None) 
             f"(project: {project_id}). Has 'gapp deploy' been run?"
         )
 
-    result = {
-        "name": name,
-        "secret_id": secret_id,
-    }
+    result = {"name": name, "secret_id": secret_id}
 
     if plaintext:
         result["value"] = value
@@ -257,7 +299,6 @@ def get_secret(name: str, plaintext: bool = False, solution: str | None = None) 
 
 
 def _read_secret_version(project_id: str, secret_id: str) -> str | None:
-    """Read the latest version of a secret. Returns None if not found."""
     result = subprocess.run(
         ["gcloud", "secrets", "versions", "access", "latest",
          "--secret", secret_id,
@@ -270,33 +311,57 @@ def _read_secret_version(project_id: str, secret_id: str) -> str | None:
     return result.stdout.strip()
 
 
-def _ensure_secret(project_id: str, secret_name: str) -> str:
-    """Create a Secret Manager secret if it doesn't exist."""
-    check = subprocess.run(
-        ["gcloud", "secrets", "describe", secret_name,
-         "--project", project_id],
-        capture_output=True,
-        text=True,
-    )
-    if check.returncode == 0:
-        return "exists"
+def _ensure_secret(project_id: str, secret_id: str, solution_name: str) -> str:
+    """Create a Secret Manager secret if absent, stamping the solution label.
 
+    Returns "created" or "exists".
+
+    If a secret with the target ID already exists but is NOT labeled
+    `gapp-solution=<solution_name>`, this raises. gapp refuses to
+    implicitly take over pre-existing secrets: every secret gapp
+    manages is labeled, so an unlabeled or differently-labeled secret
+    at this ID means something else put it there. The caller is
+    expected to investigate and decide manually.
+    """
+    from gapp import __version__
+
+    describe = subprocess.run(
+        ["gcloud", "secrets", "describe", secret_id,
+         "--project", project_id,
+         "--format", f"value(labels.{GAPP_SOLUTION_LABEL})"],
+        capture_output=True, text=True,
+    )
+    if describe.returncode == 0:
+        owner = describe.stdout.strip()
+        if owner == solution_name:
+            return "exists"
+        why = f"owned by solution '{owner}'" if owner else "has no gapp-solution label"
+        raise RuntimeError(
+            f"Secret '{secret_id}' already exists in project '{project_id}' and {why}.\n"
+            f"gapp v{__version__} labels every secret it manages with "
+            f"`gapp-solution=<solution>`. For security, pre-existing secrets "
+            f"are never implicitly taken over — they must be investigated manually.\n"
+            f"  Investigate: gcloud secrets describe {secret_id} --project {project_id}\n"
+            f"  If no longer in use, delete so gapp can reclaim the name:\n"
+            f"    gcloud secrets delete {secret_id} --project {project_id}"
+        )
+
+    label_arg = f"{GAPP_SOLUTION_LABEL}={solution_name}"
     result = subprocess.run(
-        ["gcloud", "secrets", "create", secret_name,
+        ["gcloud", "secrets", "create", secret_id,
          "--replication-policy", "automatic",
+         "--labels", label_arg,
          "--project", project_id],
-        capture_output=True,
-        text=True,
+        capture_output=True, text=True,
     )
     if result.returncode != 0:
         raise RuntimeError(f"Failed to create secret: {result.stderr.strip()}")
     return "created"
 
 
-def _add_secret_version(project_id: str, secret_name: str, value: str) -> None:
-    """Add a new version to a secret."""
+def _add_secret_version(project_id: str, secret_id: str, value: str) -> None:
     result = subprocess.run(
-        ["gcloud", "secrets", "versions", "add", secret_name,
+        ["gcloud", "secrets", "versions", "add", secret_id,
          "--data-file=-",
          "--project", project_id],
         input=value,
@@ -305,28 +370,3 @@ def _add_secret_version(project_id: str, secret_name: str, value: str) -> None:
     )
     if result.returncode != 0:
         raise RuntimeError(f"Failed to set secret value: {result.stderr.strip()}")
-
-
-def _check_secret_status(project_id: str, secret_name: str) -> str:
-    """Check if a secret exists and has a version."""
-    check = subprocess.run(
-        ["gcloud", "secrets", "describe", secret_name,
-         "--project", project_id],
-        capture_output=True,
-        text=True,
-    )
-    if check.returncode != 0:
-        return "not created"
-
-    # Check if it has any versions
-    versions = subprocess.run(
-        ["gcloud", "secrets", "versions", "list", secret_name,
-         "--project", project_id,
-         "--limit", "1",
-         "--format", "value(name)"],
-        capture_output=True,
-        text=True,
-    )
-    if versions.returncode == 0 and versions.stdout.strip():
-        return "set"
-    return "empty"
