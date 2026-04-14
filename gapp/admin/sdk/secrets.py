@@ -87,16 +87,18 @@ def remove_secret(secret_name: str, solution: str | None = None) -> dict:
     return {"name": secret_name, "status": "removed"}
 
 
-def set_secret(env_var_name: str, value: str, solution: str | None = None) -> dict:
-    """Store a secret value in Secret Manager by its env var name.
+def set_secret(name: str, value: str, solution: str | None = None) -> dict:
+    """Store a secret value in Secret Manager by its name.
 
-    Resolves the env var name (e.g. SIGNING_KEY) to the Secret Manager
-    secret ID via gapp.yaml, creates the secret if needed, then adds
+    The name is the secret's short name as declared in gapp.yaml
+    (e.g. "signing-key"), not the env var name.
+
+    Creates the secret in Secret Manager if needed, then adds
     a new version with the given value.
 
-    Returns dict with: env_var, secret_id, solution, project_id, secret_status.
+    Returns dict with: name, secret_id, project_id, secret_status.
     """
-    resolved = resolve_secret_name(env_var_name, solution=solution)
+    resolved = _find_secret(name, solution=solution)
     project_id = resolved["project_id"]
     if not project_id:
         raise RuntimeError("No GCP project attached. Run 'gapp setup <project-id>' first.")
@@ -106,9 +108,8 @@ def set_secret(env_var_name: str, value: str, solution: str | None = None) -> di
     _add_secret_version(project_id, secret_id, value)
 
     return {
-        "env_var": resolved["env_var"],
+        "name": name,
         "secret_id": secret_id,
-        "solution": resolved["solution"],
         "project_id": project_id,
         "secret_status": secret_status,
     }
@@ -133,30 +134,22 @@ def list_secrets(solution: str | None = None) -> dict:
     secrets = []
     for entry in env_entries:
         secret_cfg = entry.get("secret")
-        if not secret_cfg:
+        if not secret_cfg or not isinstance(secret_cfg, dict):
             continue
 
-        env_var = entry["name"]
-        if isinstance(secret_cfg, dict):
-            short_name = secret_cfg.get("name", env_var.lower().replace("_", "-"))
-            generate = secret_cfg.get("generate", False)
-        else:
-            short_name = env_var.lower().replace("_", "-")
-            generate = False
+        secret_name = secret_cfg.get("name")
+        if not secret_name:
+            continue
 
-        secret_id = f"{ctx['name']}-{short_name}"
+        secret_id = f"{ctx['name']}-{secret_name}"
+        generate = secret_cfg.get("generate", False)
         status = "not set"
         if project_id:
             status = _check_secret_status(project_id, secret_id)
-            # Fall back to unprefixed name for backwards compat
-            if status == "not created":
-                unprefixed_status = _check_secret_status(project_id, short_name)
-                if unprefixed_status != "not created":
-                    status = unprefixed_status
-                    secret_id = short_name
 
         secrets.append({
-            "env_var": env_var,
+            "name": secret_name,
+            "env_var": entry["name"],
             "secret_id": secret_id,
             "generate": generate,
             "status": status,
@@ -169,15 +162,15 @@ def list_secrets(solution: str | None = None) -> dict:
     }
 
 
-def resolve_secret_name(env_var_name: str, solution: str | None = None) -> dict:
-    """Resolve an env var name to its Secret Manager secret ID.
+def _find_secret(name: str, solution: str | None = None) -> dict:
+    """Find a secret by its name as declared in gapp.yaml.
 
-    Looks up the env var in gapp.yaml's env section, reads the secret.name
-    field, and prefixes with the solution name to produce the full Secret
-    Manager ID: {solution}-{secret.name}.
+    Looks up the secret.name field in gapp.yaml's env section.
+    The name is the short name (e.g. "signing-key"), not the env var.
+    Prefixes with the solution name to produce the full Secret Manager
+    ID: {solution}-{name}.
 
-    Returns dict with: env_var, short_name, secret_id, solution, generate.
-    Raises RuntimeError if the env var isn't found or isn't secret-backed.
+    Returns dict with: name, env_var, secret_id, solution, generate, project_id.
     """
     ctx = resolve_solution(solution)
     if not ctx:
@@ -192,81 +185,65 @@ def resolve_secret_name(env_var_name: str, solution: str | None = None) -> dict:
     manifest = load_manifest(Path(repo_path).expanduser())
     env_entries = get_env_vars(manifest)
 
+    known = []
     for entry in env_entries:
-        if entry["name"] == env_var_name:
-            secret_cfg = entry.get("secret")
-            if not secret_cfg:
-                raise RuntimeError(
-                    f"'{env_var_name}' is a plain env var, not secret-backed."
-                )
-            if isinstance(secret_cfg, dict):
-                short_name = secret_cfg.get("name")
-                generate = secret_cfg.get("generate", False)
-            else:
-                short_name = None
-                generate = False
+        secret_cfg = entry.get("secret")
+        if not secret_cfg or not isinstance(secret_cfg, dict):
+            continue
 
-            if not short_name:
-                # Fall back to legacy convention for existing deployments
-                short_name = env_var_name.lower().replace("_", "-")
+        secret_name = secret_cfg.get("name")
+        if not secret_name:
+            continue
 
-            secret_id = f"{ctx['name']}-{short_name}"
+        known.append(secret_name)
+
+        if secret_name == name:
             return {
-                "env_var": env_var_name,
-                "short_name": short_name,
-                "secret_id": secret_id,
+                "name": name,
+                "env_var": entry["name"],
+                "secret_id": f"{ctx['name']}-{name}",
                 "solution": ctx["name"],
-                "generate": generate,
+                "generate": secret_cfg.get("generate", False),
                 "project_id": ctx.get("project_id"),
             }
 
     raise RuntimeError(
-        f"No env var '{env_var_name}' found in gapp.yaml. "
-        f"Known env vars: {', '.join(e['name'] for e in env_entries) or '(none)'}"
+        f"No secret '{name}' found in gapp.yaml. "
+        f"Known secrets: {', '.join(known) or '(none)'}"
     )
 
 
-def get_secret(env_var_name: str, plaintext: bool = False, solution: str | None = None) -> dict:
-    """Get a secret from Secret Manager by its env var name.
+def get_secret(name: str, plaintext: bool = False, solution: str | None = None) -> dict:
+    """Get a secret from Secret Manager by its name.
 
-    Resolves the env var name (e.g. SIGNING_KEY) to the Secret Manager
-    secret ID via gapp.yaml, then gets the latest version.
+    The name is the secret's short name as declared in gapp.yaml
+    (e.g. "signing-key"), not the env var name.
 
     By default returns a SHA-256 hash prefix and length — enough to
     confirm the secret exists and verify it matches without exposing
     the value. Pass plaintext=True to include the actual value.
 
-    Returns dict with: env_var, secret_id, length, hash, solution,
-    project_id. Includes 'value' only when plaintext=True.
+    Returns dict with: name, secret_id, length, hash. Includes
+    'value' only when plaintext=True.
     """
     import hashlib
 
-    resolved = resolve_secret_name(env_var_name, solution=solution)
+    resolved = _find_secret(name, solution=solution)
     project_id = resolved["project_id"]
     if not project_id:
         raise RuntimeError("No GCP project attached. Run 'gapp setup <project-id>' first.")
 
     secret_id = resolved["secret_id"]
-
-    # Try the resolved name first
     value = _read_secret_version(project_id, secret_id)
-
-    # Fall back to unprefixed name for backwards compat with existing deployments
-    if value is None:
-        unprefixed = resolved["short_name"]
-        if unprefixed != secret_id:
-            value = _read_secret_version(project_id, unprefixed)
-            if value is not None:
-                secret_id = unprefixed
 
     if value is None:
         raise RuntimeError(
-            f"Secret '{resolved['secret_id']}' not found in Secret Manager "
+            f"Secret '{secret_id}' not found in Secret Manager "
             f"(project: {project_id}). Has 'gapp deploy' been run?"
         )
 
     result = {
-        "name": resolved["env_var"],
+        "name": name,
         "secret_id": secret_id,
     }
 

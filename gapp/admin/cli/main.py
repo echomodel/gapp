@@ -266,7 +266,7 @@ def secrets_list_cmd(solution):
     for s in result["secrets"]:
         marker = "\u2713" if s["status"] == "set" else "\u2717"
         gen = " (auto)" if s.get("generate") else ""
-        click.echo(f"    {s['env_var']:<25} {s['secret_id']:<35} {s['status']:<12} {marker}{gen}")
+        click.echo(f"    {s['name']:<25} {s['secret_id']:<35} {s['status']:<12} {marker}{gen}")
     click.echo()
 
 
@@ -276,11 +276,13 @@ def secrets_list_cmd(solution):
 @click.option("--raw", is_flag=True, help="Output just the value, no formatting (implies --plaintext).")
 @click.option("--solution", default=None, help="Solution name (default: current directory).")
 def secrets_get_cmd(name, plaintext, raw, solution):
-    """Get a secret from Secret Manager by env var name.
+    """Get a secret from Secret Manager by its name.
 
-    By default shows a hash and length to confirm the secret exists
-    without exposing the value. Use --plaintext to see the actual value,
-    or --raw to output just the value for piping.
+    NAME is the secret's short name as declared in gapp.yaml
+    (e.g. "signing-key"). By default shows a hash and length to
+    confirm the secret exists without exposing the value. Use
+    --plaintext to see the actual value, or --raw to output just
+    the value for piping.
     """
     from gapp.admin.sdk.secrets import get_secret
 

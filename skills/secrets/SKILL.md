@@ -1,6 +1,6 @@
 ---
 name: secrets
-description: Manage secrets for gapp-deployed solutions. Use when asked to check, read, set, or troubleshoot secrets in Secret Manager — "what secrets does this need", "get the signing key", "set the API key", "are my secrets ready for deploy", "why can't I connect to the admin CLI", etc.
+description: Manage secrets for gapp-deployed solutions. Use when asked to check, get, set, or troubleshoot secrets in Secret Manager — "what secrets does this need", "get the db password", "set the API key", "are my secrets ready for deploy", "check secret status", etc.
 disable-model-invocation: false
 user-invocable: true
 ---
@@ -11,8 +11,8 @@ user-invocable: true
 
 This skill manages secrets for gapp-deployed solutions. Secrets
 are values stored in GCP Secret Manager and injected as environment
-variables into the running container. Common examples: signing
-keys, upstream API tokens, database credentials.
+variables into the running container. Common examples: API tokens,
+database credentials, shared secrets used for authentication.
 
 ## How Secrets Work in gapp
 
@@ -21,57 +21,57 @@ Secrets are declared in `gapp.yaml`'s `env` section with a
 
 ```yaml
 env:
-  - name: SIGNING_KEY
+  - name: DB_PASSWORD
     secret:
-      name: signing-key
+      name: db-password
       generate: true
 
-  - name: THIRD_PARTY_API_KEY
+  - name: UPSTREAM_API_KEY
     secret:
       name: api-key
 ```
 
 ### Naming
 
-Every secret has two names:
+Every secret has a short name (`secret.name` in gapp.yaml) and
+a full Secret Manager ID:
 
-| Name | Where it appears | Example |
-|------|-----------------|---------|
-| **Env var name** | gapp.yaml `name` field, app code | `SIGNING_KEY` |
-| **Secret Manager ID** | GCP Secret Manager | `my-solution-signing-key` |
+| | Example |
+|---|---|
+| **Short name** (what you type) | `db-password` |
+| **Secret Manager ID** (what gapp creates) | `my-solution-db-password` |
 
-The Secret Manager ID is always `{solution}-{secret.name}`. This
-prefixing ensures secrets from different solutions in the same GCP
-project never collide.
+The Secret Manager ID is always `{solution}-{short-name}`. This
+prefixing ensures secrets from different solutions in the same
+GCP project never collide.
 
-All gapp commands accept the **env var name** — gapp resolves the
-Secret Manager ID automatically. You never need to know or type
-the full Secret Manager ID.
+All gapp commands accept the **short name** — gapp adds the
+solution prefix automatically.
+
+### The `name` field
+
+The `name` field under `secret` is required. It is the short name
+for the secret in Secret Manager.
+
+```yaml
+env:
+  - name: DB_PASSWORD          # env var the app reads at runtime
+    secret:
+      name: db-password        # Secret Manager: {solution}-db-password
+      generate: true
+```
 
 ### Two kinds of secrets
 
 **Auto-generated** (`generate: true`): gapp creates a strong
 random value during deploy if the secret doesn't exist yet. Use
-this for signing keys and any secret where the value just needs
-to be random and consistent.
+this for any secret where the value just needs to be random and
+consistent — shared secrets, internal auth keys, encryption keys.
 
 **User-provided** (no `generate`): the secret must exist in
-Secret Manager before deploy. The user populates it with
-`gapp_secret_set`. Use this for upstream API keys, third-party
-credentials, or any value the user provides.
-
-### The `name` field
-
-The `name` field under `secret` is required. It specifies the
-short name used in Secret Manager (before the solution prefix).
-
-```yaml
-env:
-  - name: SIGNING_KEY
-    secret:
-      name: signing-key       # Secret Manager ID: {solution}-signing-key
-      generate: true
-```
+Secret Manager before deploy. Populate it with `gapp_secret_set`
+or the CLI. Use this for upstream API keys, third-party
+credentials, or any externally-provided value.
 
 ## Workflow: Before Deploy
 
@@ -89,63 +89,45 @@ status `"set"`. Deploying with missing secrets will fail.
 ### Populating a secret
 
 ```
-gapp_secret_set(env_var_name="THIRD_PARTY_API_KEY", value="the-value")
+gapp_secret_set(name="api-key", value="the-value")
 ```
 
 Or via CLI:
 ```bash
-gapp secrets set THIRD_PARTY_API_KEY
+gapp secrets set api-key
 # prompts for value (hidden input)
 ```
 
 ## Workflow: After Deploy
 
-### Retrieving a secret value
+### Retrieving a secret
 
 Use `gapp_secret_get` to confirm a secret exists or to retrieve
-its value for admin operations (e.g., connecting the mcp-app
-admin CLI).
+its value for post-deploy operations (e.g., configuring an admin
+client, verifying a credential).
 
 **Default (safe)** — returns hash and length, no plaintext:
 ```
-gapp_secret_get(env_var_name="SIGNING_KEY")
-# {"name": "SIGNING_KEY", "secret_id": "my-solution-signing-key", "hash": "a1b2c3d4...", "length": 43}
+gapp_secret_get(name="db-password")
+# {"name": "db-password", "secret_id": "my-solution-db-password", "hash": "a1b2c3d4...", "length": 43}
 ```
 
 **With plaintext** — returns the actual value:
 ```
-gapp_secret_get(env_var_name="SIGNING_KEY", plaintext=True)
-# {"name": "SIGNING_KEY", "secret_id": "my-solution-signing-key", "value": "the-actual-value"}
+gapp_secret_get(name="db-password", plaintext=True)
+# {"name": "db-password", "secret_id": "my-solution-db-password", "value": "the-actual-value"}
 ```
 
-Use plaintext when you need the value for something — e.g., to
-pass to `mcp-app set-base-url --signing-key` for admin client
-setup. The hash-only default avoids leaking secrets into agent
-conversation logs unnecessarily.
+The hash-only default avoids leaking secrets into agent
+conversation logs unnecessarily. Use plaintext only when you
+need the actual value for an operation.
 
 CLI equivalent:
 ```bash
-gapp secrets get SIGNING_KEY              # hash + length
-gapp secrets get SIGNING_KEY --plaintext  # shows value
-gapp secrets get SIGNING_KEY --raw        # just the value, for piping
+gapp secrets get db-password              # hash + length
+gapp secrets get db-password --plaintext  # shows value
+gapp secrets get db-password --raw        # just the value, for piping
 ```
-
-### Connecting the mcp-app admin CLI
-
-For mcp-app solutions, the signing key is needed to configure the
-admin client for user management. This is the bridge between
-deployment and user management:
-
-```bash
-gapp secrets get SIGNING_KEY --raw | \
-  my-solution-admin connect \
-    "$(gapp status --url)" \
-    --signing-key-stdin
-```
-
-Or via MCP tools:
-1. `gapp_secret_get(env_var_name="SIGNING_KEY", plaintext=True)`
-2. Use the returned value with the admin CLI or MCP admin tools
 
 ## MCP Tools Reference
 
@@ -158,7 +140,7 @@ Or via MCP tools:
 ## Important Notes
 
 - Secret names are scoped per-solution. Two solutions can both
-  declare `name: signing-key` without collision.
+  declare `name: db-password` without collision.
 - `gapp_secret_get` returns hash + length by default. Use
   `plaintext=True` only when you need the actual value.
 - Always call `gapp_secret_list` before `gapp_deploy` to confirm
