@@ -246,7 +246,7 @@ def secrets():
 @secrets.command("list")
 @click.option("--solution", default=None, help="Solution name (default: current directory).")
 def secrets_list_cmd(solution):
-    """Show prerequisite secrets and status."""
+    """Show secret-backed env vars and their status."""
     from gapp.admin.sdk.secrets import list_secrets
 
     try:
@@ -256,17 +256,49 @@ def secrets_list_cmd(solution):
         raise SystemExit(1)
 
     click.echo()
-    click.echo(f"  {result['name']} secrets")
+    click.echo(f"  {result['solution']} secrets")
     click.echo()
 
     if not result["secrets"]:
-        click.echo("  No secrets required.")
+        click.echo("  No secrets declared.")
         return
 
     for s in result["secrets"]:
         marker = "\u2713" if s["status"] == "set" else "\u2717"
-        click.echo(f"    {s['name']:<30} {s['status']:<12} {marker}  {s['description']}")
+        gen = " (auto)" if s.get("generate") else ""
+        click.echo(f"    {s['env_var']:<25} {s['secret_id']:<35} {s['status']:<12} {marker}{gen}")
     click.echo()
+
+
+@secrets.command("get")
+@click.argument("name")
+@click.option("--plaintext", is_flag=True, help="Show the actual secret value (default: hash only).")
+@click.option("--raw", is_flag=True, help="Output just the value, no formatting (implies --plaintext).")
+@click.option("--solution", default=None, help="Solution name (default: current directory).")
+def secrets_get_cmd(name, plaintext, raw, solution):
+    """Get a secret from Secret Manager by env var name.
+
+    By default shows a hash and length to confirm the secret exists
+    without exposing the value. Use --plaintext to see the actual value,
+    or --raw to output just the value for piping.
+    """
+    from gapp.admin.sdk.secrets import get_secret
+
+    show_value = plaintext or raw
+
+    try:
+        result = get_secret(name, plaintext=show_value, solution=solution)
+    except RuntimeError as e:
+        click.echo(f"  Error: {e}", err=True)
+        raise SystemExit(1)
+
+    if raw:
+        click.echo(result["value"], nl=False)
+    elif show_value:
+        click.echo(f"  {result['name']} ({result['secret_id']}): {result['value']}")
+    else:
+        click.echo(f"  {result['name']} ({result['secret_id']})")
+        click.echo(f"    length: {result['length']}, sha256: {result['hash']}")
 
 
 @secrets.command("set")
@@ -286,7 +318,7 @@ def secrets_set_cmd(name, value, solution):
         click.echo(f"  Error: {e}", err=True)
         raise SystemExit(1)
 
-    click.echo(f"  Secret {result['name']} {result['secret_status']} \u2713")
+    click.echo(f"  Secret {result['secret_id']} {result['secret_status']} \u2713")
 
 
 @secrets.command("add")

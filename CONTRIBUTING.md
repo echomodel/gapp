@@ -128,7 +128,7 @@ Key decisions:
 - **`service.entrypoint` is required** — passed as `--build-arg` to the static Dockerfile.
 - **Port 8080 is hardcoded** — not configurable. All Cloud Run services use 8080.
 - **No `prerequisites.apis`** — foundation APIs are hardcoded in `gapp setup`.
-- **Secrets use kebab-case** — gapp auto-derives the UPPER_SNAKE env var name (`api-token` → `API_TOKEN`).
+- **Secrets require an explicit `name`** — the `name` field under `secret:` is the short name in Secret Manager. gapp prefixes it with the solution name: `name: signing-key` on solution `my-app` → `my-app-signing-key` in Secret Manager. No auto-derivation from the env var name.
 - **Custom domains are subdomains only** — `domain` in gapp.yaml creates a Cloud Run domain mapping with a CNAME record. Apex/bare domains (`example.com`) are not supported because they require A records instead of CNAME, adding complexity for a scenario that's unlikely — MCP servers and web API services are virtually always hosted on subdomains (`mcp.example.com`, `api.example.com`).
 
 Optional overrides with defaults:
@@ -163,7 +163,7 @@ service:
 
 **Dockerfile tradeoffs.** The design preference is for solutions to NOT maintain a Dockerfile — gapp generates one, meaning less maintenance and consistent builds across solutions. But maintaining a Dockerfile gives full control over the build (custom system deps, non-Python components, multi-stage builds). Both are valid. gapp uses a solution's Dockerfile without question when present.
 
-**`env` section replaces `secrets`.** The old `prerequisites.secrets` section only supported Secret Manager-backed values. The new `env` section supports plain values, secret-backed values, and auto-generation (`generate: true`). `{{VARIABLE}}` substitution resolves gapp-provided values (`SOLUTION_DATA_PATH`, `SOLUTION_NAME`) at deploy time.
+**`env` section replaces `prerequisites.secrets`.** The old `prerequisites.secrets` section is deprecated. The `env` section supports plain values, secret-backed values, and auto-generation (`generate: true`). Each secret entry requires a `name` field — the short name used in Secret Manager (auto-prefixed with the solution name for isolation). `{{VARIABLE}}` substitution resolves gapp-provided values (`SOLUTION_DATA_PATH`, `SOLUTION_NAME`) at deploy time. Secrets with `generate: true` are created automatically during deploy. Secrets without `generate` must be populated in advance with `gapp secrets set`.
 
 ## Static Terraform + Generated tfvars.json
 
@@ -209,7 +209,7 @@ A single identity is used across the entire deploy flow. gapp passes a gcloud ac
 Secret values live in GCP Secret Manager within the project where they're consumed. Key properties:
 - **Blast radius isolation** — per-project Secret Manager with its own IAM
 - **No secret values in repos** — only secret names (references)
-- **Secrets use kebab-case names** in `gapp.yaml` (e.g., `api-token`), auto-mapped to UPPER_SNAKE env vars on Cloud Run
+- **Secrets are solution-scoped** — Secret Manager IDs are `{solution}-{name}`, preventing collisions when multiple solutions share a GCP project
 - **Per-secret IAM** — each solution's service account gets `secretAccessor` only on its declared secrets, not project-wide. Solutions sharing a GCP project cannot read each other's secrets.
 
 ## Code Architecture

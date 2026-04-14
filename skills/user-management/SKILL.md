@@ -30,29 +30,27 @@ local management commands.
 The mcp-app CLI needs to know the service URL and signing key
 for the target solution. This is a one-time setup per solution.
 
-### If deployed with gapp
+### Get the signing key
 
-Use gapp tools to retrieve the service URL and signing key:
+Use `gapp_secret_get` with `plaintext=True` to retrieve the
+signing key value:
 
-```bash
-gapp secrets get SIGNING_KEY --solution <solution-name> --raw | \
-  mcp-app set-base-url \
-    "$(gapp status --solution <solution-name> --url)" \
-    --signing-key-stdin
+```
+gapp_secret_get(env_var_name="SIGNING_KEY", plaintext=True)
 ```
 
-### If deployed without gapp
-
-Set values manually:
-
+Or via CLI:
 ```bash
-mcp-app set-base-url https://my-service.run.app --signing-key YOUR_KEY
+gapp secrets get SIGNING_KEY --raw | \
+  my-solution-admin connect \
+    "$(gapp status --url)" \
+    --signing-key-stdin
 ```
 
 ### Verify configuration
 
 ```bash
-mcp-app health
+my-solution-admin health
 ```
 
 Should show `healthy (200)`.

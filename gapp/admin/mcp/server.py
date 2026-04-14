@@ -107,29 +107,85 @@ def gapp_deploy(
 
 
 @mcp.tool()
+def gapp_secret_get(env_var_name: str, plaintext: bool = False, solution: str | None = None) -> dict:
+    """Get a secret from GCP Secret Manager by its env var name.
+
+    Use this to retrieve secrets that gapp manages for a deployed solution —
+    for example, the SIGNING_KEY needed to configure an mcp-app admin client
+    after deploy, or any other secret-backed env var declared in gapp.yaml.
+
+    Pass the env var name exactly as it appears in gapp.yaml's env section
+    (e.g. "SIGNING_KEY"). gapp resolves this to the actual Secret Manager
+    ID automatically using the solution name as a prefix.
+
+    By default returns a SHA-256 hash prefix and length — enough to confirm
+    the secret exists and verify identity without exposing the value. Set
+    plaintext=True to get the actual value (e.g. when you need to pass it
+    to mcp-app's admin CLI for user management).
+
+    Default response:  {"name": "SIGNING_KEY", "secret_id": "...", "hash": "a1b2...", "length": 43}
+    With plaintext:    {"name": "SIGNING_KEY", "secret_id": "...", "value": "the-actual-value"}
+
+    IMPORTANT: Before deploying, use gapp_secret_list to confirm all
+    non-generated secrets have values. Deploying with missing secrets
+    will fail.
+
+    Args:
+        env_var_name: The env var name from gapp.yaml (e.g. "SIGNING_KEY").
+        plaintext: If True, return the actual secret value. Default False.
+        solution: Solution name. Defaults to current directory's solution.
+    """
+    from gapp.admin.sdk.secrets import get_secret
+    return get_secret(env_var_name, plaintext=plaintext, solution=solution)
+
+
+@mcp.tool()
+def gapp_secret_set(env_var_name: str, value: str, solution: str | None = None) -> dict:
+    """Store a secret value in GCP Secret Manager for a deployed solution.
+
+    Use this to populate secrets that the solution needs at runtime but
+    that gapp does not auto-generate — for example, an upstream API key
+    or third-party credential. The secret must be declared in gapp.yaml's
+    env section with a secret.name field.
+
+    For secrets with generate: true (like SIGNING_KEY), gapp creates the
+    value automatically during deploy — you don't need this tool for those.
+
+    The env_var_name is the name as it appears in gapp.yaml's env section.
+    gapp resolves this to the actual Secret Manager ID automatically.
+
+    Args:
+        env_var_name: The env var name from gapp.yaml (e.g. "API_KEY").
+        value: The secret value to store.
+        solution: Solution name. Defaults to current directory's solution.
+    """
+    from gapp.admin.sdk.secrets import set_secret
+    return set_secret(env_var_name, value, solution=solution)
+
+
+@mcp.tool()
 def gapp_secret_list(solution: str | None = None) -> dict:
-    """List prerequisite secrets and their status in Secret Manager.
+    """List all secret-backed env vars and whether they are ready for deploy.
+
+    Shows each secret's env var name, resolved Secret Manager ID, whether
+    it has a value set, and whether gapp auto-generates it on deploy.
+
+    IMPORTANT: Call this BEFORE gapp_deploy. Secrets with generate: true
+    are created automatically by gapp during deploy. All other secrets
+    must be populated in advance with gapp_secret_set — deploying with
+    missing secrets will fail.
+
+    Each secret in the response has:
+    - env_var: the name in gapp.yaml (what the app reads at runtime)
+    - secret_id: the resolved Secret Manager ID
+    - generate: true if gapp auto-creates this on deploy
+    - status: "set", "empty", "not created"
 
     Args:
         solution: Solution name. Defaults to current directory's solution.
     """
     from gapp.admin.sdk.secrets import list_secrets
     return list_secrets(solution=solution)
-
-
-@mcp.tool()
-def gapp_secret_set(secret_name: str, value: str, solution: str | None = None) -> dict:
-    """Store a secret value in Secret Manager.
-
-    Creates the secret if it doesn't exist, then adds a new version.
-
-    Args:
-        secret_name: Name of the secret (as declared in gapp.yaml).
-        value: The secret value.
-        solution: Solution name. Defaults to current directory's solution.
-    """
-    from gapp.admin.sdk.secrets import set_secret
-    return set_secret(secret_name, value, solution=solution)
 
 
 @mcp.tool()
