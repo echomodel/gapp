@@ -106,6 +106,7 @@ public: true
 env:
   - name: SIGNING_KEY
     secret:
+      name: signing-key
       generate: true
   - name: APP_USERS_PATH
     value: "{{SOLUTION_DATA_PATH}}/users"
@@ -137,6 +138,21 @@ If multiple options are present, gapp uses the first match:
 1. `service.entrypoint` or `service.cmd` in gapp.yaml
 2. `Dockerfile` in your repo
 3. `mcp-app.yaml` in your repo
+
+### Full gapp.yaml schema
+
+The snippets in this README are illustrative — not exhaustive. For the
+authoritative list of every valid field, its type, whether it's
+required, and a one-line description, run:
+
+```bash
+gapp manifest schema
+```
+
+This emits the live JSON Schema generated from gapp's Pydantic model.
+It is the same schema used to validate `gapp.yaml` at load time and
+embedded in every `manifest_invalid` error response from both the CLI
+and the MCP tools — there is no second source.
 
 ### Additional gapp.yaml settings
 
@@ -197,6 +213,7 @@ public: true
 env:
   - name: SIGNING_KEY
     secret:
+      name: signing-key
       generate: true
   - name: APP_USERS_PATH
     value: "{{SOLUTION_DATA_PATH}}/users"

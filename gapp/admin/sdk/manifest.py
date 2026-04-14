@@ -4,14 +4,22 @@ from pathlib import Path
 
 import yaml
 
+from gapp.admin.sdk.schema import ManifestValidationError, validate_manifest
+
 
 def load_manifest(repo_path: Path) -> dict:
-    """Load gapp.yaml from a repo. Returns empty dict if missing."""
+    """Load and validate gapp.yaml from a repo. Returns empty dict if missing.
+
+    Raises ManifestValidationError if the file exists but fails schema
+    validation. The message names each offending field by yaml path.
+    """
     manifest_path = repo_path / "gapp.yaml"
     if not manifest_path.exists():
         return {}
     with open(manifest_path) as f:
-        return yaml.safe_load(f) or {}
+        data = yaml.safe_load(f) or {}
+    validate_manifest(data)
+    return data
 
 
 def save_manifest(repo_path: Path, manifest: dict) -> None:
@@ -37,8 +45,7 @@ def get_solution_name(manifest: dict, repo_path: Path) -> str:
     name = get_name(manifest)
     if name:
         return name
-    solution = manifest.get("solution", {})
-    return solution.get("name", repo_path.name)
+    return repo_path.name
 
 
 def get_prerequisite_secrets(manifest: dict) -> dict:

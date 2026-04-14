@@ -21,19 +21,18 @@ def test_load_manifest_missing(tmp_path):
 
 def test_load_manifest_exists(tmp_path):
     (tmp_path / "gapp.yaml").write_text(
-        "solution:\n"
-        "  name: my-app\n"
+        "name: my-app\n"
         "prerequisites:\n"
         "  apis:\n"
         "    - run.googleapis.com\n"
     )
     result = load_manifest(tmp_path)
-    assert result["solution"]["name"] == "my-app"
+    assert result["name"] == "my-app"
     assert "run.googleapis.com" in result["prerequisites"]["apis"]
 
 
 def test_solution_name_from_manifest():
-    manifest = {"solution": {"name": "custom-name"}}
+    manifest = {"name": "custom-name"}
     assert get_solution_name(manifest, Path("/tmp/fallback")) == "custom-name"
 
 
@@ -176,3 +175,151 @@ def test_get_auth_framework():
     assert get_auth_framework({"auth": {"framework": "app-user"}}) == "app-user"
     assert get_auth_framework({}) is None
     assert get_auth_framework({"auth": "bearer"}) is None
+
+
+# --- Schema validation ---
+
+import pytest
+
+from gapp.admin.sdk.schema import ManifestValidationError, Manifest, validate_manifest
+
+
+def _write_yaml(tmp_path, body: str):
+    (tmp_path / "gapp.yaml").write_text(body)
+
+
+def test_valid_manifest_loads(tmp_path):
+    _write_yaml(tmp_path, """
+public: true
+domain: mcp.example.com
+env:
+  - name: LOG_LEVEL
+    value: INFO
+  - name: SIGNING_KEY
+    secret:
+      name: signing-key
+      generate: true
+service:
+  entrypoint: app:main
+  auth: bearer
+prerequisites:
+  apis:
+    - run.googleapis.com
+""")
+    result = load_manifest(tmp_path)
+    assert result["domain"] == "mcp.example.com"
+    assert result["env"][1]["secret"]["name"] == "signing-key"
+
+
+def test_secret_missing_name_rejected(tmp_path):
+    """The exact silent-skip case from issue #26: secret dict without name."""
+    _write_yaml(tmp_path, """
+env:
+  - name: SIGNING_KEY
+    secret:
+      generate: true
+""")
+    with pytest.raises(ManifestValidationError) as exc:
+        load_manifest(tmp_path)
+    msg = str(exc.value)
+    assert "env.0.secret" in msg
+    assert "name" in msg
+
+
+def test_unknown_top_level_field_rejected(tmp_path):
+    _write_yaml(tmp_path, "domian: mcp.example.com\n")
+    with pytest.raises(ManifestValidationError, match="domian"):
+        load_manifest(tmp_path)
+
+
+def test_unknown_service_field_rejected(tmp_path):
+    _write_yaml(tmp_path, "service:\n  entrypnt: app:main\n")
+    with pytest.raises(ManifestValidationError, match="entrypnt"):
+        load_manifest(tmp_path)
+
+
+def test_unknown_env_entry_field_rejected(tmp_path):
+    _write_yaml(tmp_path, """
+env:
+  - name: X
+    valu: y
+""")
+    with pytest.raises(ManifestValidationError, match="valu"):
+        load_manifest(tmp_path)
+
+
+def test_env_entry_missing_name_rejected(tmp_path):
+    """env[] entries must declare a 'name' field."""
+    _write_yaml(tmp_path, """
+env:
+  - value: INFO
+""")
+    with pytest.raises(ManifestValidationError) as exc:
+        load_manifest(tmp_path)
+    msg = str(exc.value)
+    assert "env.0.name" in msg
+    assert "required" in msg.lower() or "missing" in msg.lower()
+
+
+def test_prerequisite_secret_unknown_field_rejected(tmp_path):
+    """Nested dicts (prerequisites.secrets.<name>) also reject typos."""
+    _write_yaml(tmp_path, """
+prerequisites:
+  secrets:
+    api-token:
+      desription: typo of description
+""")
+    with pytest.raises(ManifestValidationError, match="desription"):
+        load_manifest(tmp_path)
+
+
+def test_service_max_instances_wrong_type_rejected(tmp_path):
+    _write_yaml(tmp_path, """
+service:
+  max_instances: "lots"
+""")
+    with pytest.raises(ManifestValidationError, match="max_instances"):
+        load_manifest(tmp_path)
+
+
+def test_env_value_and_secret_mutually_exclusive(tmp_path):
+    _write_yaml(tmp_path, """
+env:
+  - name: X
+    value: plain
+    secret:
+      name: x
+""")
+    with pytest.raises(ManifestValidationError, match="both"):
+        load_manifest(tmp_path)
+
+
+def test_invalid_auth_strategy_rejected(tmp_path):
+    _write_yaml(tmp_path, "service:\n  auth: gibberish\n")
+    with pytest.raises(ManifestValidationError, match="auth"):
+        load_manifest(tmp_path)
+
+
+def test_type_mismatch_rejected(tmp_path):
+    _write_yaml(tmp_path, "public: not-a-bool-string-too\n")
+    # "not-a-bool-string-too" can't coerce; pydantic should reject
+    with pytest.raises(ManifestValidationError):
+        load_manifest(tmp_path)
+
+
+def test_validate_manifest_empty_returns_empty_model():
+    m = validate_manifest({})
+    assert isinstance(m, Manifest)
+    assert m.env == []
+
+
+def test_empty_manifest_file_is_valid(tmp_path):
+    _write_yaml(tmp_path, "")
+    assert load_manifest(tmp_path) == {}
+
+
+def test_json_schema_generation():
+    """Schema must be exportable for tooling/docs."""
+    schema = Manifest.model_json_schema()
+    assert "properties" in schema
+    assert "env" in schema["properties"]
