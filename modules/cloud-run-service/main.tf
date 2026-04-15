@@ -4,10 +4,6 @@ terraform {
       source  = "hashicorp/google"
       version = ">= 5.0"
     }
-    random = {
-      source  = "hashicorp/random"
-      version = ">= 3.0"
-    }
   }
 }
 
@@ -16,34 +12,6 @@ resource "google_service_account" "service" {
   project      = var.project_id
   account_id   = "${var.service_name}-sa"
   display_name = "${var.service_name} service account"
-}
-
-# --- Auth: signing key (only when auth enabled) ---
-
-resource "random_password" "signing_key" {
-  count   = var.auth_enabled ? 1 : 0
-  length  = 32
-  special = false
-}
-
-resource "google_secret_manager_secret" "signing_key" {
-  count     = var.auth_enabled ? 1 : 0
-  project   = var.project_id
-  secret_id = "${var.service_name}-signing-key"
-
-  labels = {
-    "gapp-solution" = var.service_name
-  }
-
-  replication {
-    auto {}
-  }
-}
-
-resource "google_secret_manager_secret_version" "signing_key" {
-  count       = var.auth_enabled ? 1 : 0
-  secret      = google_secret_manager_secret.signing_key[0].id
-  secret_data = random_password.signing_key[0].result
 }
 
 # Cloud Run v2 service
@@ -118,46 +86,15 @@ resource "google_cloud_run_v2_service" "service" {
           }
         }
       }
-
-      # Auth env vars (only when auth enabled)
-      dynamic "env" {
-        for_each = var.auth_enabled ? [1] : []
-        content {
-          name = "GAPP_SIGNING_KEY"
-          value_source {
-            secret_key_ref {
-              secret  = google_secret_manager_secret.signing_key[0].secret_id
-              version = "latest"
-            }
-          }
-        }
-      }
-
-      dynamic "env" {
-        for_each = var.auth_enabled ? [1] : []
-        content {
-          name  = "GAPP_AUTH_MOUNT"
-          value = "/mnt/data/auth"
-        }
-      }
     }
   }
 }
 
-# Grant service account access to each prerequisite secret
-resource "google_secret_manager_secret_iam_member" "prerequisite_secret" {
-  for_each  = var.secrets
+# Grant service account access to each declared secret
+resource "google_secret_manager_secret_iam_member" "declared_secret" {
+  for_each  = toset(values(var.secrets))
   project   = var.project_id
   secret_id = each.value
-  role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${google_service_account.service.email}"
-}
-
-# Grant service account access to the signing key secret (only when auth enabled)
-resource "google_secret_manager_secret_iam_member" "signing_key" {
-  count     = var.auth_enabled ? 1 : 0
-  project   = var.project_id
-  secret_id = google_secret_manager_secret.signing_key[0].secret_id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.service.email}"
 }
@@ -170,7 +107,7 @@ resource "google_storage_bucket_iam_member" "data_bucket" {
   member = "serviceAccount:${google_service_account.service.email}"
 }
 
-# Public access — controlled by explicit flag, not tied to auth
+# Public access — explicit flag
 resource "google_cloud_run_v2_service_iam_member" "public" {
   count    = var.public ? 1 : 0
   project  = var.project_id

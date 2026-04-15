@@ -55,12 +55,6 @@ variable "data_bucket" {
   default     = ""
 }
 
-variable "auth_enabled" {
-  description = "Enable credential mediation wrapper"
-  type        = bool
-  default     = false
-}
-
 variable "custom_domain" {
   description = "Custom domain to map to the Cloud Run service (e.g., mcp.example.com)"
   type        = string

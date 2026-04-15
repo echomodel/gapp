@@ -1,0 +1,13 @@
+# Bundled feature flags — ships with the gapp package.
+#
+# Loaded via importlib.resources in gapp.admin.sdk.features. Not
+# user-editable at runtime; changes are release-gated. Flags here
+# are the off switch for behavior we are phasing out but not yet
+# ready to rip.
+
+# When false, gapp_deploy REQUIRES a build_ref (obtained from a
+# prior gapp_build call). When true, gapp_deploy may build
+# synchronously in one step. The one-step path times out on any
+# non-trivial build and is a bad UX — keep false unless you know
+# the full history of why this flag exists.
+allow_one_step_deploy_tool: false

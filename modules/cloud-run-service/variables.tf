@@ -61,8 +61,3 @@ variable "data_bucket" {
   default     = ""
 }
 
-variable "auth_enabled" {
-  description = "Enable credential mediation wrapper"
-  type        = bool
-  default     = false
-}

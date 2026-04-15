@@ -234,32 +234,6 @@ public: true
 
 No. It's a deployment descriptor — like `Dockerfile`, `fly.toml`, or `docker-compose.yml`. Doesn't modify code, add dependencies, or require imports. Remove it and the app works everywhere else. Repos routinely carry configs for multiple deployment tools.
 
-### Credential Mediation (Runtime Wrapper)
-
-If your solution accesses a third-party API on behalf of users (e.g., Monarch Money, Google Workspace), enable credential mediation. gapp injects an ASGI wrapper at deploy time that handles client authentication and upstream credential management. Solutions remain unaware of the auth layer — they receive a standard `Authorization: Bearer <upstream-token>` header on every request.
-
-```yaml
-service:
-  entrypoint: mypackage.mcp.server:mcp_app
-  runtime: v0.1.0           # gapp version tag — auto-set by gapp init
-  auth: bearer              # or google_oauth2
-```
-
-**When to enable:** Any deployed service where clients shouldn't hold raw upstream credentials directly. The wrapper mediates: clients authenticate with a PAT (lightweight JWT), and the server looks up the real credential server-side.
-
-**`auth`** — the credential strategy. Absent means no auth.
-
-| Value | Use when | What happens |
-|-------|----------|-------------|
-| `bearer` | Upstream API uses a static token (API key, session token) | Token is passed through as-is to the solution |
-| `google_oauth2` | Upstream API uses Google OAuth2 (e.g., Gmail, Calendar) | Refresh token is used to obtain a fresh access token, with automatic refresh and write-back |
-
-**`runtime`** — required when auth is enabled. Specifies which gapp version tag to install the `gapp_run` wrapper from. `gapp init` auto-sets this to the installed gapp version (e.g., `v0.1.0`).
-
-Use a version tag, not `main`. Pinning to a tag ensures that upgrading the wrapper requires bumping the runtime ref → that's a commit in your repo → new image SHA → gapp builds a fresh container. If runtime pointed to `main`, the wrapper could change silently but your repo's HEAD SHA stays the same — gapp would skip the build and the update never lands.
-
-The `bearer` strategy covers most cases — Monarch Money, TickTick, and similar services that use session tokens or API keys. Use `google_oauth2` only when the upstream credential is a Google OAuth2 refresh token that needs periodic refresh.
-
 ## Additional Commands
 
 ```
@@ -323,10 +297,10 @@ See [docs/CI.md](docs/CI.md) for deploying without a local machine — via GitHu
 
 ### Cloud-Agnostic Solutions
 
-Solutions never import gapp, never reference GCP, and never contain auth logic. A solution is a standard Python ASGI app that reads an `Authorization: Bearer <token>` header — the same interface whether the token comes from a local test client, a direct HTTP caller, or gapp's credential mediation wrapper. This means:
+Solutions never import gapp, never reference GCP, and never contain gapp-specific auth code. A solution is a standard Python ASGI app. This means:
 
-- **Run locally** with `uvicorn myapp:app` and a token in the header
-- **Deploy to Cloud Run via gapp** with multi-user auth, credential rotation, and infrastructure managed for you
+- **Run locally** with `uvicorn myapp:app`
+- **Deploy to Cloud Run via gapp** with infrastructure managed for you
 - **Deploy to any cloud manually** — the app has no GCP coupling to remove
 - **Use stdio transport** for local MCP clients with no HTTP at all
 
@@ -338,20 +312,7 @@ gapp manages Terraform, IAM, API enablement, service accounts, secret references
 
 ### Agent Wiring Made Easy
 
-Once deployed, `gapp mcp connect` generates ready-to-use connection commands for Claude Code, Gemini CLI, and Claude.ai — with the real service URL, MCP path, and credentials already filled in. No hunting for hostnames, no copy-pasting tokens into config files, no guessing the right CLI flags. It checks whether each client already has the service registered and shows the exact command to add it. With `--user`, it mints a real PAT inline so the output is immediately usable. For automation, `--json` returns a structured result that scripts or MCP tools can consume directly.
-
-### Multi-User from Day One
-
-When auth is enabled, gapp injects a credential mediation wrapper at deploy time. Each user gets a long-lived personal access token (PAT) and their upstream API credential is stored server-side. The solution never sees PATs or credential files — it receives a standard bearer token on every request.
-
-PATs make deployed services portable across clients. Tools like Claude Code, Gemini CLI, and IDE extensions (Antigravity, etc.) authenticate with static headers or URL parameters loaded at startup — they have no way to manage token refresh or run an OAuth2 flow. Claude.ai supports OAuth2 but requires you to implement your own authorization server with a web-based consent flow, and you'd still need to mediate the upstream service's credentials behind it. With PATs, any client that can set an HTTP header or append a query parameter can authenticate — no OAuth2 infrastructure required. Meanwhile, the real upstream credentials — which often expire, rotate, or require refresh — are managed in one place on the server. When a backend token changes, you update it once with `gapp users update` and every device and agent keeps working.
-
-This is also more secure. Raw credentials — like Google OAuth refresh tokens or API keys for financial services — never leave the server. They aren't scattered across workstations, dotfiles, or handed directly to third-party agents (local or cloud-hosted). A PAT, if exposed, only grants access through the MCP tools you've deployed — not direct access to the underlying service. An attacker with a leaked PAT can call your MCP tools but cannot, for example, access your Google account directly or call arbitrary API endpoints. And PATs can be revoked instantly without touching the upstream credential.
-
-- **Register users** with `gapp users register` — one credential file per user in GCS
-- **Issue PATs** with `gapp tokens create` — signed JWTs, default 10-year duration
-- **Rotate credentials centrally** with `gapp users update` — all clients keep working, no PAT reissue needed
-- **Revoke access** by deleting the credential file or invalidating all tokens with a timestamp
+Once deployed, `gapp mcp connect` generates ready-to-use connection commands for Claude Code, Gemini CLI, and Claude.ai — with the real service URL and MCP path already filled in. No hunting for hostnames, no guessing the right CLI flags. It checks whether each client already has the service registered and shows the exact command to add it. The auth token placeholder is `<YOUR_PAT>`; obtaining the actual token is the solution framework's responsibility, not gapp's. For automation, `--json` returns a structured result that scripts or MCP tools can consume directly.
 
 This scales to tens of thousands of users. Each user is a single small file in GCS (~100 bytes). Lookups are O(1) by email hash. No databases, no user tables, no connection pools.
 
@@ -362,10 +323,9 @@ Solutions sharing a GCP project are fully isolated:
 - **Per-solution Terraform state** — each solution's infrastructure is independently managed
 - **Per-solution service account** — no shared identity
 - **Per-secret IAM** — each service account can only access its own declared secrets, not project-wide
-- **Per-solution GCS bucket** — one bucket per solution (`gapp-{name}-{project-id}`) holds Terraform state, app data, and per-user credential files, separated by prefix
+- **Per-solution GCS bucket** — one bucket per solution (`gapp-{name}-{project-id}`) holds Terraform state and app data, separated by prefix
 - **State isolated from the container at runtime** — the Cloud Run container FUSE-mounts the bucket with `only-dir=data`, so the running app can only see and write the `data/` subtree. Terraform state under `terraform/state/` is unreachable from inside the container even though it lives in the same bucket. A compromised or misbehaving app cannot read or corrupt its own infrastructure state.
 - **Cloud-backed Terraform state enables multi-workstation IaC** — state lives in GCS, not on a single developer's machine. `gapp deploy` can be run from any authorized workstation (or from CI) and pick up exactly where another left off. No state file to hand around, no risk of divergent local state.
-- **Per-solution signing key** — JWT signing keys are auto-generated by Terraform and scoped to the solution
 
 Solutions can share a project (for billing convenience and API enablement) or use separate projects (for stricter blast radius). The framework works identically either way.
 
@@ -375,10 +335,7 @@ The design avoids patterns that require re-engineering at scale:
 
 | Concern | Approach | Why it scales |
 |---------|----------|--------------|
-| User credentials | One GCS file per user | GCS handles millions of objects; no single-file bottleneck |
-| Credential lookup | SHA-256 email hash → file path | O(1), no index, no scan |
-| Token caching | In-memory (5-min TTL) + GCS FUSE | 99% of requests hit memory; FUSE handles cross-instance sharing |
-| Secret management | GCP Secret Manager per-secret | No central vault; IAM scoped per service account |
+| Secret management | GCP Secret Manager per-secret, labeled by solution | No central vault; IAM scoped per service account |
 | Infrastructure | Terraform with generated tfvars | Declarative, idempotent, no drift between solutions |
 | Container builds | Cloud Build + git archive | No local Docker; image tagged by commit SHA |
 
@@ -386,9 +343,6 @@ The design avoids patterns that require re-engineering at scale:
 
 These are conscious tradeoffs in favor of simplicity:
 
-- **User credentials in GCS, not Secret Manager** — GCS lacks audit logging and versioning. Acceptable because per-user credentials are high-cardinality, low-value-per-unit. Deployment secrets (signing keys, API keys) remain in Secret Manager.
-- **No self-registration** — an admin must register users via CLI. The future OAuth2 authorization server phase adds self-registration when needed.
-- **5-minute revocation window** — in-memory cache TTL means revoked users may retain access for up to 5 minutes. Acceptable for the threat model.
 - **GCP-only deployment** — gapp deploys to Cloud Run. Solutions themselves are cloud-agnostic, but the framework's infrastructure automation targets GCP.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed architecture, code structure, and design principles.

@@ -5,7 +5,7 @@ import subprocess
 from pathlib import Path
 
 from gapp.admin.sdk.context import resolve_solution
-from gapp.admin.sdk.manifest import get_auth_config, get_mcp_path, load_manifest
+from gapp.admin.sdk.manifest import get_mcp_path, load_manifest
 from gapp.admin.sdk.models import (
     ClaudeAiConfig, ClientConfig, ClientConfigs, ClientScope,
     ConnectResult, McpSolution, McpStatusResult, NextStep,
@@ -15,7 +15,6 @@ from gapp.admin.sdk.status import (
     _check_health, _get_tf_outputs,
     TerraformNotFoundError, GcloudNotFoundError,
 )
-from gapp.admin.sdk.tokens import create_status_token, create_token
 
 
 def mcp_status(name: str | None = None) -> McpStatusResult:
@@ -41,7 +40,6 @@ def mcp_status(name: str | None = None) -> McpStatusResult:
     if ctx.get("repo_path"):
         manifest = load_manifest(Path(ctx["repo_path"]).expanduser())
         mcp_path = get_mcp_path(manifest)
-        result.auth_enabled = bool(get_auth_config(manifest))
 
     if not mcp_path:
         result.next_step = NextStep(action="configure", hint="No mcp_path configured in gapp.yaml.")
@@ -66,11 +64,7 @@ def mcp_status(name: str | None = None) -> McpStatusResult:
     result.healthy = _check_health(service_url)
 
     if result.healthy:
-        result.tools = _list_mcp_tools(
-            service_url, mcp_path,
-            solution_name=ctx["name"],
-            project_id=ctx["project_id"] if result.auth_enabled else None,
-        )
+        result.tools = _list_mcp_tools(service_url, mcp_path)
 
     return result
 
@@ -94,10 +88,12 @@ def mcp_list() -> list[McpSolution]:
     return results
 
 
-def mcp_connect(name: str | None = None, *, user: str | None = None) -> ConnectResult:
+def mcp_connect(name: str | None = None) -> ConnectResult:
     """Generate MCP client connection info.
 
-    If user is specified, mints a real PAT. Otherwise uses a placeholder.
+    The token placeholder `<YOUR_PAT>` is emitted in command strings —
+    obtaining an actual token for an auth-gated solution is the solution
+    framework's responsibility, not gapp's.
     """
     ctx = resolve_solution(name)
     if not ctx:
@@ -120,7 +116,6 @@ def mcp_connect(name: str | None = None, *, user: str | None = None) -> ConnectR
     if ctx.get("repo_path"):
         manifest = load_manifest(Path(ctx["repo_path"]).expanduser())
         mcp_path = get_mcp_path(manifest)
-        result.auth_enabled = bool(get_auth_config(manifest))
 
     if not mcp_path:
         result.next_step = NextStep(action="configure", hint="No mcp_path configured in gapp.yaml.")
@@ -145,24 +140,10 @@ def mcp_connect(name: str | None = None, *, user: str | None = None) -> ConnectR
     result.healthy = _check_health(service_url)
 
     if result.healthy:
-        result.tools = _list_mcp_tools(
-            service_url, mcp_path,
-            solution_name=ctx["name"],
-            project_id=ctx["project_id"] if result.auth_enabled else None,
-        )
+        result.tools = _list_mcp_tools(service_url, mcp_path)
 
-    # Token
     token_display = "<YOUR_PAT>"
-    if user:
-        try:
-            token_result = create_token(user, solution=ctx["name"])
-            result.token = token_result["token"]
-            token_display = token_result["token"]
-            result.token_masked = token_display[:12] + "..."
-        except RuntimeError:
-            result.token_masked = "<TOKEN_ERROR>"
-    else:
-        result.token_masked = "<YOUR_PAT>"
+    result.token_masked = token_display
 
     mcp_url = result.mcp_url
     solution_name = ctx["name"]
@@ -239,23 +220,13 @@ def _check_gemini_registration(name: str, scope: str) -> bool:
         return False
 
 
-def _list_mcp_tools(
-    service_url: str,
-    mcp_path: str,
-    *,
-    solution_name: str | None = None,
-    project_id: str | None = None,
-) -> list[str] | None:
-    """Call MCP initialize + tools/list to enumerate available tools."""
-    endpoint = f"{service_url}{mcp_path}"
+def _list_mcp_tools(service_url: str, mcp_path: str) -> list[str] | None:
+    """Call MCP initialize + tools/list to enumerate available tools.
 
-    auth_headers = []
-    if project_id and solution_name:
-        try:
-            token = create_status_token(solution_name, project_id)
-            auth_headers = ["-H", f"Authorization: Bearer {token}"]
-        except Exception:
-            return None
+    Probes unauthenticated — returns None if the service requires auth.
+    """
+    endpoint = f"{service_url}{mcp_path}"
+    auth_headers: list[str] = []
 
     init_payload = json.dumps({
         "jsonrpc": "2.0",

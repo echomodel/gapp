@@ -68,30 +68,6 @@ def get_cmd(manifest: dict) -> str | None:
     return manifest.get("service", {}).get("cmd")
 
 
-VALID_AUTH_STRATEGIES = {"bearer", "google_oauth2"}
-
-
-def get_auth_config(manifest: dict) -> dict | None:
-    """Return auth configuration if enabled, else None.
-
-    Format: auth: bearer  (or google_oauth2)
-    Absent means no auth.
-    """
-    auth = manifest.get("service", {}).get("auth")
-    if not auth:
-        return None
-    if auth not in VALID_AUTH_STRATEGIES:
-        raise ValueError(
-            f"Invalid auth strategy '{auth}'. Must be one of: {', '.join(sorted(VALID_AUTH_STRATEGIES))}"
-        )
-    return {"enabled": True, "strategy": auth}
-
-
-def get_runtime_ref(manifest: dict) -> str | None:
-    """Return the gapp runtime git ref if configured, else None."""
-    return manifest.get("service", {}).get("runtime")
-
-
 def get_mcp_path(manifest: dict) -> str | None:
     """Return the MCP endpoint path if configured, else None."""
     return manifest.get("service", {}).get("mcp_path")
@@ -118,9 +94,9 @@ def get_env_vars(manifest: dict) -> list[dict]:
         env:
           - name: LOG_LEVEL
             value: INFO
-          - name: SIGNING_KEY
+          - name: API_TOKEN
             secret:
-              generate: true
+              name: api-token
 
     Legacy format (service.env dict):
         service:
@@ -156,19 +132,6 @@ def get_public(manifest: dict) -> bool | None:
     if val is None:
         return None
     return bool(val)
-
-
-def get_auth_framework(manifest: dict) -> str | None:
-    """Return the auth framework hint if configured, else None.
-
-    Format in gapp.yaml:
-        auth:
-          framework: app-user
-    """
-    auth = manifest.get("auth", {})
-    if isinstance(auth, dict):
-        return auth.get("framework")
-    return None
 
 
 # -- Substitution --

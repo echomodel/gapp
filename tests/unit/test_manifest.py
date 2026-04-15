@@ -3,7 +3,6 @@
 from pathlib import Path
 
 from gapp.admin.sdk.manifest import (
-    get_auth_config,
     get_entrypoint,
     get_prerequisite_secrets,
     get_required_apis,
@@ -91,28 +90,9 @@ def test_service_config_overrides():
     assert config["env"] == {"FOO": "bar"}
 
 
-def test_auth_config_bearer():
-    manifest = {"service": {"auth": "bearer"}}
-    auth = get_auth_config(manifest)
-    assert auth["enabled"] is True
-    assert auth["strategy"] == "bearer"
-
-
-def test_auth_config_google_oauth2():
-    manifest = {"service": {"auth": "google_oauth2"}}
-    auth = get_auth_config(manifest)
-    assert auth["enabled"] is True
-    assert auth["strategy"] == "google_oauth2"
-
-
-def test_auth_config_absent():
-    assert get_auth_config({}) is None
-    assert get_auth_config({"service": {}}) is None
-
-
 # --- New env var support ---
 
-from gapp.admin.sdk.manifest import get_domain, get_env_vars, resolve_env_vars, get_auth_framework
+from gapp.admin.sdk.manifest import get_domain, get_env_vars, resolve_env_vars
 
 
 def test_get_domain():
@@ -171,12 +151,6 @@ def test_resolve_env_vars_unknown_variable():
         resolve_env_vars(env_list, {})
 
 
-def test_get_auth_framework():
-    assert get_auth_framework({"auth": {"framework": "app-user"}}) == "app-user"
-    assert get_auth_framework({}) is None
-    assert get_auth_framework({"auth": "bearer"}) is None
-
-
 # --- Schema validation ---
 
 import pytest
@@ -201,7 +175,6 @@ env:
       generate: true
 service:
   entrypoint: app:main
-  auth: bearer
 prerequisites:
   apis:
     - run.googleapis.com
@@ -294,8 +267,23 @@ env:
         load_manifest(tmp_path)
 
 
-def test_invalid_auth_strategy_rejected(tmp_path):
-    _write_yaml(tmp_path, "service:\n  auth: gibberish\n")
+def test_removed_service_auth_field_rejected(tmp_path):
+    """gapp no longer handles auth — service.auth must fail schema validation."""
+    _write_yaml(tmp_path, "service:\n  auth: bearer\n")
+    with pytest.raises(ManifestValidationError, match="auth"):
+        load_manifest(tmp_path)
+
+
+def test_removed_service_runtime_field_rejected(tmp_path):
+    """gapp no longer ships a runtime wrapper — service.runtime is unknown."""
+    _write_yaml(tmp_path, "service:\n  runtime: v1.0.0\n")
+    with pytest.raises(ManifestValidationError, match="runtime"):
+        load_manifest(tmp_path)
+
+
+def test_removed_top_level_auth_rejected(tmp_path):
+    """Top-level auth:{framework:...} block was dropped — must now fail."""
+    _write_yaml(tmp_path, "auth:\n  framework: app-user\n")
     with pytest.raises(ManifestValidationError, match="auth"):
         load_manifest(tmp_path)
 

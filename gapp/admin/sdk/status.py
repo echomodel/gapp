@@ -8,7 +8,7 @@ from pathlib import Path
 
 from gapp.admin.sdk.context import resolve_solution
 from gapp.admin.sdk.deploy import _get_staging_dir, _get_tf_source_dir
-from gapp.admin.sdk.manifest import get_auth_config, get_domain, get_mcp_path, load_manifest
+from gapp.admin.sdk.manifest import get_domain, get_mcp_path, load_manifest
 from gapp.admin.sdk.models import DeploymentInfo, DomainStatus, NextStep, ServiceStatus, StatusResult
 
 
@@ -59,12 +59,10 @@ def get_status(name: str | None = None) -> StatusResult:
         return result
 
     mcp_path = None
-    auth_enabled = False
     domain = None
     if ctx.get("repo_path"):
         manifest = load_manifest(Path(ctx["repo_path"]).expanduser())
         mcp_path = get_mcp_path(manifest)
-        auth_enabled = bool(get_auth_config(manifest))
         domain = get_domain(manifest)
 
     try:
@@ -96,7 +94,6 @@ def get_status(name: str | None = None) -> StatusResult:
             name=ctx["name"],
             url=service_url,
             healthy=_check_health(service_url),
-            auth_enabled=auth_enabled,
             mcp_path=mcp_path,
         )
         result.deployment.services.append(service)
