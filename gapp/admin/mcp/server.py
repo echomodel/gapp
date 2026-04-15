@@ -47,24 +47,19 @@ def gapp_schema() -> dict:
 def gapp_init(
     entrypoint: str | None = None,
     mcp_path: str | None = None,
-    auth: str | None = None,
-    runtime: str | None = None,
     secrets: dict | None = None,
     domain: str | None = None,
 ) -> dict:
     """Initialize or configure a gapp solution in the current repo.
 
     Idempotent. Creates gapp.yaml on first call. Also used to update
-    gapp configuration settings later — e.g., enable auth, change
-    entrypoint, add secrets, set custom domain. Only non-None
-    parameters are written; omitted parameters leave existing values
-    unchanged.
+    gapp configuration settings later — e.g., change entrypoint,
+    add secrets, set custom domain. Only non-None parameters are
+    written; omitted parameters leave existing values unchanged.
 
     Args:
         entrypoint: ASGI entrypoint (module:app).
         mcp_path: MCP endpoint path (e.g., /mcp).
-        auth: Auth strategy — "bearer" or "google_oauth2". Absent means no auth.
-        runtime: gapp git ref for the runtime wrapper version.
         secrets: Dict of secret name to description for prerequisites.
         domain: Custom domain to map to the service (e.g., mcp.example.com).
             Requires a CNAME record pointing to ghs.googlehosted.com.
@@ -74,8 +69,6 @@ def gapp_init(
     return init_solution(
         entrypoint=entrypoint,
         mcp_path=mcp_path,
-        auth=auth,
-        runtime=runtime,
         secrets=secrets,
         domain=domain,
     )
@@ -121,12 +114,17 @@ def gapp_deploy(
     build_ref: str | None = None,
     build_check_timeout: int = 10,
 ) -> dict:
-    """Deploy a gapp solution to Cloud Run.
+    """Deploy a gapp solution to Cloud Run (terraform apply after a build).
 
-    Without build_ref: full blocking deploy (build + terraform).
-    With build_ref: poll for build completion, then run terraform.
-    If the build is still running when the timeout expires, returns
-    a "running" status — call again with the same build_ref to retry.
+    Canonical flow: call gapp_build first, get a build_id back, then
+    call gapp_deploy with build_ref=<build_id>. gapp_deploy polls the
+    build and runs terraform once the image is ready. If the build is
+    still running when the timeout expires, returns a "running" status
+    — call again with the same build_ref to retry.
+
+    build_ref is required unless the package-bundled feature flag
+    ``allow_one_step_deploy_tool`` is enabled (off by default — the
+    one-step path times out on non-trivial builds).
 
     Prerequisites: gapp_init and gapp_setup must have been run first.
 
@@ -137,6 +135,18 @@ def gapp_deploy(
         build_ref: Cloud Build ID from a prior gapp_build call.
         build_check_timeout: Max seconds to poll (default/minimum: 10).
     """
+    from gapp.admin.sdk.features import is_enabled
+    if build_ref is None and not is_enabled("allow_one_step_deploy_tool"):
+        return {
+            "error": "one_step_deploy_disabled",
+            "message": (
+                "gapp_deploy requires a build_ref from a prior gapp_build call. "
+                "Run gapp_build first, then call gapp_deploy(build_ref=<build_id>). "
+                "The one-step build+deploy path is disabled because it times out "
+                "on any non-trivial build."
+            ),
+        }
+
     from gapp.admin.sdk.deploy import deploy_solution
     return deploy_solution(
         auto_approve=auto_approve, ref=ref, solution=solution,
@@ -383,91 +393,6 @@ def gapp_mcp_connect(solution: str | None = None, user: str | None = None) -> di
     """
     from gapp.admin.sdk.mcp_status import mcp_connect
     return mcp_connect(solution, user=user).model_dump()
-
-
-@_tool()
-def gapp_users_list(solution: str | None = None, limit: int = 10) -> dict:
-    """List registered users for a gapp solution.
-
-    Args:
-        solution: Solution name. Defaults to current directory's solution.
-        limit: Maximum number of users to return.
-    """
-    from gapp.admin.sdk.users import list_users
-    return list_users(limit=limit)
-
-
-@_tool()
-def gapp_users_register(
-    email: str,
-    credential: str,
-    strategy: str = "bearer",
-) -> dict:
-    """Register a user and store their upstream credential.
-
-    Args:
-        email: User's email address.
-        credential: The upstream API token (e.g., Monarch session token).
-        strategy: Credential strategy (default: bearer).
-    """
-    from gapp.admin.sdk.users import register_user
-    return register_user(email, credential, strategy)
-
-
-@_tool()
-def gapp_tokens_create(email: str, solution: str | None = None, duration_days: int = 3650) -> dict:
-    """Create a signed PAT (JWT) for a registered user.
-
-    Args:
-        email: Email of the registered user.
-        solution: Solution name. Defaults to current directory's solution.
-        duration_days: Token validity in days (default: 3650 / ~10 years).
-    """
-    from gapp.admin.sdk.tokens import create_token
-    return create_token(email, duration_days=duration_days, solution=solution)
-
-
-@_tool()
-def gapp_tokens_revoke(email: str, solution: str | None = None) -> dict:
-    """Invalidate all PATs for a user by setting revoke_before to now.
-
-    Args:
-        email: Email of the user whose tokens to revoke.
-        solution: Solution name. Defaults to current directory's solution.
-    """
-    from gapp.admin.sdk.tokens import revoke_tokens
-    return revoke_tokens(email, solution=solution)
-
-
-@_tool()
-def gapp_users_update(
-    email: str,
-    credential: str | None = None,
-    revoke_before: str | None = None,
-    solution: str | None = None,
-) -> dict:
-    """Update a user's credential or revocation timestamp.
-
-    Args:
-        email: User's email address.
-        credential: New upstream credential value.
-        revoke_before: ISO 8601 timestamp — reject tokens issued before this.
-        solution: Solution name. Defaults to current directory's solution.
-    """
-    from gapp.admin.sdk.users import update_user
-    return update_user(email, credential=credential, revoke_before=revoke_before, solution=solution)
-
-
-@_tool()
-def gapp_users_revoke(email: str, solution: str | None = None) -> dict:
-    """Revoke a user by deleting their credential file from GCS.
-
-    Args:
-        email: User's email address.
-        solution: Solution name. Defaults to current directory's solution.
-    """
-    from gapp.admin.sdk.users import revoke_user
-    return revoke_user(email, solution=solution)
 
 
 def main():

@@ -9,7 +9,7 @@ terraform {
 }
 
 module "service" {
-  source        = "github.com/krisrowe/gapp//modules/cloud-run-service"
+  source        = "github.com/echomodel/gapp//modules/cloud-run-service"
   project_id    = var.project_id
   service_name  = var.service_name
   image         = var.image
@@ -20,7 +20,6 @@ module "service" {
   secrets       = var.secrets
   data_bucket   = var.data_bucket
   public        = var.public
-  auth_enabled  = var.auth_enabled
 }
 
 resource "google_cloud_run_domain_mapping" "custom" {

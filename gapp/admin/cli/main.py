@@ -154,8 +154,6 @@ def status(name, as_json):
         click.echo(f"  {svc.name}")
         click.echo(f"    URL:    {svc.url}")
         click.echo(f"    Health: {health}")
-        if svc.auth_enabled:
-            click.echo(f"    Auth:   enabled")
         if svc.mcp_path:
             click.echo(f"    MCP:    {svc.mcp_path} (run gapp mcp status for tools)")
 
@@ -359,175 +357,6 @@ def secrets_remove_cmd(name, solution):
     click.echo(f"  Secret {result['name']} removed from gapp.yaml \u2713")
 
 
-# --- Users ---
-
-@main.group()
-def users():
-    """Manage upstream credentials — the real API tokens the solution uses."""
-
-
-@users.command("register")
-@click.argument("email")
-@click.argument("credential")
-@click.option("--strategy", default="bearer", help="Credential strategy (default: bearer).")
-@click.option("--solution", default=None, help="Solution name (default: current directory).")
-def users_register_cmd(email, credential, strategy, solution):
-    """Register a user and store their upstream credential (e.g., API token)."""
-    from gapp.admin.sdk.users import register_user
-
-    try:
-        result = register_user(email, credential, strategy, solution=solution)
-    except RuntimeError as e:
-        click.echo(f"  Error: {e}", err=True)
-        raise SystemExit(1)
-
-    click.echo()
-    click.echo(f"  Registered {result['email']}")
-    click.echo(f"    Strategy: {result['strategy']}")
-    click.echo(f"    Hash:     {result['email_hash'][:12]}...")
-    click.echo()
-
-
-@users.command("list")
-@click.option("--limit", default=10, help="Maximum number of users to show.")
-@click.option("--start-index", default=0, help="Offset into the user list.")
-@click.option("--solution", default=None, help="Solution name (default: current directory).")
-def users_list_cmd(limit, start_index, solution):
-    """List registered users."""
-    from gapp.admin.sdk.users import list_users
-
-    try:
-        result = list_users(limit=limit, start_index=start_index, solution=solution)
-    except RuntimeError as e:
-        click.echo(f"  Error: {e}", err=True)
-        raise SystemExit(1)
-
-    click.echo()
-    click.echo(f"  {result['name']} users ({result['total']} total)")
-    click.echo()
-
-    if not result["users"]:
-        click.echo("  No users registered.")
-        click.echo()
-        return
-
-    for u in result["users"]:
-        created = u.get("created", "")[:10]
-        updated = u.get("updated", "")[:10]
-        click.echo(f"    {u['sub']:<30} {u['strategy']:<10} created {created}  updated {updated}")
-    click.echo()
-
-    shown = result["start_index"] + len(result["users"])
-    if shown < result["total"]:
-        click.echo(f"  Showing {result['start_index'] + 1}-{shown} of {result['total']}.")
-        click.echo(f"  Use --start-index={shown} to see more.")
-        click.echo()
-
-
-@users.command("get")
-@click.argument("identifier")
-@click.option("--solution", default=None, help="Solution name (default: current directory).")
-def users_get_cmd(identifier, solution):
-    """Get full user details by email or hash."""
-    from gapp.admin.sdk.users import get_user
-
-    try:
-        result = get_user(identifier, solution=solution)
-    except RuntimeError as e:
-        click.echo(f"  Error: {e}", err=True)
-        raise SystemExit(1)
-
-    click.echo()
-    click.echo(f"  {result['sub']}")
-    click.echo(f"    Hash:           {result['email_hash']}")
-    click.echo(f"    Strategy:       {result['strategy']}")
-    click.echo(f"    Created:        {result['created']}")
-    if result.get("revoke_before"):
-        click.echo(f"    Revoke before:  {result['revoke_before']}")
-    click.echo()
-
-
-@users.command("update")
-@click.argument("email")
-@click.option("--credential", default=None, help="New upstream credential value.")
-@click.option("--revoke-before", default=None, help="ISO 8601 timestamp — reject tokens issued before this time.")
-@click.option("--solution", default=None, help="Solution name (default: current directory).")
-def users_update_cmd(email, credential, revoke_before, solution):
-    """Update a user's upstream credential or set revoke_before timestamp."""
-    from gapp.admin.sdk.users import update_user
-
-    try:
-        result = update_user(email, credential=credential, revoke_before=revoke_before, solution=solution)
-    except RuntimeError as e:
-        click.echo(f"  Error: {e}", err=True)
-        raise SystemExit(1)
-
-    click.echo(f"  Updated {result['email']}: {', '.join(result['changes'])} \u2713")
-
-
-@users.command("revoke")
-@click.argument("email")
-@click.option("--solution", default=None, help="Solution name (default: current directory).")
-def users_revoke_cmd(email, solution):
-    """Revoke a user by deleting their credential file."""
-    from gapp.admin.sdk.users import revoke_user
-
-    try:
-        result = revoke_user(email, solution=solution)
-    except RuntimeError as e:
-        click.echo(f"  Error: {e}", err=True)
-        raise SystemExit(1)
-
-    click.echo(f"  User {result['email']} revoked \u2713")
-
-
-# --- Tokens ---
-
-@main.group()
-def tokens():
-    """Manage PATs (personal access tokens) — what clients send to authenticate."""
-
-
-@tokens.command("create")
-@click.argument("email")
-@click.option("--duration", default=3650, type=int, help="Token duration in days (default: 3650 / ~10 years).")
-@click.option("--solution", default=None, help="Solution name (default: current directory).")
-def tokens_create_cmd(email, duration, solution):
-    """Create a signed PAT (JWT) that a client uses to call the solution."""
-    from gapp.admin.sdk.tokens import create_token
-
-    try:
-        result = create_token(email, duration_days=duration, solution=solution)
-    except RuntimeError as e:
-        click.echo(f"  Error: {e}", err=True)
-        raise SystemExit(1)
-
-    click.echo()
-    click.echo(f"  Token created for {result['email']}")
-    click.echo(f"    Solution: {result['solution']}")
-    click.echo(f"    Expires:  {result['expires_at']}")
-    click.echo()
-    click.echo(f"  {result['token']}")
-    click.echo()
-
-
-@tokens.command("revoke")
-@click.argument("email")
-@click.option("--solution", default=None, help="Solution name (default: current directory).")
-def tokens_revoke_cmd(email, solution):
-    """Invalidate all PATs for a user (sets revoke_before to now)."""
-    from gapp.admin.sdk.tokens import revoke_tokens
-
-    try:
-        result = revoke_tokens(email, solution=solution)
-    except RuntimeError as e:
-        click.echo(f"  Error: {e}", err=True)
-        raise SystemExit(1)
-
-    click.echo(f"  All tokens for {result['email']} revoked \u2713")
-    click.echo(f"    revoke_before: {result['revoke_before']}")
-
-
 # --- Admin (self-management) ---
 
 @main.group()
@@ -728,8 +557,6 @@ def mcp_status_cmd(name, as_json):
 
     health = "\u2713 healthy" if result.healthy else "\u2717 unhealthy"
     click.echo(f"  Health: {health}")
-    if result.auth_enabled:
-        click.echo(f"  Auth:   enabled")
 
     if result.tools is not None:
         click.echo(f"  Tools:  {len(result.tools)}")

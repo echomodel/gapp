@@ -13,8 +13,6 @@ def init_solution(
     *,
     entrypoint: str | None = None,
     mcp_path: str | None = None,
-    auth: str | None = None,
-    runtime: str | None = None,
     secrets: dict | None = None,
     domain: str | None = None,
 ) -> dict:
@@ -29,8 +27,6 @@ def init_solution(
         repo_path: Path to the repo. Defaults to cwd.
         entrypoint: ASGI entrypoint (module:app).
         mcp_path: MCP endpoint path (e.g., /mcp).
-        auth: Auth strategy — "bearer" or "google_oauth2". Absent means no auth.
-        runtime: gapp git ref for the runtime wrapper.
         secrets: Dict of secret names to descriptions for prerequisites.
         domain: Custom domain to map to the service (e.g., mcp.example.com).
 
@@ -55,7 +51,9 @@ def init_solution(
         manifest = load_manifest(git_root)
         result["manifest_status"] = "unchanged"
     else:
-        manifest = {"service": {"entrypoint": entrypoint or "PACKAGE.mcp.server:mcp_app"}}
+        manifest = {}
+        if entrypoint:
+            manifest["service"] = {"entrypoint": entrypoint}
         result["manifest_status"] = "created"
 
     # Merge provided settings
@@ -70,22 +68,8 @@ def init_solution(
         service["mcp_path"] = mcp_path
         changed = True
 
-    if auth is not None and service.get("auth") != auth:
-        service["auth"] = auth
-        changed = True
-
-    # Auto-set runtime from installed gapp version when auth is enabled
-    if runtime is not None:
-        effective_runtime = runtime
-    elif service.get("auth") and not service.get("runtime"):
-        from gapp import __version__
-        effective_runtime = f"v{__version__}"
-    else:
-        effective_runtime = None
-
-    if effective_runtime is not None and service.get("runtime") != effective_runtime:
-        service["runtime"] = effective_runtime
-        changed = True
+    if not service:
+        manifest.pop("service", None)
 
     if domain is not None and manifest.get("domain") != domain:
         if domain:

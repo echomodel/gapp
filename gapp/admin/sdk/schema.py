@@ -13,7 +13,7 @@ the change automatically.
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
@@ -51,8 +51,6 @@ class ServiceSpec(_StrictModel):
     """Cloud Run service configuration."""
     entrypoint: str | None = Field(default=None, description="ASGI module:app — gapp wraps with uvicorn.")
     cmd: str | None = Field(default=None, description="Exact command to run in the container.")
-    auth: Literal["bearer", "google_oauth2"] | None = Field(default=None, description="Auth strategy.")
-    runtime: str | None = Field(default=None, description="gapp git ref for the runtime wrapper.")
     mcp_path: str | None = Field(default=None, description="MCP endpoint path (e.g. /mcp).")
     memory: str | None = Field(default=None, description="Memory limit (e.g. 512Mi).")
     cpu: str | None = Field(default=None, description="CPU limit (e.g. '1').")
@@ -76,10 +74,6 @@ class Prerequisites(_StrictModel):
     )
 
 
-class AuthSpec(_StrictModel):
-    framework: str | None = Field(default=None, description="Auth framework hint (e.g. 'app-user').")
-
-
 class Manifest(_StrictModel):
     """Top-level gapp.yaml schema."""
     name: str | None = Field(default=None, description="Solution name override (falls back to repo directory name).")
@@ -89,7 +83,6 @@ class Manifest(_StrictModel):
     env: list[EnvEntry] = Field(default_factory=list, description="Environment variables for the service.")
     service: ServiceSpec | None = Field(default=None, description="Service runtime configuration.")
     prerequisites: Prerequisites | None = Field(default=None, description="GCP APIs and secrets required.")
-    auth: AuthSpec | None = Field(default=None, description="Auth framework settings.")
 
 
 class ManifestValidationError(ValueError):

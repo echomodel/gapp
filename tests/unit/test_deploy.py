@@ -61,52 +61,6 @@ def test_build_tfvars_with_env():
     assert tfvars["env"] == {"DB_HOST": "localhost"}
 
 
-def test_build_tfvars_auth_disabled():
-    config = {
-        "entrypoint": "app:main",
-        "port": 8080,
-        "memory": "512Mi",
-        "cpu": "1",
-        "max_instances": 1,
-        "env": {},
-    }
-    tfvars = _build_tfvars("my-app", "proj", "img:abc123", config)
-    assert tfvars["auth_enabled"] is False
-    assert "GAPP_APP" not in tfvars["env"]
-
-
-def test_build_tfvars_auth_enabled():
-    config = {
-        "entrypoint": "monarch.mcp.server:mcp_app",
-        "port": 8080,
-        "memory": "512Mi",
-        "cpu": "1",
-        "max_instances": 1,
-        "env": {"LOG_LEVEL": "INFO"},
-    }
-    auth = {"enabled": True, "strategy": "bearer"}
-    tfvars = _build_tfvars("monarch-access", "proj", "img:abc123", config, auth_config=auth)
-    assert tfvars["auth_enabled"] is True
-    assert tfvars["data_bucket"] == "gapp-monarch-access-proj"
-    assert tfvars["env"]["GAPP_APP"] == "monarch.mcp.server:mcp_app"
-    assert tfvars["env"]["LOG_LEVEL"] == "INFO"
-
-
-def test_build_tfvars_auth_does_not_mutate_original_env():
-    config = {
-        "entrypoint": "app:main",
-        "port": 8080,
-        "memory": "512Mi",
-        "cpu": "1",
-        "max_instances": 1,
-        "env": {"FOO": "bar"},
-    }
-    original_env = config["env"].copy()
-    auth = {"enabled": True, "strategy": "bearer"}
-    _build_tfvars("my-app", "proj", "img:abc123", config, auth_config=auth)
-    assert config["env"] == original_env
-
-
 def test_build_tfvars_with_env_vars_list():
     """Test new-format env vars from gapp.yaml env section."""
     config = {
@@ -140,7 +94,6 @@ def test_build_tfvars_data_bucket_always_set():
     }
     tfvars = _build_tfvars("food-agent", "proj", "img:abc123", config)
     assert tfvars["data_bucket"] == "gapp-food-agent-proj"
-    assert tfvars["auth_enabled"] is False
 
 
 def test_build_tfvars_with_domain():
@@ -171,7 +124,3 @@ def test_build_tfvars_without_domain():
     assert "custom_domain" not in tfvars
 
 
-def test_dockerfile_template_supports_runtime_install():
-    path = _get_template("Dockerfile")
-    content = path.read_text()
-    assert "RUNTIME_REF" in content

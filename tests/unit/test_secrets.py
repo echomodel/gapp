@@ -140,3 +140,36 @@ def test_validate_declared_secrets_skips_generate():
     }
     with patch("gapp.admin.sdk.secrets.list_secrets_by_label", return_value=[]):
         validate_declared_secrets("proj", "my-app", manifest)  # no raise
+
+
+def test_validate_declared_secrets_reports_all_missing():
+    """When multiple non-generate secrets are missing, the error names each one."""
+    manifest = {
+        "env": [
+            {"name": "API_TOKEN", "secret": {"name": "api-token"}},
+            {"name": "DB_URL", "secret": {"name": "db-url"}},
+            {"name": "SIGNING_KEY", "secret": {"name": "signing-key", "generate": True}},
+        ]
+    }
+    with patch("gapp.admin.sdk.secrets.list_secrets_by_label", return_value=[]):
+        with pytest.raises(RuntimeError) as exc:
+            validate_declared_secrets("proj", "my-app", manifest)
+    msg = str(exc.value)
+    assert "my-app-api-token" in msg
+    assert "my-app-db-url" in msg
+    # generate-true secret is not required pre-deploy
+    assert "my-app-signing-key" not in msg
+
+
+def test_list_secrets_by_label_filter_value_is_solution_name():
+    """The label-filter query must use labels.gapp-solution=<solution> verbatim."""
+    from gapp.admin.sdk.secrets import list_secrets_by_label, GAPP_SOLUTION_LABEL
+    captured = []
+    def fake_run(args, **kw):
+        captured.append(args)
+        return _run_mock(stdout="")
+    with patch("gapp.admin.sdk.secrets.subprocess.run", side_effect=fake_run):
+        list_secrets_by_label("proj", "food-agent")
+    assert len(captured) == 1
+    filter_idx = captured[0].index("--filter")
+    assert captured[0][filter_idx + 1] == f"labels.{GAPP_SOLUTION_LABEL}=food-agent"

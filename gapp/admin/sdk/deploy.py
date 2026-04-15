@@ -10,13 +10,11 @@ from pathlib import Path
 
 from gapp.admin.sdk.context import resolve_solution
 from gapp.admin.sdk.manifest import (
-    get_auth_config,
     get_domain,
     get_entrypoint,
     get_name,
     get_paths,
     get_prerequisite_secrets,
-    get_runtime_ref,
     get_service_config,
     load_manifest,
 )
@@ -47,8 +45,6 @@ def start_build(solution: str | None = None) -> dict:
 
     service_root = repo_path
     entrypoint, ref_label = _resolve_entrypoint(manifest, service_root, repo_path)
-    auth_config = get_auth_config(manifest)
-    runtime_ref = get_runtime_ref(manifest)
 
     deploy_sha = _get_head_sha(repo_path)
     _check_dirty_tree(repo_path)
@@ -67,8 +63,7 @@ def start_build(solution: str | None = None) -> dict:
         }
 
     build_id = _submit_build_async(
-        project_id, repo_path, image, entrypoint,
-        ref="HEAD", auth_config=auth_config, runtime_ref=runtime_ref,
+        project_id, repo_path, image, entrypoint, ref="HEAD",
     )
 
     return {
@@ -259,7 +254,6 @@ def _deploy_from_build(
     manifest = load_manifest(repo_path)
     service_config = get_service_config(manifest)
     secrets = get_prerequisite_secrets(manifest)
-    auth_config = get_auth_config(manifest)
 
     # Validate non-generate declared secrets exist; auto-generate the rest.
     from gapp.admin.sdk.secrets import validate_declared_secrets
@@ -275,7 +269,6 @@ def _deploy_from_build(
         bucket_name=bucket_name,
         service_config=service_config,
         secrets=secrets,
-        auth_config=auth_config,
         token=token,
         auto_approve=auto_approve,
         manifest=manifest,
@@ -366,8 +359,6 @@ def _deploy_single_service(
 
     service_config = get_service_config(manifest)
     secrets = get_prerequisite_secrets(manifest)
-    auth_config = get_auth_config(manifest)
-    runtime_ref = get_runtime_ref(manifest)
 
     if ref:
         deploy_sha = _resolve_ref(repo_path, ref)
@@ -396,8 +387,7 @@ def _deploy_single_service(
         result["build_status"] = "skipped"
     else:
         _submit_build_sync(
-            project_id, repo_path, image, entrypoint,
-            ref=deploy_ref, auth_config=auth_config, runtime_ref=runtime_ref,
+            project_id, repo_path, image, entrypoint, ref=deploy_ref,
         )
         result["build_status"] = "built"
     result["image"] = image
@@ -415,7 +405,6 @@ def _deploy_single_service(
         bucket_name=bucket_name,
         service_config=service_config,
         secrets=secrets,
-        auth_config=auth_config,
         token=token,
         auto_approve=auto_approve,
         manifest=manifest,
@@ -433,13 +422,11 @@ def _deploy_single_service(
 
 def _prepare_build_dir(
     repo_path: Path, image: str, entrypoint: str,
-    *, ref: str = "HEAD", auth_config: dict | None = None,
-    runtime_ref: str | None = None,
-) -> tuple[str, str, str]:
+    *, ref: str = "HEAD",
+) -> tuple[str, str]:
     """Create temp dir with source archive and Dockerfile template.
 
-    Returns (build_dir, build_entrypoint, build_runtime_ref).
-    Caller owns the temp dir lifetime.
+    Returns (build_dir, build_entrypoint). Caller owns the temp dir lifetime.
     """
     build_dir = tempfile.mkdtemp(prefix="gapp-build-")
 
@@ -452,8 +439,6 @@ def _prepare_build_dir(
         stdin=archive.stdout, check=True,
     )
     archive.wait()
-
-    build_runtime_ref = ""
 
     if entrypoint == "__dockerfile__":
         if not (Path(build_dir) / "Dockerfile").exists():
@@ -474,36 +459,23 @@ def _prepare_build_dir(
         shutil.copy2(_get_template("cloudbuild.yaml"), Path(build_dir) / "cloudbuild.yaml")
         build_entrypoint = entrypoint
 
-        if auth_config:
-            if not runtime_ref:
-                raise RuntimeError(
-                    "Auth is enabled but no runtime version specified.\n"
-                    "  Add to gapp.yaml:\n"
-                    "    service:\n"
-                    "      runtime: main  # gapp git ref (tag, branch, or commit)"
-                )
-            build_entrypoint = "gapp_run.wrapper:app"
-            build_runtime_ref = runtime_ref
-
-    return build_dir, build_entrypoint, build_runtime_ref
+    return build_dir, build_entrypoint
 
 
 def _submit_build_sync(
     project_id: str, repo_path: Path, image: str, entrypoint: str,
-    *, ref: str = "HEAD", auth_config: dict | None = None,
-    runtime_ref: str | None = None,
+    *, ref: str = "HEAD",
 ) -> None:
     """Build container via Cloud Build (blocking)."""
-    build_dir, build_entrypoint, build_runtime_ref = _prepare_build_dir(
-        repo_path, image, entrypoint,
-        ref=ref, auth_config=auth_config, runtime_ref=runtime_ref,
+    build_dir, build_entrypoint = _prepare_build_dir(
+        repo_path, image, entrypoint, ref=ref,
     )
     try:
         result = subprocess.run(
             ["gcloud", "builds", "submit",
              "--config", f"{build_dir}/cloudbuild.yaml",
              "--substitutions",
-             f"_ENTRYPOINT={build_entrypoint},_IMAGE={image},_RUNTIME_REF={build_runtime_ref}",
+             f"_ENTRYPOINT={build_entrypoint},_IMAGE={image}",
              "--project", project_id,
              build_dir],
             text=True, capture_output=True,
@@ -527,20 +499,18 @@ def _submit_build_sync(
 
 def _submit_build_async(
     project_id: str, repo_path: Path, image: str, entrypoint: str,
-    *, ref: str = "HEAD", auth_config: dict | None = None,
-    runtime_ref: str | None = None,
+    *, ref: str = "HEAD",
 ) -> str:
     """Submit Cloud Build with --async. Returns the build ID."""
-    build_dir, build_entrypoint, build_runtime_ref = _prepare_build_dir(
-        repo_path, image, entrypoint,
-        ref=ref, auth_config=auth_config, runtime_ref=runtime_ref,
+    build_dir, build_entrypoint = _prepare_build_dir(
+        repo_path, image, entrypoint, ref=ref,
     )
     try:
         result = subprocess.run(
             ["gcloud", "builds", "submit", "--async", "--format=json",
              "--config", f"{build_dir}/cloudbuild.yaml",
              "--substitutions",
-             f"_ENTRYPOINT={build_entrypoint},_IMAGE={image},_RUNTIME_REF={build_runtime_ref}",
+             f"_ENTRYPOINT={build_entrypoint},_IMAGE={image}",
              "--project", project_id,
              build_dir],
             text=True, capture_output=True,
@@ -668,7 +638,6 @@ def _build_tfvars(
     image: str,
     service_config: dict,
     secrets: dict | None = None,
-    auth_config: dict | None = None,
     env_vars: list[dict] | None = None,
     public: bool | None = None,
     domain: str | None = None,
@@ -678,13 +647,13 @@ def _build_tfvars(
     bucket_name = f"gapp-{solution_name}-{project_id}"
     env = dict(service_config.get("env", {}))
 
+    secret_env = {}
     if env_vars:
         gapp_vars = {
             "SOLUTION_DATA_PATH": "/mnt/data",
             "SOLUTION_NAME": solution_name,
         }
         resolved = resolve_env_vars(env_vars, gapp_vars)
-        secret_env = {}
         for entry in resolved:
             name = entry["name"]
             secret_cfg = entry.get("secret")
@@ -693,15 +662,11 @@ def _build_tfvars(
             elif "value" in entry:
                 env[name] = entry["value"]
 
-    if auth_config:
-        env["GAPP_APP"] = service_config["entrypoint"]
-
     all_secrets = {
         _secret_name_to_env_var(name): name
         for name in (secrets or {})
     }
-    if env_vars:
-        all_secrets.update(secret_env)
+    all_secrets.update(secret_env)
 
     tfvars = {
         "project_id": project_id,
@@ -713,8 +678,7 @@ def _build_tfvars(
         "env": env,
         "secrets": all_secrets,
         "data_bucket": bucket_name,
-        "public": bool(public) if public is not None else bool(auth_config),
-        "auth_enabled": bool(auth_config),
+        "public": bool(public),
     }
     if domain:
         tfvars["custom_domain"] = domain
@@ -733,7 +697,6 @@ def _stage_and_apply(
     bucket_name: str,
     service_config: dict,
     secrets: dict | None = None,
-    auth_config: dict | None = None,
     token: str = "",
     auto_approve: bool = False,
     manifest: dict | None = None,
@@ -755,7 +718,7 @@ def _stage_and_apply(
     public = get_public(manifest or {})
     domain = get_domain(manifest or {})
     tfvars = _build_tfvars(
-        solution_name, project_id, image, service_config, secrets, auth_config,
+        solution_name, project_id, image, service_config, secrets,
         env_vars=env_vars,
         public=public,
         domain=domain,

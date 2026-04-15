@@ -21,7 +21,6 @@ class ServiceStatus(BaseModel):
     name: str
     url: str
     healthy: bool
-    auth_enabled: bool = False
     mcp_path: str | None = None
 
 
@@ -47,7 +46,6 @@ class McpStatusResult(BaseModel):
     url: str | None = None
     mcp_url: str | None = None
     healthy: bool | None = None
-    auth_enabled: bool = False
     tools: list[str] | None = None
     next_step: NextStep | None = None
     error: str | None = None
@@ -87,7 +85,6 @@ class ConnectResult(BaseModel):
     url: str | None = None
     mcp_url: str | None = None
     healthy: bool | None = None
-    auth_enabled: bool = False
     tools: list[str] | None = None
     token: str | None = None
     token_masked: str | None = None

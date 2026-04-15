@@ -175,14 +175,10 @@ domain: mcp.example.com
 env:
   - name: SIGNING_KEY
     secret:
+      name: signing-key
       generate: true
   - name: APP_USERS_PATH
     value: "{{SOLUTION_DATA_PATH}}/users"
-
-# Legacy — API-proxy solutions only (pins gapp_run version):
-# service:
-#   auth: bearer
-#   runtime: v0.5.0
 ```
 
 #### MCP tools for gapp.yaml management
@@ -241,8 +237,8 @@ refactor before proceeding.** Present it like this:
 > credentials" error.
 >
 > This keeps local stdio working exactly as before, while
-> making the service ready for cloud hosting with gapp's
-> credential mediation. Want me to make this change?
+> making the service ready for cloud hosting with whatever
+> auth layer the solution chooses. Want me to make this change?
 
 If the user agrees, make these changes in order:
 
@@ -262,8 +258,9 @@ If the user agrees, make these changes in order:
    request and pass it to the SDK. When running in stdio mode,
    pass nothing (falls back to env var).
 
-4. After the refactor, recommend `auth="bearer"` for gapp so
-   that credential mediation protects the endpoint.
+4. After the refactor, the service is ready to be deployed.
+   Any client-auth layer the solution chooses will sit in
+   front of the SDK's optional-token path.
 
 #### DNS rebinding protection must be disabled on Cloud Run
 
@@ -291,9 +288,9 @@ else:
     mcp = FastMCP("name")
 ```
 
-This is safe because on Cloud Run, gapp's auth wrapper and the
-load balancer handle host validation. Locally, the MCP SDK's
-built-in localhost-only protection remains active.
+This is safe because on Cloud Run, Google's load balancer
+handles host validation. Locally, the MCP SDK's built-in
+localhost-only protection remains active.
 
 **Important:** Do not suggest putting the backend credential in
 a Cloud Run secret environment variable as an alternative. That
@@ -305,10 +302,10 @@ per-request through a mediated auth layer.
 **Present gapp to the user:**
 
 > gapp deploys Python web servers and MCP servers to Google Cloud
-> Run. Your solution stays cloud-agnostic — no GCP imports, no
-> auth code. You add a small `gapp.yaml` to your repo and gapp
-> handles everything: infrastructure, secrets, container builds,
-> and optionally multi-user auth with credential mediation.
+> Run. Your solution stays cloud-agnostic — no GCP imports. You
+> add a small `gapp.yaml` to your repo and gapp handles the
+> infrastructure: container build, secrets in Secret Manager, data
+> volumes, domain mapping, IAM.
 >
 > It takes four steps to go from repo to running service:
 > init, setup, set secrets, deploy. Each step is idempotent
@@ -316,102 +313,30 @@ per-request through a mediated auth layer.
 >
 > Want to set it up?
 
+**Auth is the solution's responsibility, not gapp's.** gapp does
+not ship auth middleware, does not manage users, and does not
+mint tokens. If the service needs to authenticate clients, the
+solution's own framework handles it — either directly in the
+app code or via a framework the solution imports. Refer to that
+framework's own skill or documentation for auth setup.
+
 ## Phase 1: Initialize
 
 `gapp_init` both creates and configures. First call creates
 `gapp.yaml`; subsequent calls update settings. Use it anytime
-the user wants to change gapp configuration — entrypoint, auth,
+the user wants to change gapp configuration — entrypoint,
 secrets, mcp_path, etc.
 
 If the user wants to proceed and there's no `gapp.yaml`:
 
 1. Help them identify the ASGI entrypoint — the `module:app`
    string that uvicorn would use. Look at the code to find it.
-2. Call `gapp_init` to create `gapp.yaml`, a `Dockerfile`, and
-   register the solution locally.
+2. Call `gapp_init` to create `gapp.yaml` and register the
+   solution locally.
 3. If the service needs secrets (API keys, tokens), help them
-   declare those in `gapp.yaml` under `prerequisites.secrets`.
-4. Walk the user through the auth decision (see below).
-
-### Auth Decision
-
-This is a key question. Look at the code to understand how the
-service authenticates with its backend (if any), then present the
-options.
-
-**Important:** Before presenting these options, you must have
-completed the Cloud Readiness Check above. If the service reads
-credentials from environment variables or local files, the
-refactor must happen first — otherwise neither option works
-safely on Cloud Run.
-
-**Option A: No auth / direct auth (simpler, good for single-user
-or trusted environments)**
-
-The service handles auth itself. Clients pass credentials directly
-— either via a configured `Authorization` header in MCP client
-settings, or via a parameterized URL. The credential is often the
-backend platform's own token (e.g., a session token, an API key,
-or an OAuth access token).
-
-**Prerequisite:** The service must actually read the incoming
-request's `Authorization` header (not just an env var). If you
-the Cloud Readiness Check found env-var/file-based credentials, this option
-only works after the refactor — and even then, it means the raw
-backend credential is on every client device.
-
-This works well when:
-- Single user or small trusted group
-- You're OK having the backend token on every machine/client
-- You don't need cloud-based clients like Claude.ai (which can't
-  set custom headers easily)
-
-**Option B: Credential mediation via gapp's ASGI wrapper
-(recommended for multi-device or multi-user)**
-
-gapp injects an auth wrapper at deploy time. Clients authenticate
-with a lightweight PAT (personal access token) — a JWT that gapp
-issues. The real backend credential (e.g., a SaaS platform token,
-API key, or database credential used by the MCP server) is stored
-server-side and never leaves the
-server. The wrapper validates the PAT, looks up the real
-credential, and rewrites the auth header before the request
-reaches the solution. The solution code doesn't change — it still
-receives a standard `Authorization: Bearer <token>` header.
-
-This is better when:
-- You use the service from multiple machines (laptop, phone,
-  work computer) — one backend token, many PATs
-- You want cloud-based clients like Claude.ai to work (PATs can
-  be passed via URL parameter)
-- You don't want raw backend credentials scattered across devices
-  and agent configs
-- You want centralized credential rotation — update the backend
-  token once with `gapp_users_update`, every device keeps working
-- You want to revoke access without touching the backend credential
-- Multiple users need access, each with their own backend credential
-
-Present it to the user like this:
-
-> Your service talks to a backend API using a token. Right now
-> that token would go directly in every client's config — your
-> laptop, your phone, Claude.ai, etc. If it changes, you update
-> everywhere.
->
-> Alternatively, gapp can mediate: the real token stays on the
-> server, and each client gets a lightweight access token (PAT)
-> instead. You can generate new PATs anytime, revoke them
-> individually, and rotate the backend token in one place. This
-> also makes Claude.ai work — it can't set custom headers but it
-> can use a PAT in the URL.
->
-> Which approach fits your use case?
-
-If the user chooses mediation, call `gapp_init(auth="bearer")`
-(or `auth="google_oauth2"` when the backend credential is a
-Google OAuth2 refresh token). The `runtime` field (which version
-of the auth wrapper to install in the container) is auto-set
-from the installed gapp version — don't ask the user about it.
+   declare those in `gapp.yaml`'s `env` section with a `secret`
+   entry (or `prerequisites.secrets` for prerequisite-only
+   declarations).
 
 ## Phase 2: GCP Foundation
 
@@ -617,15 +542,6 @@ After confirming data compatibility (or for code-only changes):
 Remind the user: uncommitted changes won't be included. The build
 uses `git archive HEAD` for source integrity.
 
-### Manage users
-
-- `gapp_users_list` — see who's registered
-- `gapp_users_register` — add a user with their upstream credential
-- `gapp_users_update` — change credential or set revoke_before
-- `gapp_users_revoke` — delete a user's credential file
-- `gapp_tokens_create` — issue a PAT for a user
-- `gapp_tokens_revoke` — invalidate all PATs for a user
-
 ### List and discover
 
 - `gapp_list` — all registered solutions
@@ -639,52 +555,47 @@ workflow as needed:
 
 | Tool | Purpose |
 |------|---------|
-| `gapp_init` | Initialize a solution (create gapp.yaml, Dockerfile, domain) |
+| `gapp_init` | Initialize a solution (create gapp.yaml, register, GitHub topic) |
 | `gapp_setup` | GCP foundation (APIs, bucket, labels) |
 | `gapp_build` | Submit async Cloud Build, returns build_id |
 | `gapp_deploy` | Poll build + Terraform apply (use with build_ref) |
-| `gapp_secret_list` | List prerequisite secrets and status |
-| `gapp_secret_set` | Store secret value in Secret Manager |
+| `gapp_schema` | Live gapp.yaml JSON Schema |
+| `gapp_secret_list` | List declared secrets and their state in Secret Manager |
+| `gapp_secret_set` | Store a secret value in Secret Manager (labeled gapp-solution=<name>) |
+| `gapp_secret_get` | Read a secret value (or hash + length) |
 | `gapp_ci_init` | Designate CI repo |
 | `gapp_ci_setup` | Wire solution for CI/CD (WIF, SA, workflow) |
 | `gapp_ci_trigger` | Trigger GitHub Actions deploy |
+| `gapp_ci_status` | CI/CD readiness check |
 | `gapp_status` | Infrastructure health check (local, fast) |
 | `gapp_deployments_list` | Discover GCP projects with gapp solutions |
 | `gapp_list` | List registered solutions |
-| `gapp_mcp_status` | MCP health + tool enumeration |
+| `gapp_mcp_status` | MCP health + tool enumeration (unauthenticated probe) |
 | `gapp_mcp_list` | List MCP-enabled solutions |
-| `gapp_mcp_connect` | Client connection info + PAT minting |
-| `gapp_users_list` | List registered users |
-| `gapp_users_register` | Register user with credential |
-| `gapp_users_update` | Update credential or revocation timestamp |
-| `gapp_users_revoke` | Delete user's credential file |
-| `gapp_tokens_create` | Create a PAT |
-| `gapp_tokens_revoke` | Revoke all PATs for a user |
+| `gapp_mcp_connect` | Client connection commands (token placeholder is `<YOUR_PAT>`) |
 
 ## Important Reminders
 
 - Every gapp operation is idempotent and returns a `next_step`
   field telling what to do next. Trust it.
 - Solutions are cloud-agnostic. Never suggest adding GCP imports
-  or auth code to the solution itself.
+  to the solution itself.
 - One repo = one solution = one Cloud Run service.
 - The build uses `git archive HEAD`. Uncommitted changes are never
   included. The working tree must be clean.
 - Image tags are the HEAD commit SHA. If the image already exists,
   the build is skipped.
 - Secret values go in Secret Manager, never in the repo. Only
-  secret names (references) go in `gapp.yaml`.
-- When auth is enabled, gapp injects a credential mediation
-  wrapper at deploy time. The solution never sees PATs or
-  credential files.
+  secret names (references) go in `gapp.yaml`. Every secret gapp
+  creates is labeled `gapp-solution=<name>`; pre-existing
+  unlabeled secrets at the same id are never silently adopted.
+- gapp does not handle auth, mint tokens, or manage users. If the
+  service needs auth, it is the solution's own framework's job —
+  use that framework's admin tools for users and tokens. Refer
+  the user to the solution's framework skill or docs.
 - Guide users step by step. Don't dump the entire lifecycle at
   once. Assess where they are and help with the next phase.
-- Never suggest setting a backend credential (API token, session
-  token, OAuth token) as a Cloud Run secret env var for direct
-  use by the service. This creates an unauthenticated proxy.
-  Backend credentials must arrive per-request via the
-  Authorization header, mediated by gapp's auth wrapper.
-- IAM-based auth on Cloud Run is not practical for MCP clients.
-  Claude.ai, Gemini CLI, and Claude Code cannot attach IAM
-  tokens to requests. Always use gapp's bearer mediation (PATs)
-  for access control instead.
+- IAM-based auth on Cloud Run is not practical for MCP clients
+  (Claude.ai, Gemini CLI, Claude Code can't attach IAM tokens),
+  so most MCP solutions deploy with `public: true` and let the
+  solution's own auth layer gate access at the application level.
