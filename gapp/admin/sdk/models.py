@@ -21,7 +21,6 @@ class ServiceStatus(BaseModel):
     name: str
     url: str
     healthy: bool
-    mcp_path: str | None = None
 
 
 class DeploymentInfo(BaseModel):
@@ -37,57 +36,3 @@ class StatusResult(BaseModel):
     deployment: DeploymentInfo | None = None
     domain: DomainStatus | None = None
     next_step: NextStep | None = None
-
-
-class McpStatusResult(BaseModel):
-    name: str
-    project_id: str | None = None
-    deployed: bool = False
-    url: str | None = None
-    mcp_url: str | None = None
-    healthy: bool | None = None
-    tools: list[str] | None = None
-    next_step: NextStep | None = None
-    error: str | None = None
-
-
-class McpSolution(BaseModel):
-    name: str
-    project_id: str | None = None
-    mcp_path: str
-    repo_path: str | None = None
-
-
-class ClientScope(BaseModel):
-    registered: bool = False
-    command: str = ""
-
-
-class ClientConfig(BaseModel):
-    user: ClientScope | None = None
-    project: ClientScope | None = None
-
-
-class ClaudeAiConfig(BaseModel):
-    url: str = ""
-
-
-class ClientConfigs(BaseModel):
-    claude_code: ClientConfig | None = None
-    gemini_cli: ClientConfig | None = None
-    claude_ai: ClaudeAiConfig | None = None
-
-
-class ConnectResult(BaseModel):
-    name: str
-    project_id: str | None = None
-    deployed: bool = False
-    url: str | None = None
-    mcp_url: str | None = None
-    healthy: bool | None = None
-    tools: list[str] | None = None
-    token: str | None = None
-    token_masked: str | None = None
-    clients: ClientConfigs = Field(default_factory=ClientConfigs)
-    next_step: NextStep | None = None
-    error: str | None = None

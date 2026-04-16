@@ -184,7 +184,7 @@ env:
 #### MCP tools for gapp.yaml management
 
 - `gapp_init` — creates or updates gapp.yaml (entrypoint,
-  auth, secrets, mcp_path, domain)
+  secrets, domain)
 - `gapp_status` — shows current config, deployment state,
   public access, next step
 - `gapp_secret_set` — stores a secret value in Secret Manager
@@ -325,7 +325,7 @@ framework's own skill or documentation for auth setup.
 `gapp_init` both creates and configures. First call creates
 `gapp.yaml`; subsequent calls update settings. Use it anytime
 the user wants to change gapp configuration — entrypoint,
-secrets, mcp_path, etc.
+secrets, domain, etc.
 
 If the user wants to proceed and there's no `gapp.yaml`:
 
@@ -457,10 +457,10 @@ After deployment, verify the service is running and set up access:
    The specifics depend on the solution's auth framework — check
    the solution's README, CONTRIBUTING, or any framework-specific
    skills for guidance
-4. **Get connection info** — `gapp_mcp_connect()` generates
-   ready-to-use MCP client connection commands for Claude Code,
-   Gemini CLI, and Claude.ai. With `user` param, mints a real
-   access token inline
+4. **Share the service URL** — `gapp_status` returns the deployed
+   URL. How MCP clients register against that URL is the solution
+   framework's concern; refer the user to the framework's own skill
+   or docs for client-registration commands.
 
 ## Custom Domain Setup
 
@@ -512,11 +512,6 @@ Use `gapp_status` to check infrastructure health. Returns:
 - Health check results
 - Guided next steps
 
-Use `gapp_mcp_status` to check MCP-specific health:
-- MCP endpoint availability
-- Tool enumeration
-- Auth status
-
 ### Redeploy with changes
 
 Before redeploying, check whether the code changes affect how
@@ -546,7 +541,6 @@ uses `git archive HEAD` for source integrity.
 
 - `gapp_list` — all registered solutions
 - `gapp_list(available=True)` — include remote GitHub solutions
-- `gapp_mcp_list` — solutions with MCP endpoints
 
 ## MCP Tools Reference
 
@@ -570,9 +564,6 @@ workflow as needed:
 | `gapp_status` | Infrastructure health check (local, fast) |
 | `gapp_deployments_list` | Discover GCP projects with gapp solutions |
 | `gapp_list` | List registered solutions |
-| `gapp_mcp_status` | MCP health + tool enumeration (unauthenticated probe) |
-| `gapp_mcp_list` | List MCP-enabled solutions |
-| `gapp_mcp_connect` | Client connection commands (token placeholder is `<YOUR_PAT>`) |
 
 ## Important Reminders
 

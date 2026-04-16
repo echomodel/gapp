@@ -172,7 +172,7 @@ service:
 
 **Auth is not gapp's concern.** gapp is purely a deployment tool: containers, secrets, data volumes, IAM. How a solution authenticates clients or mediates upstream credentials is entirely the solution's business. gapp does not ship auth middleware, does not manage users, does not mint tokens.
 
-**gapp's boundary is "service is up."** `gapp_status` checks `/health` as a liveness convenience — it confirms the container started and accepts HTTP. Everything beyond that (auth verification, tool enumeration, user management, MCP client registration) is the app's concern, handled by the app's own admin CLI and skills. gapp does not probe app-specific endpoints or understand app-layer auth models.
+**gapp's boundary is "service is up."** `gapp_status` checks `/health` as a liveness convenience — it confirms the container started and accepts HTTP. Everything beyond that (auth verification, tool enumeration, user management, MCP client registration, MCP endpoint paths) is the solution's concern, handled by the solution framework's own admin CLI and skills. gapp does not probe app-specific endpoints or know anything about MCP.
 
 **`public` is an independent flag.** Public access (Cloud Run `allUsers` IAM) is set by the `public` field in gapp.yaml or the CLI/MCP arg, independent of anything else. Default is non-public (safe). Priority on each deploy: CLI/MCP arg → gapp.yaml `public:` → default false.
 
@@ -338,11 +338,11 @@ Solutions have no inter-service deployment dependencies. Each is independently d
 
 ### 6. Visibility Is a Feature
 
-If you build useful things but nobody can find them, they might as well not exist. GitHub topics (`gapp-solution`) enable discovery. `gapp list` is the live inventory. `gapp mcp connect` shows exactly how to wire up each client. Every system has one obvious entry point that answers the key question.
+If you build useful things but nobody can find them, they might as well not exist. GitHub topics (`gapp-solution`) enable discovery. `gapp list` is the live inventory. Every system has one obvious entry point that answers the key question.
 
 ### 7. Minimize Places to Look
 
-Every system should have one canonical place for the key question. Before gapp: check TF state per repo, check gcloud per project, check Console. After gapp: `gapp list`, `gapp status`, `gapp mcp status`. One command per question.
+Every system should have one canonical place for the key question. Before gapp: check TF state per repo, check gcloud per project, check Console. After gapp: `gapp list`, `gapp status`. One command per question.
 
 ### 8. Derive, Don't Configure
 
@@ -389,9 +389,6 @@ Available tools:
 - `gapp_deploy` — run terraform apply
 - `gapp_status` — infrastructure health check
 - `gapp_list` — list registered solutions
-- `gapp_mcp_status` — MCP health + tool enumeration (unauthenticated probe)
-- `gapp_mcp_list` — list MCP-enabled solutions
-- `gapp_mcp_connect` — generate client connection config
 - `gapp_secret_set` / `gapp_secret_get` / `gapp_secret_list` — manage gapp-owned secrets
 - `gapp_schema` — live gapp.yaml JSON schema
 - `gapp_ci_*` — GitHub Actions CI/CD wiring

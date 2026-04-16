@@ -46,7 +46,6 @@ def gapp_schema() -> dict:
 @_tool()
 def gapp_init(
     entrypoint: str | None = None,
-    mcp_path: str | None = None,
     secrets: dict | None = None,
     domain: str | None = None,
 ) -> dict:
@@ -59,7 +58,6 @@ def gapp_init(
 
     Args:
         entrypoint: ASGI entrypoint (module:app).
-        mcp_path: MCP endpoint path (e.g., /mcp).
         secrets: Dict of secret name to description for prerequisites.
         domain: Custom domain to map to the service (e.g., mcp.example.com).
             Requires a CNAME record pointing to ghs.googlehosted.com.
@@ -68,7 +66,6 @@ def gapp_init(
     from gapp.admin.sdk.init import init_solution
     return init_solution(
         entrypoint=entrypoint,
-        mcp_path=mcp_path,
         secrets=secrets,
         domain=domain,
     )
@@ -361,38 +358,6 @@ def gapp_list(available: bool = False) -> list[dict]:
     """
     from gapp.admin.sdk.solutions import list_solutions
     return list_solutions(include_remote=available)
-
-
-@_tool()
-def gapp_mcp_status(solution: str | None = None) -> dict:
-    """MCP health check with tool enumeration for a gapp solution.
-
-    Returns MCP URL, health, auth status, and list of available tools.
-    """
-    from gapp.admin.sdk.mcp_status import mcp_status
-    return mcp_status(solution).model_dump()
-
-
-@_tool()
-def gapp_mcp_list() -> list[dict]:
-    """List gapp solutions that have MCP endpoints configured."""
-    from gapp.admin.sdk.mcp_status import mcp_list
-    return [s.model_dump() for s in mcp_list()]
-
-
-@_tool()
-def gapp_mcp_connect(solution: str | None = None, user: str | None = None) -> dict:
-    """Generate MCP client connection info for a gapp solution.
-
-    Shows connection details for Claude Code, Gemini CLI, and Claude.ai
-    with registration status. If user email is specified, mints a real PAT.
-
-    Args:
-        solution: Solution name. Defaults to current directory's solution.
-        user: Email of registered user to mint a real PAT for.
-    """
-    from gapp.admin.sdk.mcp_status import mcp_connect
-    return mcp_connect(solution, user=user).model_dump()
 
 
 def main():

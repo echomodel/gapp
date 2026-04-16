@@ -61,13 +61,6 @@ After CI setup, any tool with GitHub access can deploy — push a commit, trigge
 
 ### After Deploying (Both Paths)
 
-```bash
-# If auth enabled in gapp.yaml:
-gapp users register user@example.com <credential>   # register a user
-gapp tokens create user@example.com                  # create a PAT
-gapp mcp connect                                     # show client connection info
-```
-
 Each command is idempotent and tells you what to do next.
 
 ### Solution Lifecycle
@@ -242,20 +235,12 @@ gapp list [--available]              List registered solutions (--available for 
 gapp restore <name>                  Clone from GitHub + find GCP project
 gapp plan                            Terraform plan (preview changes)
 
-gapp mcp status [name] [--json]      MCP health + tool enumeration
-gapp mcp list [--json]               List solutions with MCP endpoints
-gapp mcp connect [name] [--json]     Client connection info (Claude Code, Gemini CLI, Claude.ai)
-  --user <email>                     Mint a real PAT for the connection commands
-  --claude <scope>                   Filter to Claude Code config (user/project)
-  --gemini <scope>                   Filter to Gemini CLI config (user/project)
+gapp secrets list                    Show declared secrets and their Secret Manager state
+gapp secrets set <name> <value>      Store a secret value in Secret Manager (labeled)
+gapp secrets get <name> [--raw]      Read a secret value (hash+length by default)
 
-gapp secret list                     Show prerequisite secrets and status
-gapp users register <email> <cred>   Register a user with upstream credential
-gapp users list                      List registered users
-gapp users update <email> [options]  Update credential or set revoke_before
-gapp users revoke <email>            Delete user's credential file
-gapp tokens create <email>           Create a PAT (JWT) for a user
-gapp tokens revoke <email>           Invalidate all PATs for a user
+gapp manifest schema                 Print the live gapp.yaml JSON Schema
+gapp manifest verify                 Validate gapp.yaml in the current directory
 ```
 
 ## Key Concepts
@@ -309,12 +294,6 @@ gapp is an overlay, not a lock-in.
 ### Infrastructure You Don't Have to Think About
 
 gapp manages Terraform, IAM, API enablement, service accounts, secret references, and container builds behind four commands. You never write HCL, never enable a GCP API by hand, never create a service account or grant it roles. `gapp setup` handles the foundation, `gapp deploy` handles the rest. If the underlying Terraform modules evolve (new security controls, new resource types), all solutions benefit automatically on their next deploy.
-
-### Agent Wiring Made Easy
-
-Once deployed, `gapp mcp connect` generates ready-to-use connection commands for Claude Code, Gemini CLI, and Claude.ai — with the real service URL and MCP path already filled in. No hunting for hostnames, no guessing the right CLI flags. It checks whether each client already has the service registered and shows the exact command to add it. The auth token placeholder is `<YOUR_PAT>`; obtaining the actual token is the solution framework's responsibility, not gapp's. For automation, `--json` returns a structured result that scripts or MCP tools can consume directly.
-
-This scales to tens of thousands of users. Each user is a single small file in GCS (~100 bytes). Lookups are O(1) by email hash. No databases, no user tables, no connection pools.
 
 ### Security Isolation
 

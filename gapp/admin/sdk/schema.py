@@ -51,7 +51,6 @@ class ServiceSpec(_StrictModel):
     """Cloud Run service configuration."""
     entrypoint: str | None = Field(default=None, description="ASGI module:app — gapp wraps with uvicorn.")
     cmd: str | None = Field(default=None, description="Exact command to run in the container.")
-    mcp_path: str | None = Field(default=None, description="MCP endpoint path (e.g. /mcp).")
     memory: str | None = Field(default=None, description="Memory limit (e.g. 512Mi).")
     cpu: str | None = Field(default=None, description="CPU limit (e.g. '1').")
     max_instances: int | None = Field(default=None, description="Max Cloud Run instances.")

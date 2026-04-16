@@ -12,7 +12,6 @@ def init_solution(
     repo_path: Path | None = None,
     *,
     entrypoint: str | None = None,
-    mcp_path: str | None = None,
     secrets: dict | None = None,
     domain: str | None = None,
 ) -> dict:
@@ -26,7 +25,6 @@ def init_solution(
     Args:
         repo_path: Path to the repo. Defaults to cwd.
         entrypoint: ASGI entrypoint (module:app).
-        mcp_path: MCP endpoint path (e.g., /mcp).
         secrets: Dict of secret names to descriptions for prerequisites.
         domain: Custom domain to map to the service (e.g., mcp.example.com).
 
@@ -62,10 +60,6 @@ def init_solution(
 
     if entrypoint is not None and service.get("entrypoint") != entrypoint:
         service["entrypoint"] = entrypoint
-        changed = True
-
-    if mcp_path is not None and service.get("mcp_path") != mcp_path:
-        service["mcp_path"] = mcp_path
         changed = True
 
     if not service:
