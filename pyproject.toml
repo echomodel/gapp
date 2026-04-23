@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [project.urls]
-Repository = "https://github.com/krisrowe/gapp"
+Repository = "https://github.com/owner-arowe/gapp"
 
 [project.optional-dependencies]
 dev = [

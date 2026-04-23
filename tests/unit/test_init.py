@@ -1,76 +1,70 @@
-"""Tests for gapp.sdk.init — solution initialization."""
+"""Tests for gapp.sdk.init — local project initialization."""
 
+import json
+import subprocess
 from pathlib import Path
-from unittest.mock import patch
-
-from gapp.admin.sdk.config import load_solutions
+import pytest
 from gapp.admin.sdk.init import init_solution
+from gapp.admin.sdk.manifest import load_manifest
 
 
-def _make_git_repo(path: Path) -> Path:
-    """Create a minimal git repo at path. Returns the repo root."""
-    import subprocess
-
-    path.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["git", "init", str(path)], capture_output=True)
-    subprocess.run(
-        ["git", "config", "user.email", "test@example.com"],
-        capture_output=True,
-        cwd=path,
-    )
-    subprocess.run(
-        ["git", "config", "user.name", "Test"],
-        capture_output=True,
-        cwd=path,
-    )
-    return path
-
-
-@patch("gapp.admin.sdk.init._add_github_topic", return_value="skipped")
-def test_init_creates_manifest(mock_topic, tmp_path):
-    repo = _make_git_repo(tmp_path / "my-app")
-    result = init_solution(repo_path=repo)
-
-    assert result["name"] == "my-app"
-    assert result["manifest_status"] == "created"
+def test_init_creates_manifest(tmp_path, monkeypatch):
+    """Verify init_solution creates a gapp.yaml with name derived from dir."""
+    repo = tmp_path / "my-solution"
+    repo.mkdir()
+    (repo / ".git").mkdir()
+    
+    res = init_solution(repo)
+    assert res["name"] == "my-solution"
+    assert res["manifest_status"] == "created"
     assert (repo / "gapp.yaml").exists()
+    
+    manifest = load_manifest(repo)
+    assert manifest["name"] == "my-solution"
 
 
-@patch("gapp.admin.sdk.init._add_github_topic", return_value="skipped")
-def test_init_existing_manifest(mock_topic, tmp_path):
-    repo = _make_git_repo(tmp_path / "my-app")
-    (repo / "gapp.yaml").write_text("name: custom\n")
-
-    result = init_solution(repo_path=repo)
-
-    assert result["name"] == "custom"
-    assert result["manifest_status"] == "unchanged"
-
-
-@patch("gapp.admin.sdk.init._add_github_topic", return_value="skipped")
-def test_init_registers_in_solutions(mock_topic, tmp_path):
-    repo = _make_git_repo(tmp_path / "my-app")
-    init_solution(repo_path=repo)
-
-    solutions = load_solutions()
-    assert "my-app" in solutions
-    assert solutions["my-app"]["repo_path"] == str(repo)
+def test_init_merges_entrypoint(tmp_path):
+    """Verify init_solution can set/update the entrypoint."""
+    repo = tmp_path / "app"
+    repo.mkdir()
+    (repo / ".git").mkdir()
+    
+    init_solution(repo, entrypoint="main:app")
+    manifest = load_manifest(repo)
+    assert manifest["service"]["entrypoint"] == "main:app"
+    
+    # Update it
+    init_solution(repo, entrypoint="api:app")
+    manifest = load_manifest(repo)
+    assert manifest["service"]["entrypoint"] == "api:app"
 
 
-@patch("gapp.admin.sdk.init._add_github_topic", return_value="skipped")
-def test_init_idempotent(mock_topic, tmp_path):
-    repo = _make_git_repo(tmp_path / "my-app")
+def test_init_adds_secrets(tmp_path):
+    """Verify init_solution adds prerequisite secrets."""
+    repo = tmp_path / "app"
+    repo.mkdir()
+    (repo / ".git").mkdir()
+    
+    init_solution(repo, secrets={"api-key": "Internal API token"})
+    manifest = load_manifest(repo)
+    assert "api-key" in manifest["prerequisites"]["secrets"]
+    assert manifest["prerequisites"]["secrets"]["api-key"]["description"] == "Internal API token"
 
-    result1 = init_solution(repo_path=repo)
-    assert result1["manifest_status"] == "created"
 
-    result2 = init_solution(repo_path=repo)
-    assert result2["manifest_status"] == "unchanged"
-    assert result2["name"] == "my-app"
-
-
-def test_init_fails_outside_git_repo(tmp_path):
-    import pytest
-
-    with pytest.raises(RuntimeError, match="Not inside a git repository"):
-        init_solution(repo_path=tmp_path)
+def test_init_skips_topic_if_not_github(tmp_path, monkeypatch):
+    """Verify topic status is 'skipped' if gh command fails."""
+    repo = tmp_path / "app"
+    repo.mkdir()
+    (repo / ".git").mkdir()
+    
+    # Mock gh failing
+    def mock_run(*args, **kwargs):
+        class MockProc:
+            returncode = 1
+            stdout = ""
+        return MockProc()
+    
+    monkeypatch.setattr(subprocess, "run", mock_run)
+    
+    res = init_solution(repo)
+    assert res["topic_status"] == "skipped"

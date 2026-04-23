@@ -3,7 +3,6 @@
 import subprocess
 from pathlib import Path
 
-from gapp.admin.sdk.config import load_solutions, save_solutions
 from gapp.admin.sdk.context import get_git_root
 from gapp.admin.sdk.manifest import get_solution_name, load_manifest, save_manifest
 
@@ -32,7 +31,6 @@ def init_solution(
         name: solution name
         manifest_status: "created" | "updated" | "unchanged"
         topic_status: "added" | "already_set" | "skipped"
-        registered: bool
     """
     if repo_path:
         git_root = get_git_root(repo_path)
@@ -41,7 +39,7 @@ def init_solution(
     if not git_root:
         raise RuntimeError("Not inside a git repository.")
 
-    result = {"name": None, "manifest_status": None, "topic_status": None, "registered": False}
+    result = {"name": None, "manifest_status": None, "topic_status": None}
 
     # Ensure gapp.yaml exists
     manifest_path = git_root / "gapp.yaml"
@@ -91,14 +89,6 @@ def init_solution(
 
     # Add GitHub topic
     result["topic_status"] = _add_github_topic(git_root)
-
-    # Register in solutions.yaml
-    solutions = load_solutions()
-    if solution_name not in solutions:
-        solutions[solution_name] = {}
-    solutions[solution_name]["repo_path"] = str(git_root)
-    save_solutions(solutions)
-    result["registered"] = True
 
     return result
 

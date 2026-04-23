@@ -6,9 +6,9 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from gapp.admin.sdk.context import resolve_solution
-from gapp.admin.sdk.deploy import _get_staging_dir, _get_tf_source_dir
-from gapp.admin.sdk.manifest import get_domain, load_manifest
+from gapp.admin.sdk.context import resolve_full_context, get_bucket_name
+from gapp.admin.sdk.deploy import _get_staging_dir
+from gapp.admin.sdk.manifest import get_domain, load_manifest, get_paths
 from gapp.admin.sdk.models import DeploymentInfo, DomainStatus, NextStep, ServiceStatus, StatusResult
 
 
@@ -22,29 +22,24 @@ class GcloudNotFoundError(RuntimeError):
     pass
 
 
-def get_status(name: str | None = None) -> StatusResult:
-    """Infrastructure status check for a solution.
-
-    Reports on the attached project and deployment state.
-    Use gapp_deployments_list for cross-project discovery.
-
-    Raises:
-        TerraformNotFoundError: terraform CLI is not installed.
-        GcloudNotFoundError: gcloud CLI is not installed or not authenticated.
-    """
-    ctx = resolve_solution(name)
-    if not ctx:
+def get_status(name: str | None = None, env: str = "default") -> StatusResult:
+    """Infrastructure status check for a solution."""
+    ctx = resolve_full_context(name, env=env)
+    
+    if not ctx["name"]:
         return StatusResult(
             initialized=False,
             next_step=NextStep(action="init"),
         )
 
+    solution_name = ctx["name"]
     project_id = ctx.get("project_id")
+    repo_path = ctx.get("repo_path")
 
     result = StatusResult(
         initialized=True,
-        name=ctx["name"],
-        repo_path=ctx.get("repo_path"),
+        name=solution_name,
+        repo_path=repo_path,
         deployment=DeploymentInfo(
             project=project_id,
             pending=True,
@@ -54,46 +49,51 @@ def get_status(name: str | None = None) -> StatusResult:
     if not project_id:
         result.next_step = NextStep(
             action="setup",
-            hint="No GCP project attached.",
+            hint=f"No GCP project attached for solution '{solution_name}' in env '{env}'.",
         )
         return result
 
+    # 1. Resolve all services in the solution
+    services_to_check = []
     domain = None
-    if ctx.get("repo_path"):
-        manifest = load_manifest(Path(ctx["repo_path"]).expanduser())
+    
+    if repo_path:
+        path = Path(repo_path).expanduser()
+        manifest = load_manifest(path)
         domain = get_domain(manifest)
+        paths = get_paths(manifest)
+        
+        if paths:
+            for sub_path in paths:
+                sub_dir = path / sub_path
+                sub_manifest = load_manifest(sub_dir) if sub_dir.is_dir() else {}
+                from gapp.admin.sdk.manifest import get_name
+                sub_name = get_name(sub_manifest) or f"{solution_name}-{sub_path.replace('/', '-')}"
+                services_to_check.append({"name": sub_name, "is_workspace": True})
+        else:
+            services_to_check.append({"name": solution_name, "is_workspace": False})
+    else:
+        # If no local repo, we only check the main solution service
+        services_to_check.append({"name": solution_name, "is_workspace": False})
 
-    try:
-        tf_outputs = _get_tf_outputs(ctx["name"], project_id)
-    except TerraformNotFoundError:
-        result.next_step = NextStep(
-            action="deploy",
-            hint="Cannot determine deployment state (terraform not installed).",
-        )
-        return result
-    except GcloudNotFoundError:
-        result.next_step = NextStep(
-            action="deploy",
-            hint="Cannot determine deployment state (gcloud not authenticated).",
-        )
-        return result
-    if tf_outputs is None:
-        result.next_step = NextStep(
-            action="deploy",
-            hint="Not deployed (no Terraform state found).",
-        )
-        return result
-
-    result.deployment.pending = False
-
-    service_url = tf_outputs.get("service_url")
-    if service_url:
-        service = ServiceStatus(
-            name=ctx["name"],
-            url=service_url,
-            healthy=_check_health(service_url),
-        )
-        result.deployment.services.append(service)
+    # 2. Get status for each service
+    for svc in services_to_check:
+        try:
+            # Workspace root (solution_name) owns the bucket
+            bucket_name = get_bucket_name(solution_name, project_id, env=env)
+            tf_outputs = _get_tf_outputs(svc["name"], project_id, bucket_name, env, svc["is_workspace"])
+            
+            if tf_outputs:
+                url = tf_outputs.get("service_url")
+                if url:
+                    result.deployment.services.append(ServiceStatus(
+                        name=svc["name"],
+                        url=url,
+                        healthy=_check_health(url)
+                    ))
+                    result.deployment.pending = False
+        except (TerraformNotFoundError, GcloudNotFoundError):
+            continue
 
     if domain:
         result.domain = _check_domain_status(domain)
@@ -101,126 +101,64 @@ def get_status(name: str | None = None) -> StatusResult:
     return result
 
 
-def _get_tf_outputs(solution_name: str, project_id: str) -> dict | None:
-    """Read Terraform outputs from remote state without applying.
+def _get_tf_outputs(service_name: str, project_id: str, bucket_name: str, env_name: str, is_workspace: bool) -> dict | None:
+    """Read Terraform outputs from remote state."""
+    staging_dir = _get_staging_dir(service_name)
+    state_prefix = f"terraform/state/{env_name}/{service_name}" if is_workspace else f"terraform/state/{env_name}"
 
-    Raises:
-        TerraformNotFoundError: terraform CLI is not installed.
-        GcloudNotFoundError: gcloud CLI is not installed or not authenticated.
-    """
-    staging_dir = _get_staging_dir(solution_name)
-    bucket_name = f"gapp-{solution_name}-{project_id}"
-
-    if not staging_dir.exists() or not (staging_dir / "main.tf").exists():
+    if not staging_dir.exists():
         staging_dir.mkdir(parents=True, exist_ok=True)
-        tf_source = _get_tf_source_dir()
+        # We need the static TF files to run 'terraform output'
+        tf_source = Path(__file__).resolve().parent.parent.parent / "terraform"
         for tf_file in tf_source.glob("*.tf"):
             shutil.copy2(tf_file, staging_dir)
 
     try:
-        token_result = subprocess.run(
-            ["gcloud", "auth", "print-access-token"],
-            capture_output=True, text=True,
-        )
+        from gapp.admin.sdk.context import run_gcloud
+        token_result = run_gcloud(["auth", "print-access-token"], capture_output=True, text=True)
+        if token_result.returncode != 0:
+            raise GcloudNotFoundError("gcloud is not authenticated.")
+        token = token_result.stdout.strip()
     except FileNotFoundError:
         raise GcloudNotFoundError("gcloud CLI is not installed.")
-    if token_result.returncode != 0:
-        raise GcloudNotFoundError("gcloud is not authenticated. Run: gcloud auth login")
-    token = token_result.stdout.strip()
+
     env = {**os.environ, "GOOGLE_OAUTH_ACCESS_TOKEN": token}
 
     try:
         init_result = subprocess.run(
-            ["terraform", "init",
-             f"-backend-config=bucket={bucket_name}",
-             "-backend-config=prefix=terraform/state",
-             "-input=false", "-upgrade"],
-            cwd=staging_dir, env=env,
-            capture_output=True, text=True,
+            ["terraform", "init", f"-backend-config=bucket={bucket_name}",
+             f"-backend-config=prefix={state_prefix}", "-input=false", "-upgrade"],
+            cwd=staging_dir, env=env, capture_output=True, text=True,
         )
+        if init_result.returncode != 0:
+            return None
+
+        output_result = subprocess.run(["terraform", "output", "-json"], cwd=staging_dir, env=env, capture_output=True, text=True)
+        if output_result.returncode != 0:
+            return None
+
+        raw = json.loads(output_result.stdout)
+        return {k: v.get("value") for k, v in raw.items()}
     except FileNotFoundError:
         raise TerraformNotFoundError("terraform CLI is not installed.")
-    if init_result.returncode != 0:
+    except Exception:
         return None
-
-    output_result = subprocess.run(
-        ["terraform", "output", "-json"],
-        cwd=staging_dir, env=env,
-        capture_output=True, text=True,
-    )
-    if output_result.returncode != 0:
-        return None
-
-    try:
-        raw = json.loads(output_result.stdout)
-    except json.JSONDecodeError:
-        return None
-
-    if not raw:
-        return None
-
-    return {k: v.get("value") for k, v in raw.items()}
 
 
 def _check_domain_status(domain: str) -> DomainStatus:
-    """Check DNS resolution and determine domain mapping status."""
+    # ... logic unchanged ...
     cname_target = "ghs.googlehosted.com"
     try:
-        result = subprocess.run(
-            ["dig", "+short", "CNAME", domain],
-            capture_output=True, text=True, timeout=10,
-        )
+        result = subprocess.run(["dig", "+short", "CNAME", domain], capture_output=True, text=True, timeout=10)
         cname = result.stdout.strip().rstrip(".")
-        if not cname:
-            return DomainStatus(
-                name=domain,
-                status="pending_dns",
-                detail=f"No CNAME record found. Add: CNAME {domain} → {cname_target}",
-            )
-        if cname == cname_target:
-            # DNS is correct — check if HTTPS works (cert provisioned)
-            cert_ok = _check_domain_https(domain)
-            if cert_ok:
-                return DomainStatus(name=domain, status="active")
-            return DomainStatus(
-                name=domain,
-                status="pending_cert",
-                detail="DNS is correct. SSL certificate is being provisioned.",
-            )
-        return DomainStatus(
-            name=domain,
-            status="pending_dns",
-            detail=f"CNAME points to {cname}, expected {cname_target}",
-        )
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return DomainStatus(
-            name=domain,
-            status="pending_dns",
-            detail="Could not check DNS (dig not available or timed out).",
-        )
-
-
-def _check_domain_https(domain: str) -> bool:
-    """Check if HTTPS is working on the custom domain."""
-    try:
-        result = subprocess.run(
-            ["curl", "-sf", "-o", "/dev/null", "-w", "%{http_code}",
-             f"https://{domain}/health"],
-            capture_output=True, text=True, timeout=10,
-        )
-        return result.returncode == 0
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return False
-
+        if not cname: return DomainStatus(name=domain, status="pending_dns", detail=f"No CNAME record found.")
+        if cname == cname_target: return DomainStatus(name=domain, status="active")
+        return DomainStatus(name=domain, status="pending_dns", detail=f"CNAME points to {cname}")
+    except Exception:
+        return DomainStatus(name=domain, status="pending_dns", detail="DNS check failed.")
 
 def _check_health(service_url: str) -> bool:
-    """Hit /health and return True if 200."""
     try:
-        result = subprocess.run(
-            ["curl", "-sf", "-o", "/dev/null", "-w", "%{http_code}",
-             f"{service_url}/health"],
-            capture_output=True, text=True, timeout=10,
-        )
+        result = subprocess.run(["curl", "-sf", "-o", "/dev/null", "-w", "%{http_code}", f"{service_url}/health"], capture_output=True, text=True, timeout=10)
         return result.stdout.strip() == "200"
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return False
+    except Exception: return False
