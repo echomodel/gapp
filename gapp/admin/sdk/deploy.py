@@ -355,7 +355,7 @@ def _deploy_single_service(
         bucket_name=bucket_name,
         service_config=service_config,
         secrets=secrets,
-        token=token_str := _get_access_token(),
+        token=(token_str := _get_access_token()),
         auto_approve=auto_approve,
         manifest=manifest,
         env_name=env,
