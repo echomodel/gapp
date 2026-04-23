@@ -44,6 +44,23 @@ def gapp_schema() -> dict:
 
 
 @_tool()
+def gapp_user(account: str | None = None, app_owner: str | None = None) -> dict:
+    """View or set the global gcloud account and app owner.
+
+    Args:
+        account: Google account email for gcloud commands.
+        app_owner: Global app owner name for project labels.
+    """
+    from gapp.admin.sdk.context import set_owner, get_owner, get_account
+    if account is not None or app_owner is not None:
+        set_owner(app_owner, account)
+    return {
+        "account": get_account(),
+        "app_owner": get_owner(),
+    }
+
+
+@_tool()
 def gapp_init(
     entrypoint: str | None = None,
     secrets: dict | None = None,

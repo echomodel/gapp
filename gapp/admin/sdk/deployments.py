@@ -1,7 +1,7 @@
 """gapp deployments — discover GCP projects with gapp solutions."""
 
 import json
-import subprocess
+from gapp.admin.sdk.context import get_label_key, run_gcloud
 
 
 def list_deployments() -> dict:
@@ -29,8 +29,8 @@ def list_deployments() -> dict:
 def _find_gapp_projects() -> list[dict]:
     """Find GCP projects with gapp-* labels."""
     try:
-        result = subprocess.run(
-            ["gcloud", "projects", "list",
+        result = run_gcloud(
+            ["projects", "list",
              "--format", "json(projectId,labels)"],
             capture_output=True,
             text=True,
@@ -51,10 +51,19 @@ def _find_gapp_projects() -> list[dict]:
         solutions = []
         for key, value in labels.items():
             if key.startswith("gapp-"):
-                solution_name = key[len("gapp-"):]
+                # Handle gapp-<owner>-<name> or legacy gapp-<name>
+                parts = key.split("-")
+                if len(parts) > 2:
+                    # Scoped: gapp-<owner>-<name>
+                    name = "-".join(parts[2:])
+                else:
+                    # Legacy: gapp-<name>
+                    name = parts[1]
+                
                 solutions.append({
-                    "name": solution_name,
+                    "name": name,
                     "instance": value,
+                    "label": key,
                 })
 
         if solutions:
@@ -67,12 +76,29 @@ def _find_gapp_projects() -> list[dict]:
     return gapp_projects
 
 
-def discover_project_from_label(solution_name: str) -> str | None:
-    """Find a GCP project with the gapp-{name} label."""
-    label_filter = f"labels.gapp-{solution_name}=default"
+def discover_project_from_label(solution_name: str, env: str = "default") -> str | None:
+    """Find a GCP project with the gapp-<owner>-<app> label matching env."""
+    from gapp.admin.sdk.context import get_label_key
+    
+    # 1. Try current/configured label
+    label_key = get_label_key(solution_name)
+    project = _query_project_by_label(label_key, env=env)
+    if project:
+        return project
+
+    # 2. Try legacy fallback
+    legacy_key = f"gapp-{solution_name}".replace("_", "-").lower()
+    if legacy_key != label_key:
+        return _query_project_by_label(legacy_key, env=env)
+        
+    return None
+
+def _query_project_by_label(label_key: str, env: str = "default") -> str | None:
+    """Helper to query gcloud for a specific label key=env."""
+    label_filter = f"labels.{label_key}={env}"
     try:
-        result = subprocess.run(
-            ["gcloud", "projects", "list",
+        result = run_gcloud(
+            ["projects", "list",
              "--filter", label_filter,
              "--format", "value(projectId)"],
             capture_output=True,

@@ -13,7 +13,7 @@ gapp handles the full lifecycle: infrastructure, secrets, container builds, mult
 Install the gapp plugin for guided deployment via Claude Code:
 
 ```bash
-claude plugin marketplace add https://github.com/krisrowe/claude-plugins.git
+claude plugin marketplace add https://github.com/owner-arowe/claude-plugins.git
 claude plugin marketplace update claude-plugins
 claude plugin install gapp@claude-plugins --scope user
 ```
@@ -25,7 +25,7 @@ Restart Claude Code, then ask: **"help me deploy this app"** or **"deploy this t
 Install gapp as a standalone CLI:
 
 ```bash
-pipx install git+https://github.com/krisrowe/gapp.git
+pipx install git+https://github.com/owner-arowe/gapp.git
 ```
 
 There are two paths to deploying a solution. Choose the one that fits your workflow.
@@ -232,6 +232,7 @@ No. It's a deployment descriptor — like `Dockerfile`, `fly.toml`, or `docker-c
 ```
 gapp status [name] [--json]          Infrastructure health check with guided next steps
 gapp list [--available]              List registered solutions (--available for GitHub)
+gapp owner [name]                    View or set the global app owner for project labels
 gapp restore <name>                  Clone from GitHub + find GCP project
 gapp plan                            Terraform plan (preview changes)
 
@@ -247,7 +248,7 @@ gapp manifest verify                 Validate gapp.yaml in the current directory
 
 - **Solution** — a repo with `gapp.yaml`. One repo = one Cloud Run service.
 - **Per-solution bucket** — `gapp-{name}-{project-id}` holds Terraform state (`terraform/state/`), app data (`data/`, FUSE-mounted into the container), and per-user credential files (`data/auth/`, when auth is enabled). Created by `gapp setup`. Contents are isolated by prefix — see [Security Isolation](#security-isolation).
-- **GCP project labels** — `gapp-{name}=default` enables auto-discovery on new workstations.
+- **GCP project labels** — `gapp-<owner>-<name>=default` enables auto-discovery on new workstations. Use `gapp user --app-owner` to set your scope. If no owner is set, defaults to legacy `gapp-<name>=default`.
 - **GitHub topic** — `gapp-solution` enables discovery via `gapp solutions list --available`.
 - **Image tagging** — images are tagged with the HEAD commit SHA. Builds are skipped if the image already exists.
 - **Source integrity** — `git archive HEAD` is used as the build source. Uncommitted changes and gitignored files are never included.
@@ -325,3 +326,9 @@ These are conscious tradeoffs in favor of simplicity:
 - **GCP-only deployment** — gapp deploys to Cloud Run. Solutions themselves are cloud-agnostic, but the framework's infrastructure automation targets GCP.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed architecture, code structure, and design principles.
+ture, code structure, and design principles.
+
+## Roadmap & Future
+
+- **Environment-based Project Labels**: Currently, projects are labeled with `gapp-<owner>-<name>=default`. Future versions will allow replacing `default` with specific environment names (e.g., `dev`, `prod`) to support multi-environment discovery within the same GCP project.
+- **Source Composition**: Future support for a local `gapp.yaml` acting as a "pointer" to a remote repository or path. This would allow "aliasing" an existing solution (renaming it) while overriding specific configuration like environment variables or secrets without forking the source code.

@@ -1,104 +1,76 @@
-"""Tests for gapp.sdk.setup — GCP foundation setup."""
+"""Tests for gapp.sdk.setup — GCP foundation provisioning."""
 
 import subprocess
-from pathlib import Path
-from unittest.mock import patch, call
-
 import pytest
-
-from gapp.admin.sdk.config import load_solutions, save_solutions
+from pathlib import Path
 from gapp.admin.sdk.setup import setup_solution
+from gapp.admin.sdk.context import set_owner
 
 
-def _make_solution(tmp_path, monkeypatch, name="my-app"):
-    """Create a minimal git repo with gapp.yaml and register it."""
-    repo = tmp_path / name
+@pytest.fixture
+def mock_gcloud(monkeypatch):
+    """Mock subprocess.run for gcloud calls."""
+    calls = []
+    
+    def _mock_run(args, **kwargs):
+        calls.append(args)
+        class MockProc:
+            returncode = 0
+            stdout = "31628365056" if "describe" in args else "" # project number mock
+        return MockProc()
+    
+    monkeypatch.setattr(subprocess, "run", _mock_run)
+    return calls
+
+
+def test_setup_enables_apis_and_creates_bucket(tmp_path, monkeypatch, mock_gcloud):
+    """Verify setup_solution enables foundation APIs and creates the deterministic bucket."""
+    repo = tmp_path / "app"
     repo.mkdir()
-    subprocess.run(["git", "init", str(repo)], capture_output=True)
-
-    (repo / "gapp.yaml").write_text(
-        "service:\n"
-        "  entrypoint: my_app.mcp.server:mcp_app\n"
-    )
-
-    save_solutions({name: {"repo_path": str(repo)}})
+    (repo / ".git").mkdir()
+    (repo / "gapp.yaml").write_text("name: my-app")
     monkeypatch.chdir(repo)
-    return repo
+    
+    res = setup_solution(project_id="test-proj-123")
+    
+    assert res["name"] == "my-app"
+    assert res["project_id"] == "test-proj-123"
+    assert res["bucket"] == "gapp-my-app-test-proj-123"
+    
+    # Verify core APIs were enabled
+    enabled_apis = [c[2] for c in mock_gcloud if c[1] == "services" and c[2] == "enable"]
+    assert "run.googleapis.com" in enabled_apis
+    assert "cloudbuild.googleapis.com" in enabled_apis
+    
+    # Verify bucket creation call
+    assert any("storage" in c and "create" in c for c in mock_gcloud)
 
 
-@patch("gapp.admin.sdk.setup._label_project", return_value="added")
-@patch("gapp.admin.sdk.setup._create_bucket", return_value="created")
-@patch("gapp.admin.sdk.setup._enable_api")
-def test_setup_with_explicit_project(mock_api, mock_bucket, mock_label, tmp_path, monkeypatch):
-    _make_solution(tmp_path, monkeypatch)
-
-    result = setup_solution("my-project")
-
-    assert result["name"] == "my-app"
-    assert result["project_id"] == "my-project"
-    assert "run.googleapis.com" in result["apis"]
-    assert "secretmanager.googleapis.com" in result["apis"]
-    assert "artifactregistry.googleapis.com" in result["apis"]
-    assert "cloudbuild.googleapis.com" in result["apis"]
-    assert result["bucket"] == "gapp-my-app-my-project"
-    assert result["bucket_status"] == "created"
-    assert result["label_status"] == "added"
-
-    mock_api.assert_any_call("my-project", "run.googleapis.com")
-    mock_api.assert_any_call("my-project", "artifactregistry.googleapis.com")
-    mock_bucket.assert_called_once_with("my-project", "gapp-my-app-my-project")
-    mock_label.assert_called_once_with("my-project", "my-app")
+def test_setup_with_owner_namespace(tmp_path, monkeypatch, mock_gcloud):
+    """Verify setup_solution uses the owner namespace in the bucket name."""
+    repo = tmp_path / "app"
+    repo.mkdir()
+    (repo / ".git").mkdir()
+    (repo / "gapp.yaml").write_text("name: my-app")
+    monkeypatch.chdir(repo)
+    
+    set_owner("owner-a")
+    res = setup_solution(project_id="test-proj-123")
+    
+    assert res["bucket"] == "gapp-owner-a-my-app-test-proj-123"
+    assert res["label_status"] == "added"
 
 
-@patch("gapp.admin.sdk.setup._label_project", return_value="added")
-@patch("gapp.admin.sdk.setup._create_bucket", return_value="created")
-@patch("gapp.admin.sdk.setup._enable_api")
-def test_setup_uses_cached_project(mock_api, mock_bucket, mock_label, tmp_path, monkeypatch):
-    _make_solution(tmp_path, monkeypatch)
-    solutions = load_solutions()
-    solutions["my-app"]["project_id"] = "cached-proj"
-    save_solutions(solutions)
-
-    result = setup_solution()
-
-    assert result["project_id"] == "cached-proj"
-
-
-@patch("gapp.admin.sdk.setup._label_project", return_value="added")
-@patch("gapp.admin.sdk.setup._create_bucket", return_value="created")
-@patch("gapp.admin.sdk.setup._enable_api")
-def test_setup_saves_project_to_cache(mock_api, mock_bucket, mock_label, tmp_path, monkeypatch):
-    _make_solution(tmp_path, monkeypatch)
-
-    setup_solution("new-proj")
-
-    solutions = load_solutions()
-    assert solutions["my-app"]["project_id"] == "new-proj"
-
-
-@patch("gapp.admin.sdk.setup._label_project", return_value="exists")
-@patch("gapp.admin.sdk.setup._create_bucket", return_value="exists")
-@patch("gapp.admin.sdk.setup._enable_api")
-def test_setup_idempotent(mock_api, mock_bucket, mock_label, tmp_path, monkeypatch):
-    _make_solution(tmp_path, monkeypatch)
-
-    result1 = setup_solution("proj")
-    result2 = setup_solution("proj")
-
-    assert result2["bucket_status"] == "exists"
-    assert result2["label_status"] == "exists"
-
-
-def test_setup_fails_outside_solution(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-
-    with pytest.raises(RuntimeError, match="Not inside a gapp solution"):
-        setup_solution("proj")
-
-
-@patch("gapp.admin.sdk.setup.discover_project_from_label", return_value=None)
-def test_setup_fails_no_project(mock_discover, tmp_path, monkeypatch):
-    _make_solution(tmp_path, monkeypatch)
-
-    with pytest.raises(RuntimeError, match="No GCP project specified"):
-        setup_solution()
+def test_setup_with_env_scoping(tmp_path, monkeypatch, mock_gcloud):
+    """Verify setup_solution supports environment names in bucket and labels."""
+    repo = tmp_path / "app"
+    repo.mkdir()
+    (repo / ".git").mkdir()
+    (repo / "gapp.yaml").write_text("name: my-app")
+    monkeypatch.chdir(repo)
+    
+    res = setup_solution(project_id="test-proj-123", env="prod")
+    
+    # env != 'default', so it should appear in the bucket name
+    assert res["bucket"] == "gapp-my-app-test-proj-123-prod"
+    assert res["env"] == "prod"

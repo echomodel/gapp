@@ -43,7 +43,7 @@ SOLUTION REPO (what gets deployed)
   Dockerfile                            ← optional; if absent, gapp generates one at build time
 
 GCP (runtime state)
-  Project labels: gapp-{name}=default   ← links project to solution
+  Project labels: gapp-<owner>-{name}=default   ← links project to solution
   Secret Manager: labeled gapp-solution=<name>  ← every gapp-managed secret
   Cloud Run: running services           ← runtime
   GCS: gapp-{name}-{project-id}/       ← per-solution bucket
@@ -53,7 +53,7 @@ GCP (runtime state)
   Artifact Registry: gapp/ repo         ← container images
 
 LOCAL (~/.config/gapp/, working cache, fully reconstructable)
-  solutions.yaml                        ← name → project_id + repo_path
+  config.yaml                           ← owner + solution registry (replaces solutions.yaml)
   ~/.cache/gapp/{solution}/terraform/   ← staged TF files + generated tfvars.json
 ```
 
@@ -87,7 +87,7 @@ Modeled on: npm workspaces (`package.json`), Cargo workspaces (`Cargo.toml`), Ma
 
 ### GitHub-Centric Discovery
 
-Solutions are discovered via GitHub repos and topics, not GCP project configurations. GitHub is more durable and discoverable than GCP for this purpose — repos have READMEs, topics, and are browsable. GCP labels (`gapp-{name}=default`) are the secondary source, used to map a solution to its GCP project. Local config (`~/.config/gapp/solutions.yaml`) is a working registry reconstructable from GitHub + GCP.
+Solutions are discovered via GitHub repos and topics, not GCP project configurations. GitHub is more durable and discoverable than GCP for this purpose — repos have READMEs, topics, and are browsable. GCP labels (`gapp-<owner>-{name}=default`) are the secondary source, used to map a solution to its GCP project. Local config (`~/.config/gapp/config.yaml`) is a working registry reconstructable from GitHub + GCP.
 
 gapp is GitHub-flavored but not GitHub-locked. The core lifecycle — `gapp init`, `gapp setup`, `gapp secret set`, `gapp deploy` — works with any local git repo and requires no GitHub account, no GitHub API, and no GitHub Actions. GitHub is required only for optional features: remote discovery (`gapp list --available`), CI/CD automation (`gapp ci`), and installing the runtime wrapper during container build. The CI layer calls `gapp deploy` — not the other way around.
 
@@ -383,6 +383,7 @@ If code is generic and useful, it belongs in a public repo. Private repos should
 The `gapp-mcp` entry point runs a stdio MCP server that exposes admin operations as tools. All tools are prefixed with `gapp_` to avoid name collisions.
 
 Available tools:
+- `gapp_user` — view or set the global gcloud account and app owner
 - `gapp_init` — bootstrap a solution (yaml + GitHub topic + registry)
 - `gapp_setup` — GCP foundation (APIs, bucket, project label)
 - `gapp_build` — submit an async Cloud Build
