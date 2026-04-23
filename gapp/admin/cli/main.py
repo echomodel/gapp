@@ -263,10 +263,11 @@ def status():
 
 @main.command("list")
 @click.option("--available", is_flag=True, help="Include remote solutions from GitHub.")
-def list_cmd(available):
+@click.option("--all", "wide", is_flag=True, help="Show all solutions across all owner namespaces.")
+def list_cmd(available, wide):
     """List registered and discovered solutions."""
     from gapp.admin.sdk.solutions import list_solutions
-    solutions = list_solutions(include_remote=available)
+    solutions = list_solutions(include_remote=available, wide=wide)
     
     if not solutions:
         click.echo("No solutions found.")

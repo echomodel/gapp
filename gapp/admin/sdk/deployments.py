@@ -4,16 +4,9 @@ import json
 from gapp.admin.sdk.context import get_label_key, run_gcloud
 
 
-def list_deployments() -> dict:
-    """List all GCP projects that have gapp solution labels.
-
-    Queries GCP for projects accessible to the current user, filters for
-    those with gapp-* labels, and returns a structured result with the
-    default project (most solutions) highlighted.
-
-    Returns dict with keys: default (project id), projects (list).
-    """
-    projects = _find_gapp_projects()
+def list_deployments(wide: bool = False) -> dict:
+    """List GCP projects that have gapp solution labels."""
+    projects = _find_gapp_projects(wide=wide)
 
     # Sort by number of solutions descending
     projects.sort(key=lambda p: len(p["solutions"]), reverse=True)
@@ -26,8 +19,19 @@ def list_deployments() -> dict:
     }
 
 
-def _find_gapp_projects() -> list[dict]:
-    """Find GCP projects with gapp-* labels."""
+def _find_gapp_projects(wide: bool = False) -> list[dict]:
+    """Find GCP projects scoped by owner (if set)."""
+    from gapp.admin.sdk.context import get_owner
+    owner = get_owner()
+    
+    # Prefix for identifying solutions
+    # If wide=True, we search for ALL 'gapp-' labels.
+    # If wide=False and owner is set, we search only for 'gapp-<owner>-' labels.
+    if not wide and owner:
+        label_prefix = f"gapp-{owner}-"
+    else:
+        label_prefix = "gapp-"
+
     try:
         result = run_gcloud(
             ["projects", "list",
@@ -50,16 +54,21 @@ def _find_gapp_projects() -> list[dict]:
 
         solutions = []
         for key, value in labels.items():
-            if key.startswith("gapp-"):
-                # Handle gapp-<owner>-<name> or legacy gapp-<name>
-                parts = key.split("-")
-                if len(parts) > 2:
-                    # Scoped: gapp-<owner>-<name>
-                    name = "-".join(parts[2:])
-                else:
-                    # Legacy: gapp-<name>
-                    name = parts[1]
+            if key.startswith(label_prefix):
+                # Robust extraction: strip the prefix to get the name
+                name = key[len(label_prefix):]
+                if not name:
+                    continue # Should not happen if labels correct
                 
+                solutions.append({
+                    "name": name,
+                    "instance": value,
+                    "label": key,
+                })
+            elif wide and key.startswith("gapp-"):
+                # Even if it doesn't match our active owner prefix, 
+                # include it if we are in wide mode.
+                name = key[len("gapp-"):]
                 solutions.append({
                     "name": name,
                     "instance": value,
@@ -67,10 +76,13 @@ def _find_gapp_projects() -> list[dict]:
                 })
 
         if solutions:
-            solutions.sort(key=lambda s: s["name"])
+            # Deduplicate (might overlap between wide match and specific match)
+            unique_solutions = {s["label"]: s for s in solutions}.values()
+            solutions_list = sorted(list(unique_solutions), key=lambda s: s["name"])
+            
             gapp_projects.append({
                 "id": project["projectId"],
-                "solutions": solutions,
+                "solutions": solutions_list,
             })
 
     return gapp_projects
@@ -81,7 +93,7 @@ def discover_project_from_label(solution_name: str, env: str = "default") -> str
     from gapp.admin.sdk.context import get_label_key
     
     # 1. Try current/configured label
-    label_key = get_label_key(solution_name)
+    label_key = get_label_key(solution_name, env=env)
     project = _query_project_by_label(label_key, env=env)
     if project:
         return project

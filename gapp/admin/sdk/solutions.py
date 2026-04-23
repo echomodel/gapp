@@ -14,11 +14,11 @@ def _display_path(path: str | None) -> str | None:
     return path
 
 
-def list_solutions(include_remote: bool = False) -> list[dict]:
+def list_solutions(include_remote: bool = False, wide: bool = False) -> list[dict]:
     """List known solutions from GCP deployments."""
     from gapp.admin.sdk.deployments import list_deployments
     
-    deployments = list_deployments()
+    deployments = list_deployments(wide=wide)
     results = []
 
     for project in deployments.get("projects", []):
