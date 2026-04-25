@@ -1,46 +1,45 @@
 """Tests for gapp.sdk.solutions — GCP-based discovery."""
 
-import json
-import subprocess
 import pytest
 from gapp.admin.sdk.solutions import list_solutions
+from gapp.admin.sdk.cloud import get_provider
 
 
-@pytest.fixture
-def mock_gcloud_discovery(monkeypatch):
-    """Mock gcloud projects list for discovery tests."""
-    def _mock_run(args, **kwargs):
-        class MockProc:
-            returncode = 0
-            # Mock structure returned by list_deployments -> _find_gapp_projects
-            stdout = json.dumps([
-                {
-                    "projectId": "proj-123",
-                    "labels": {
-                        "gapp-api": "default",
-                        "gapp-worker": "default",
-                        "gapp-owner-a-status": "prod"
-                    }
-                }
-            ])
-        return MockProc()
-    
-    monkeypatch.setattr(subprocess, "run", _mock_run)
-
-
-def test_list_solutions_from_labels(mock_gcloud_discovery):
+def test_list_solutions_from_labels():
     """Verify list_solutions extracts all gapp solutions from GCP labels."""
-    results = list_solutions()
+    provider = get_provider()
+    provider.project_labels["proj-123"] = {
+        "gapp-api": "default",
+        "gapp-worker": "default",
+        "gapp-owner-a-status": "prod"
+    }
+    
+    results_data = list_solutions()
+    solutions = results_data["solutions"]
     
     # Sort for consistent assertion
-    results.sort(key=lambda s: s["name"])
+    solutions.sort(key=lambda s: s["name"])
     
-    assert len(results) == 3
-    assert results[0]["name"] == "api"
-    assert results[1]["name"] == "status"
-    assert results[2]["name"] == "worker"
+    assert len(solutions) == 3
+    assert solutions[0]["name"] == "api"
+    assert solutions[1]["name"] == "status"
+    assert solutions[2]["name"] == "worker"
     
     # Verify metadata
-    status_app = next(s for s in results if s["name"] == "status")
+    status_app = next(s for s in solutions if s["name"] == "status")
     assert status_app["project_id"] == "proj-123"
     assert status_app["label"] == "gapp-owner-a-status"
+
+
+def test_list_solutions_with_limit_reached():
+    """Verify limit_reached flag is correctly reported."""
+    provider = get_provider()
+    # Add 3 projects
+    provider.project_labels["p1"] = {"gapp-app1": "default"}
+    provider.project_labels["p2"] = {"gapp-app2": "default"}
+    provider.project_labels["p3"] = {"gapp-app3": "default"}
+    
+    # List with limit of 2
+    res = list_solutions(project_limit=2)
+    assert res["total_projects"] == 2
+    assert res["limit_reached"] is True

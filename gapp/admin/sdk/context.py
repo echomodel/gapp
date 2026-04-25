@@ -89,7 +89,7 @@ def run_gcloud(args: list[str], **kwargs) -> subprocess.CompletedProcess:
 def get_bucket_name(solution_name: str, project_id: str, env: str = "default") -> str:
     """Generate the bucket name: gapp-[<owner>-]<solution>-<project>[-<env>]
     
-    Defaults (None for owner, 'default' for env) are omitted for backward compatibility.
+    Uses hyphens for bucket name segments, but omits 'default' values.
     """
     owner = get_owner()
     parts = ["gapp"]
@@ -100,22 +100,29 @@ def get_bucket_name(solution_name: str, project_id: str, env: str = "default") -
     if env != "default":
         parts.append(env)
     
+    # Bucket names always use hyphens and must be lowercase
     return "-".join(parts).replace("_", "-").lower()
 
-def get_label_key(solution_name: str, env: str = "default") -> str:
-    """Generate the project label key: gapp-[<owner>-]<solution>[-<env>]
+def get_label_key(solution_name: str) -> str:
+    """Generate the project label key: gapp_[<owner>]_<solution>
     
-    Defaults are omitted for backward compatibility.
+    Uses underscores as structural delimiters to avoid ambiguity with 
+    hyphens used in owner/solution names.
     """
     owner = get_owner()
-    parts = ["gapp"]
     if owner:
-        parts.append(owner)
-    parts.append(solution_name)
-    if env != "default":
-        parts.append(env)
+        return f"gapp_{owner}_{solution_name}".replace("-", "--").lower()
+    return f"gapp__{solution_name}".replace("-", "--").lower()
+
+def get_label_value(env: str = "default") -> str:
+    """Generate the project label value: v-2[_env-<env>]
     
-    return "-".join(parts).replace("_", "-").lower()
+    Contract version is v-2. Omits env segment for 'default'.
+    """
+    value = "v-2"
+    if env != "default":
+        value += f"_env-{env}"
+    return value
 
 # -- Context Resolution --
 
@@ -165,7 +172,7 @@ def resolve_full_context(solution: str | None = None, env: str = "default") -> d
     if not ctx:
         return {"name": None, "project_id": None, "repo_path": None, "github_repo": None}
 
-    result = {**ctx, "github_repo": None}
+    result = {**ctx, "github_repo": None, "owner": get_owner()}
 
     # Fill project_id from GCP labels if discovery is ON
     if not result.get("project_id") and is_discovery_on():

@@ -1,123 +1,113 @@
 """gapp deployments — discover GCP projects with gapp solutions."""
 
 import json
-from gapp.admin.sdk.context import get_label_key, run_gcloud
+from typing import Optional, List, Dict
+from gapp.admin.sdk.cloud import get_provider
 
 
-def list_deployments(wide: bool = False) -> dict:
+def list_deployments(wide: bool = False, project_limit: int = 50, provider = None) -> dict:
     """List GCP projects that have gapp solution labels."""
-    projects = _find_gapp_projects(wide=wide)
-
-    # Sort by number of solutions descending
-    projects.sort(key=lambda p: len(p["solutions"]), reverse=True)
-
-    default = projects[0]["id"] if projects else None
-
-    return {
-        "default": default,
-        "projects": projects,
-    }
-
-
-def _find_gapp_projects(wide: bool = False) -> list[dict]:
-    """Find GCP projects scoped by owner (if set)."""
+    provider = provider or get_provider()
+    
     from gapp.admin.sdk.context import get_owner
     owner = get_owner()
     
-    # Prefix for identifying solutions
-    # If wide=True, we search for ALL 'gapp-' labels.
-    # If wide=False and owner is set, we search only for 'gapp-<owner>-' labels.
+    # Prefix for identifying solutions server-side
+    # We check for both new format (gapp_) and legacy (gapp-)
     if not wide and owner:
-        label_prefix = f"gapp-{owner}-"
+        # Optimized for owner namespace
+        label_filter = f"labels.keys:gapp_{owner}_*"
     else:
-        label_prefix = "gapp-"
+        # Catch all formats
+        label_filter = "labels.keys:gapp-*,labels.keys:gapp_*"
 
-    try:
-        result = run_gcloud(
-            ["projects", "list",
-             "--format", "json(projectId,labels)"],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            return []
-
-        all_projects = json.loads(result.stdout)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return []
-
+    projects_data = provider.list_projects(filter_query=label_filter, limit=project_limit)
+    
     gapp_projects = []
-    for project in all_projects:
+    total_solutions = 0
+    
+    is_global_namespace = not wide and not owner
+    
+    for project in projects_data:
         labels = project.get("labels", {})
-        if not labels:
-            continue
-
         solutions = []
+        
         for key, value in labels.items():
-            if key.startswith(label_prefix):
-                # Robust extraction: strip the prefix to get the name
-                name = key[len(label_prefix):]
-                if not name:
-                    continue # Should not happen if labels correct
+            if not key.startswith("gapp"):
+                continue
                 
-                solutions.append({
-                    "name": name,
-                    "instance": value,
-                    "label": key,
-                })
-            elif wide and key.startswith("gapp-"):
-                # Even if it doesn't match our active owner prefix, 
-                # include it if we are in wide mode.
+            # 1. New Underscore Format (gapp_<owner>_<name>)
+            if key.startswith("gapp_"):
+                parts = key.split("_")
+                # Parts: [gapp, owner_or_empty, name]
+                
+                label_owner = parts[1] if parts[1] else None
+                label_name = "_".join(parts[2:]) # Handle names with underscores
+                
+                if is_global_namespace:
+                    if label_owner is None:
+                        name = label_name
+                    else:
+                        continue
+                elif not wide and owner:
+                    if label_owner == owner:
+                        name = label_name
+                    else:
+                        continue
+                else:
+                    name = label_name
+
+            # 2. Legacy Hyphen Format (gapp-<name>)
+            elif key.startswith("gapp-"):
+                if not is_global_namespace and not wide:
+                    continue # Legacy is always global
                 name = key[len("gapp-"):]
-                solutions.append({
-                    "name": name,
-                    "instance": value,
-                    "label": key,
-                })
+            
+            else:
+                continue
+
+            solutions.append({
+                "name": name.replace("--", "-"), # Reverse the dash protection
+                "instance": value,
+                "label": key,
+            })
+            total_solutions += 1
 
         if solutions:
-            # Deduplicate (might overlap between wide match and specific match)
-            unique_solutions = {s["label"]: s for s in solutions}.values()
-            solutions_list = sorted(list(unique_solutions), key=lambda s: s["name"])
-            
             gapp_projects.append({
                 "id": project["projectId"],
-                "solutions": solutions_list,
+                "solutions": sorted(solutions, key=lambda s: s["name"]),
             })
 
-    return gapp_projects
+    return {
+        "projects": gapp_projects,
+        "total_projects": len(gapp_projects),
+        "total_solutions": total_solutions,
+        "limit_reached": len(projects_data) >= project_limit,
+        "filter_mode": "all" if wide else (f"owner:{owner}" if owner else "global"),
+    }
 
 
-def discover_project_from_label(solution_name: str, env: str = "default") -> str | None:
-    """Find a GCP project with the gapp-<owner>-<app> label matching env."""
-    from gapp.admin.sdk.context import get_label_key
+def discover_project_from_label(solution_name: str, env: str = "default", provider = None) -> Optional[str]:
+    """Find a GCP project with the gapp_<owner>_<app> label matching env."""
+    provider = provider or get_provider()
+    from gapp.admin.sdk.context import get_label_key, get_label_value
     
-    # 1. Try current/configured label
-    label_key = get_label_key(solution_name, env=env)
-    project = _query_project_by_label(label_key, env=env)
-    if project:
-        return project
+    # 1. Try current/configured label (Underscore format)
+    label_key = get_label_key(solution_name)
+    label_value = get_label_value(env)
+    
+    filter_query = f"labels.{label_key}={label_value}"
+    projects = provider.list_projects(filter_query=filter_query, limit=1)
+    if projects:
+        return projects[0]["projectId"]
 
-    # 2. Try legacy fallback
+    # 2. Try legacy fallback (Hyphen format, value always 'default' or provided env)
     legacy_key = f"gapp-{solution_name}".replace("_", "-").lower()
     if legacy_key != label_key:
-        return _query_project_by_label(legacy_key, env=env)
+        filter_query = f"labels.{legacy_key}={env}"
+        projects = provider.list_projects(filter_query=filter_query, limit=1)
+        if projects:
+            return projects[0]["projectId"]
         
-    return None
-
-def _query_project_by_label(label_key: str, env: str = "default") -> str | None:
-    """Helper to query gcloud for a specific label key=env."""
-    label_filter = f"labels.{label_key}={env}"
-    try:
-        result = run_gcloud(
-            ["projects", "list",
-             "--filter", label_filter,
-             "--format", "value(projectId)"],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip().splitlines()[0]
-    except FileNotFoundError:
-        pass
     return None

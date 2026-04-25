@@ -1,27 +1,13 @@
 """Tests for gapp.sdk.deploy — deployment and dry-run logic."""
 
-import subprocess
 import pytest
 from pathlib import Path
 from gapp.admin.sdk.deploy import deploy_solution
 from gapp.admin.sdk.context import set_owner
+from gapp.admin.sdk.cloud import get_provider
 
 
-@pytest.fixture
-def mock_deploy_discovery(monkeypatch):
-    """Mock discovery for deployment tests."""
-    def _mock_run(args, **kwargs):
-        class MockProc:
-            returncode = 0
-            # Mock project list finding a project with labels
-            stdout = '[{"projectId": "proj-123", "labels": {"gapp-my-app": "default"}}]'
-        return MockProc()
-    
-    from gapp.admin.sdk import context
-    monkeypatch.setattr(context, "run_gcloud", _mock_run)
-
-
-def test_deploy_dry_run_singular(tmp_path, monkeypatch, mock_deploy_discovery):
+def test_deploy_dry_run_singular(tmp_path, monkeypatch):
     """Verify dry-run correctly resolves singular deployment info."""
     repo = tmp_path / "app"
     repo.mkdir()
@@ -29,7 +15,11 @@ def test_deploy_dry_run_singular(tmp_path, monkeypatch, mock_deploy_discovery):
     (repo / "gapp.yaml").write_text("name: my-app")
     monkeypatch.chdir(repo)
     
-    res = deploy_solution(dry_run=True)
+    provider = get_provider()
+    # Mock project list finding a project with labels
+    provider.project_labels["proj-123"] = {"gapp-my-app": "default"}
+    
+    res = deploy_solution(dry_run=True, provider=provider)
     
     assert res["dry_run"] is True
     assert res["name"] == "my-app"
@@ -40,7 +30,7 @@ def test_deploy_dry_run_singular(tmp_path, monkeypatch, mock_deploy_discovery):
     assert res["services"][0]["name"] == "my-app"
 
 
-def test_deploy_dry_run_workspace(tmp_path, monkeypatch, mock_deploy_discovery):
+def test_deploy_dry_run_workspace(tmp_path, monkeypatch):
     """Verify dry-run correctly unrolls multi-service workspace."""
     repo = tmp_path / "app"
     repo.mkdir()
@@ -57,23 +47,18 @@ def test_deploy_dry_run_workspace(tmp_path, monkeypatch, mock_deploy_discovery):
     
     monkeypatch.chdir(repo)
     
+    provider = get_provider()
     # Update mock to find project labeled with repo name
-    def _mock_run_workspace(args, **kwargs):
-        class MockProc:
-            returncode = 0
-            stdout = '[{"projectId": "proj-ws", "labels": {"gapp-app": "default"}}]'
-        return MockProc()
-    from gapp.admin.sdk import context
-    monkeypatch.setattr(context, "run_gcloud", _mock_run_workspace)
+    provider.project_labels["proj-ws"] = {"gapp-app": "default"}
     
-    res = deploy_solution(dry_run=True)
+    res = deploy_solution(dry_run=True, provider=provider)
     
     assert res["name"] == "app" # Derived from folder name
     assert len(res["services"]) == 2
     assert {s["name"] for s in res["services"]} == {"my-api", "my-worker"}
 
 
-def test_deploy_dry_run_with_owner(tmp_path, monkeypatch, mock_deploy_discovery):
+def test_deploy_dry_run_with_owner(tmp_path, monkeypatch):
     """Verify dry-run includes owner and scoped label."""
     repo = tmp_path / "app"
     repo.mkdir()
@@ -82,7 +67,8 @@ def test_deploy_dry_run_with_owner(tmp_path, monkeypatch, mock_deploy_discovery)
     monkeypatch.chdir(repo)
     
     set_owner("owner-a")
-    res = deploy_solution(dry_run=True)
+    provider = get_provider()
+    res = deploy_solution(dry_run=True, provider=provider)
     
     assert res["owner"] == "owner-a"
     assert res["label"] == "gapp-owner-a-my-app"

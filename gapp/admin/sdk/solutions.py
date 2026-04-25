@@ -1,6 +1,5 @@
 """Solution listing and discovery."""
 
-import subprocess
 from pathlib import Path
 
 
@@ -14,20 +13,26 @@ def _display_path(path: str | None) -> str | None:
     return path
 
 
-def list_solutions(include_remote: bool = False, wide: bool = False) -> list[dict]:
+def list_solutions(include_remote: bool = False, wide: bool = False, project_limit: int = 50) -> dict:
     """List known solutions from GCP deployments."""
     from gapp.admin.sdk.deployments import list_deployments
     
-    deployments = list_deployments(wide=wide)
-    results = []
-
-    for project in deployments.get("projects", []):
+    results = list_deployments(wide=wide, project_limit=project_limit)
+    
+    solutions = []
+    for project in results.get("projects", []):
         for sol in project.get("solutions", []):
-            results.append({
+            solutions.append({
                 "name": sol["name"],
                 "project_id": project["id"],
                 "source": "gcp",
                 "label": sol.get("label"),
             })
 
-    return results
+    return {
+        "solutions": solutions,
+        "total_projects": results["total_projects"],
+        "total_solutions": results["total_solutions"],
+        "limit_reached": results["limit_reached"],
+        "filter_mode": results["filter_mode"],
+    }

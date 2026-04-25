@@ -130,12 +130,14 @@ def init():
 @click.argument("project_id", required=False)
 @click.option("--solution", default=None, help="Solution name (default: current directory).")
 @click.option("--env", default="default", help="Environment name for project labels.")
-def setup_cmd(project_id, solution, env):
+@click.option("--project", "project_arg", help="Explicit GCP Project ID.")
+def setup_cmd(project_id, solution, env, project_arg):
     """GCP foundation: enable APIs, create solution bucket, label project."""
     from gapp.admin.sdk.setup import setup_solution
 
+    pid = project_arg or project_id
     try:
-        result = setup_solution(project_id, solution=solution, env=env)
+        result = setup_solution(pid, solution=solution, env=env)
     except RuntimeError as e:
         click.echo(f"  Error: {e}", err=True)
         raise SystemExit(1)
@@ -159,13 +161,21 @@ def setup_cmd(project_id, solution, env):
 @click.option("--ref", default=None, help="Git ref (commit, tag, branch) to deploy. Skips dirty tree check.")
 @click.option("--solution", default=None, help="Solution name (default: current directory).")
 @click.option("--env", default="default", help="Target environment name.")
+@click.option("--project", help="Explicit GCP Project ID override.")
 @click.option("--dry-run", is_flag=True, help="Preview labels and target project without deploying.")
-def deploy(ref, solution, env, dry_run):
+def deploy(ref, solution, env, project, dry_run):
     """Build + terraform apply (requires setup + prerequisites)."""
     from gapp.admin.sdk.deploy import deploy_solution
 
     try:
-        result = deploy_solution(auto_approve=True, ref=ref, solution=solution, env=env, dry_run=dry_run)
+        result = deploy_solution(
+            auto_approve=True, 
+            ref=ref, 
+            solution=solution, 
+            env=env, 
+            dry_run=dry_run,
+            project_id=project
+        )
     except RuntimeError as e:
         click.echo(f"  Error: {e}", err=True)
         raise SystemExit(1)
@@ -188,6 +198,9 @@ def deploy(ref, solution, env, dry_run):
         else:
             click.echo("    Project:     (none resolved)")
         
+        if result["bucket"]:
+            click.echo(f"    GCS Bucket:  gs://{result['bucket']}/")
+        
         if result["repo_path"]:
             from gapp.admin.sdk.solutions import _display_path
             click.echo(f"    Source:      {_display_path(result['repo_path'])}")
@@ -205,42 +218,54 @@ def deploy(ref, solution, env, dry_run):
 
     deploy_data = result.get("deploy", result)
     click.echo()
-    click.echo(f"  {deploy_data.get('name', 'unknown')} deployed to {deploy_data.get('project_id', 'unknown')}")
-    build_msg = "already exists, skipped build" if deploy_data.get("build_status") == "skipped" else "built"
-    click.echo(f"    Image: {deploy_data.get('image', 'unknown')} ({build_msg})")
-    if deploy_data.get("service_url"):
-        click.echo(f"    URL:   {deploy_data['service_url']}")
-    if deploy_data.get("custom_domain"):
-        click.echo(f"    Domain: {deploy_data['custom_domain']}")
+    if isinstance(result.get("services"), list):
+        click.echo(f"  Workspace deployed to {project or 'unknown'}")
+        for svc in result["services"]:
+            click.echo(f"    + {svc['name']} ({svc['terraform_status']})")
+            if svc.get("service_url"):
+                click.echo(f"      URL: {svc['service_url']}")
+    else:
+        click.echo(f"  {deploy_data.get('name', 'unknown')} deployed to {deploy_data.get('project_id', 'unknown')}")
+        build_msg = "already exists, skipped build" if deploy_data.get("build_status") == "skipped" else "built"
+        click.echo(f"    Image: {deploy_data.get('image', 'unknown')} ({build_msg})")
+        if deploy_data.get("service_url"):
+            click.echo(f"    URL:   {deploy_data['service_url']}")
     click.echo()
 
 
-@main.command("build")
-@click.option("--solution", default=None, help="Solution name.")
-def build_cmd(solution):
-    """Submit async Cloud Build. Prints build_id."""
-    from gapp.admin.sdk.deploy import start_build
+@main.command("list")
+@click.option("--available", is_flag=True, help="Include remote solutions from GitHub.")
+@click.option("--all", "wide", is_flag=True, help="Show all solutions across all owner namespaces.")
+@click.option("--project-limit", default=50, help="Max number of GCP projects to scan (default: 50).")
+def list_cmd(available, wide, project_limit):
+    """List registered and discovered solutions from GCP labels."""
+    from gapp.admin.sdk.solutions import list_solutions
+    
+    # Pass wide and project_limit to SDK
+    results = list_solutions(include_remote=available, wide=wide, project_limit=project_limit)
+    
+    solutions = results["solutions"]
+    filter_mode = results["filter_mode"].upper()
+    
+    click.echo()
+    click.echo(f"Solutions (Filter: {filter_mode}, Limit: {project_limit}):")
+    
+    if not solutions:
+        click.echo("  No solutions found matching criteria.")
+    else:
+        for sol in solutions:
+            click.echo(f"  {sol['name']} (gcp)")
+            click.echo(f"    Project: {sol['project_id']}")
+            if wide:
+                click.echo(f"    Label:   {sol['label']}")
 
-    try:
-        result = start_build(solution=solution)
-    except RuntimeError as e:
-        click.echo(f"  Error: {e}", err=True)
-        raise SystemExit(1)
-
-    if result["status"] == "skipped":
-        click.echo(f"  Image already exists: {result['image']}")
-        return
-
-    click.echo(f"  Build submitted: {result['build_id']}")
-    click.echo(f"  Image: {result['image']}")
-    click.echo(f"  Status: {result['status']}")
-
-
-@main.command()
-def plan():
-    """Terraform plan (preview changes)."""
-    # ... placeholder for now ...
-    click.echo("Plan not implemented yet.")
+    click.echo()
+    click.echo(f"Total: {results['total_solutions']} solutions across {results['total_projects']} projects.")
+    
+    if results["limit_reached"]:
+        click.echo(f"WARNING: Project limit ({project_limit}) reached. Some projects may have been skipped.")
+        click.echo("Use --project-limit to increase the scan range.")
+    click.echo()
 
 
 @main.command()
@@ -259,25 +284,6 @@ def status():
                 click.echo(f"  Healthy: {'\u2713' if s.healthy else 'X'}")
     except Exception as e:
         click.echo(f"  Error: {e}", err=True)
-
-
-@main.command("list")
-@click.option("--available", is_flag=True, help="Include remote solutions from GitHub.")
-@click.option("--all", "wide", is_flag=True, help="Show all solutions across all owner namespaces.")
-def list_cmd(available, wide):
-    """List registered and discovered solutions."""
-    from gapp.admin.sdk.solutions import list_solutions
-    solutions = list_solutions(include_remote=available, wide=wide)
-    
-    if not solutions:
-        click.echo("No solutions found.")
-        return
-
-    click.echo("Solutions:")
-    for sol in solutions:
-        click.echo(f"  {sol['name']} ({sol['source']})")
-        if sol.get("project_id"):
-            click.echo(f"    Project: {sol['project_id']}")
 
 
 def cli_entry():
