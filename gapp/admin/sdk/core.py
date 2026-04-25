@@ -74,6 +74,7 @@ class GappSDK:
     # -- Naming Logic --
 
     def get_bucket_name(self, solution_name: str, project_id: str) -> str:
+        """Bucket name is Environment-Blind. Isolation is handled by project_id."""
         owner = self._resolve_effective_owner(project_id, solution_name)
         parts = ["gapp"]
         if owner: parts.append(owner)
@@ -82,6 +83,7 @@ class GappSDK:
         return "-".join(parts).lower()
 
     def get_label_key(self, solution_name: str, env: str = "default") -> str:
+        """Label key includes the env suffix for unique identification."""
         owner = self.get_owner()
         parts = ["gapp", owner if owner else "", solution_name]
         if env != "default":
@@ -127,11 +129,11 @@ class GappSDK:
         label_key = self.get_label_key(solution_name, env=env)
         label_value = self.get_label_value(env)
         
-        # Try direct app match with labels.keys filter (safe for exact keys)
+        # O(1) Server-side direct match
         projects = self.provider.list_projects(filter_query=f"labels.{label_key}={label_value}", limit=1)
         if projects: return projects[0]["projectId"]
         
-        # Fallback to legacy label search
+        # Legacy fallback
         legacy_key = f"gapp-{solution_name}".replace("_", "-").lower()
         projects = self.provider.list_projects(filter_query=f"labels.{legacy_key}={env}", limit=1)
         if projects: return projects[0]["projectId"]
@@ -155,20 +157,20 @@ class GappSDK:
     def list_projects(self, wide: bool = False) -> dict:
         owner = self.get_owner()
         role_key = self.get_role_key()
-        # We list all with role labels and filter client-side for reliability
-        projects_data = self.provider.list_projects()
+        
+        # SURGICAL SERVER-SIDE FILTER: verified gcloud syntax
+        filter_query = "labels:gapp-env*"
+        projects_data = self.provider.list_projects(filter_query=filter_query)
         
         projects = []
         for p in projects_data:
-            pid = p["projectId"]
             labels = p.get("labels", {})
             roles = {k: v for k, v in labels.items() if k.startswith("gapp-env")}
-            if not roles: continue
             
             if not wide and owner:
                 if role_key not in roles: continue
             
-            projects.append({"id": pid, "roles": roles})
+            projects.append({"id": p["projectId"], "roles": roles})
             
         return {"projects": sorted(projects, key=lambda x: x["id"]), "owner": owner, "mode": "all" if wide else "scoped"}
 
@@ -264,8 +266,13 @@ class GappSDK:
 
     def list(self, wide: bool = False, project_limit: int = 50) -> dict:
         owner = self.get_owner()
-        # Fetch all projects and filter client-side due to gcloud filter reliability issues
-        projects_data = self.provider.list_projects(limit=project_limit)
+        
+        # SURGICAL SERVER-SIDE FILTER: verified gcloud content-match syntax
+        filter_query = 'labels:gapp*'
+        if not wide and owner:
+            filter_query = f'labels:gapp_{owner}_*'
+
+        projects_data = self.provider.list_projects(filter_query=filter_query, limit=project_limit)
         
         apps = []
         is_global_mode = not wide and not owner
@@ -290,9 +297,13 @@ class GappSDK:
                 else: continue
                 apps.append(app_info)
 
-        result = {"apps": sorted(apps, key=lambda x: x["name"]), "metadata": {"projects": {"count": len(projects_data), "limit": project_limit}, "apps": {"count": len(apps)}, "owner": owner}, "messages": [], "warnings": []}
+        result = {
+            "apps": sorted(apps, key=lambda x: x["name"]),
+            "metadata": {"projects": {"count": len(projects_data), "limit": project_limit}, "apps": {"count": len(apps)}, "owner": owner},
+            "messages": [], "warnings": []
+        }
         if wide: result["messages"].append("Showing all apps across all namespaces.")
-        elif owner: result["messages"].append(f"Showing apps for owner '{owner}'. Use --all to see more.")
+        elif owner: result["messages"].append(f"Showing apps for owner '{owner}'. Use --all to check for more.")
         else: result["messages"].append("Showing global apps. Use --all to check for more.")
         if len(projects_data) >= project_limit: result["warnings"].append(f"Project list limit reached ({project_limit}). Use --project-limit to increase.")
         return result
@@ -303,7 +314,7 @@ class GappSDK:
         labels = self.provider.get_project_labels(project_id)
         owner = self.get_owner()
         if owner and f"gapp_{owner}_{solution_name}" in labels: return owner
-        if f"gapp__{solution_name}" in labels or f"gapp-{solution_name}".replace("_", "-").lower() in labels: return None
+        if f"gapp__{solution_name}" in labels or f"gapp-{solution_name}" in labels: return None
         return owner
 
     def _deploy_single_service(self, name, project_id, repo_path, manifest, service_path=".", env="default", parent_solution=None):
