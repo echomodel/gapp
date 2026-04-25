@@ -403,47 +403,123 @@ claude mcp add --scope user gapp-admin gapp-mcp
 
 ## Version Management
 
-**Single source of truth:** `gapp/__init__.py` contains `__version__`
+**Single source of truth:** `gapp/__init__.py` contains `__version__` and `MIN_SUPPORTED_MAJOR`. Git tags match the version with a `v` prefix (e.g. `v3.0.0` for `3.0.0`).
 
-Git tags match the version with a `v` prefix (e.g. `v1.6.0` for `1.6.0`) so releases are consistently discoverable.
+### Label contract versioning
 
-**When to bump versions:**
+The gapp **major version IS the contract version**. Bumping major == breaking the contract. The label sentinel `v-N` written into project labels at deploy time is derived directly from `__version__` major:
 
-| Change Type | Bump | Example |
-|-------------|------|---------|
-| Bug fix, minor tweak | Patch | 0.1.0 → 0.1.1 |
-| New feature (backwards compatible) | Minor | 0.1.0 → 0.2.0 |
-| Breaking change | Major | 0.1.0 → 1.0.0 |
+```python
+from gapp import __version__
+label_value = f"v-{int(__version__.split('.')[0])}"   # 3.0.4 → "v-3"
+```
 
-**Release workflow:**
+A 3.x build stamps `v-3`. A future 4.x build stamps `v-4`. There is no separate `CONTRACT_VERSION` constant — multiple version numbers create complexity and drift. One number, one source.
 
-1. Make changes, commit normally
-2. When ready to release:
-   ```bash
-   # Update version in gapp/__init__.py
-   # Commit the version bump
-   git add gapp/__init__.py
-   git commit -m "chore: bump version to X.Y.Z"
+`MIN_SUPPORTED_MAJOR` is the read-floor — the oldest contract this build can manage. Setup/deploy gating policy:
 
-   # Tag the release
-   git tag vX.Y.Z
+| Project's contract | Action |
+|---|---|
+| `n > __version__` major | Refuse writes — "deployed by newer gapp; upgrade." Read ops still work. |
+| `n < MIN_SUPPORTED_MAJOR` | Refuse writes — "deployed by unsupported gapp; migrate manually or use older build." Read ops still work. |
+| `MIN_SUPPORTED_MAJOR ≤ n ≤ current major` | Allow. On write, restamp to current `v-N`. |
 
-   # Push with tags
-   git push && git push --tags
-   ```
+Read operations (`gapp list`, `gapp status`) never gate — they show all `gapp_*` labeled projects regardless of contract version, with the parsed contract major reported as a structured field.
 
-**Why version bumps matter:**
+**Default policy is `MIN_SUPPORTED_MAJOR == __version__` major** — a hard cutover at every major bump. Carrying older contracts forward (e.g., `MIN_SUPPORTED_MAJOR = N-1`) is opt-in and requires that the SDK actually still supports the older shape. Don't lower the floor unless backward compatibility is intentionally implemented and tested.
 
-- `pip install --upgrade` only installs if version number is higher
-- Same version number = pip thinks nothing changed, skips update
-- Git tags are used as `runtime` refs in solution `gapp.yaml` files. When auth is enabled, `gapp init` auto-sets `runtime: v{__version__}`. If that tag doesn't exist on GitHub, **container builds will fail** — Cloud Build won't be able to install the auth wrapper. Always tag before releasing.
-- Pinning runtime to a version tag also ensures correct container rebuilds. Container images are tagged by the solution repo's HEAD commit SHA. If runtime points to a moving target like `main`, the auth wrapper could change without the solution repo knowing — the solution SHA stays the same, so gapp skips the build ("image already exists") and the wrapper update never lands. Pinning to a versioned tag means upgrading the wrapper requires bumping the runtime ref in gapp.yaml → that's a commit → new SHA → forces a new image build.
-- Editable installs (`pip install -e .`) always use live code regardless of version
+### What counts as a major bump
 
-**For development:** Use editable install to avoid version concerns:
+Anything that changes the *contract* between deployed projects and the gapp build that manages them:
+
+- Solution label key format
+- Solution label value format (the `v-N[_…]` shape)
+- Bucket naming convention
+- Secret naming convention
+- Terraform state path layout
+- Role label format
+
+If a project deployed by an older gapp would become unmanageable by the newer gapp without manual intervention, that's a major.
+
+### Release workflow
+
+```bash
+# 1. Update __version__ in gapp/__init__.py
+# 2. Update version in pyproject.toml to match
+# 3. Commit
+git add gapp/__init__.py pyproject.toml
+git commit -m "chore: bump version to X.Y.Z"
+
+# 4. Tag
+git tag vX.Y.Z
+
+# 5. Push (with tags)
+git push && git push --tags
+```
+
+### Why version bumps matter
+
+- `pip install --upgrade` only installs if the version number is higher. Same version = pip thinks nothing changed.
+- The label sentinel `v-N` derives from `__version__` major. Forgetting to bump major on a contract-breaking change means the new code stamps the same `v-N` as the old code — silently incompatible deployments. Always bump major when the contract changes.
+- Editable installs (`pip install -e .`) always use live code regardless of version, so day-to-day development isn't gated by version bumps.
+
+For development, use editable install to avoid version concerns:
 ```bash
 pipx install -e .   # or: pip install -e .
 ```
+
+## Label Model: Two Labels, Two Concerns
+
+gapp uses two distinct GCP project label families. They serve different purposes and must not be conflated.
+
+### Solution label (deploy record)
+
+One label per actual deployment. Records that a specific project hosts a specific solution for a specific owner in a specific env.
+
+| Field | Format | Notes |
+|---|---|---|
+| **Key** (owned) | `gapp_<owner>_<solution>[_<env>]` | env appended only when non-default |
+| **Key** (global / no owner) | `gapp__<solution>[_<env>]` | double underscore is the no-owner sentinel |
+| **Value** | `v-<contract-major>` | e.g., `v-3` — purely the contract version |
+
+A project can carry many solution labels — one per (solution × env) combination it hosts, across multiple owners. Solution labels are the source of truth for what's actually deployed where.
+
+The env lives in the KEY (where it makes the label uniquely identifying), not the VALUE (which carries only the contract version).
+
+### Role label (default-target hint)
+
+Per-owner routing preference for new deployments. This is convenience metadata, not a constraint.
+
+| Field | Format | Notes |
+|---|---|---|
+| **Key** (owned) | `gapp-env_<owner>` | one per owner per project |
+| **Key** (global / no owner) | `gapp-env` | bare key, no owner segment |
+| **Value** | `<env>` | e.g., `prod`, `default`, `dev` |
+
+Says: *"For owner Y, when `gapp setup --env Z` is run without `--project`, default to this project."* It does **not** bind the project to env Z. A project tagged `gapp-env_alice=prod` can still host alice's `dev` solutions if explicitly targeted, and can simultaneously host bob's `staging` solutions for owner bob.
+
+### Why two labels?
+
+Deploy-records and routing-defaults are independent concerns. Stripping env from solution labels and trying to derive it from role labels would force one project per owner per env — eliminating the ability to mix deployments and breaking the entire mental model. The two-label design is load-bearing.
+
+## Label Keyspace
+
+Deliberate prefix-query partitioning enables O(1) `gcloud projects list --filter=labels:<prefix>*` lookups with zero post-filter parsing.
+
+| Filter prefix | Matches |
+|---|---|
+| `labels:gapp_*` | All solution labels (any owner, including global) |
+| `labels:gapp__*` | Global-namespace solutions ONLY (no owner) |
+| `labels:gapp_<owner>_*` | One specific owner's solutions ONLY |
+| `labels:gapp-env*` | Role labels (project-role-per-owner) |
+
+Two design choices make this work:
+
+**Prefix-sentinel separation.** The `gapp-env` hyphen-prefix and `gapp_` underscore-prefix never collide. Solution labels use `_` everywhere; role labels use `-` after `gapp`. A single prefix query can target one keyspace without sweeping in the other — no reserved owner names required.
+
+**Double-underscore for empty owner.** `gapp__<solution>` (two underscores between `gapp` and the solution name) is the no-owner sentinel. It preserves positional regularity for prefix matching: `gapp_<X>_<Y>` always parses as 3 segments, where `<X>` empty means global. This is intentional — it lets `labels:gapp__*` match global-namespace solutions exclusively without parsing every label value, and it avoids reserving "global" or any other word as a forbidden owner name.
+
+A single API call returns full label dicts for matching projects. Multiple solutions per project (owner-namespaced or global) all arrive in one response — `gapp list` is O(1) network calls regardless of how many deployments per project.
 
 ## CI/CD and Remote Deployment
 

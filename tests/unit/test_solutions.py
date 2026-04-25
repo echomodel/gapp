@@ -1,4 +1,4 @@
-"""Tests for gapp.sdk.core — GCP-based discovery."""
+"""Tests for label-based app discovery via list_apps."""
 
 import pytest
 from gapp.admin.sdk.core import GappSDK
@@ -7,38 +7,35 @@ from gapp.admin.sdk.cloud.dummy import DummyCloudProvider
 
 @pytest.fixture
 def sdk():
-    """Return a fresh GappSDK instance with a dummy provider."""
     return GappSDK(provider=DummyCloudProvider())
 
 
-def test_list_solutions_from_labels(sdk):
-    """Verify sdk.list() extracts all gapp solutions from GCP labels."""
+def test_list_apps_from_labels(sdk):
+    """list_apps extracts every gapp solution label across projects."""
     sdk.provider.project_labels["proj-123"] = {
-        "gapp__api": "v-2",
-        "gapp__worker": "v-2",
-        "gapp_owner-a_status": "v-2_env-prod"
+        "gapp__api": "v-3",
+        "gapp__worker": "v-3",
+        "gapp_owner-a_status_prod": "v-3",
     }
-    
-    res = sdk.list(wide=True)
+
+    res = sdk.list_apps(wide=True)
     apps = res["apps"]
-    
+
     assert len(apps) == 3
-    assert apps[0]["name"] == "api"
-    assert apps[0]["owner"] == "global"
-    
-    status_app = next(a for a in apps if a["name"] == "status")
-    assert status_app["project"] == "proj-123"
-    assert status_app["owner"] == "owner-a"
-    assert status_app["env"] == "prod"
+    by_name = {a["name"]: a for a in apps}
+
+    assert by_name["api"]["owner"] == "global"
+    assert by_name["api"]["env"] == "default"
+
+    assert by_name["status"]["project"] == "proj-123"
+    assert by_name["status"]["owner"] == "owner-a"
+    assert by_name["status"]["env"] == "prod"
 
 
-def test_list_solutions_with_limit_reached(sdk):
-    """Verify limit_reached warning is correctly reported."""
-    # Add 3 projects
-    sdk.provider.project_labels["p1"] = {"gapp__app1": "v-2"}
-    sdk.provider.project_labels["p2"] = {"gapp__app2": "v-2"}
-    sdk.provider.project_labels["p3"] = {"gapp__app3": "v-2"}
-    
-    # List with limit of 2
-    res = sdk.list(project_limit=2, wide=True)
+def test_list_apps_with_limit_reached(sdk):
+    sdk.provider.project_labels["p1"] = {"gapp__app1": "v-3"}
+    sdk.provider.project_labels["p2"] = {"gapp__app2": "v-3"}
+    sdk.provider.project_labels["p3"] = {"gapp__app3": "v-3"}
+
+    res = sdk.list_apps(project_limit=2, wide=True)
     assert any("limit reached" in w for w in res["warnings"])

@@ -10,8 +10,12 @@ See issue #27 for the full design rationale.
 import subprocess
 from pathlib import Path
 
-from gapp.admin.sdk.context import resolve_solution
 from gapp.admin.sdk.manifest import get_env_vars, load_manifest, save_manifest
+
+
+def _resolve_solution(name: str | None = None) -> dict | None:
+    from gapp.admin.sdk.core import GappSDK
+    return GappSDK().resolve_solution(name)
 
 
 GAPP_SOLUTION_LABEL = "gapp-solution"

@@ -147,7 +147,7 @@ def get_ci_status(solution: str | None = None) -> dict:
                   checked when repo is set and a solution can be
                   resolved.
     """
-    from gapp.admin.sdk.context import resolve_solution
+    from gapp.admin.sdk.core import GappSDK
 
     result = {
         "repo": None,
@@ -171,7 +171,7 @@ def get_ci_status(solution: str | None = None) -> dict:
         return result
 
     # Check if this solution has a workflow in the CI repo
-    ctx = resolve_solution(solution)
+    ctx = GappSDK().resolve_solution(solution)
     if not ctx:
         return result
 
@@ -204,7 +204,7 @@ def trigger_ci(solution: str | None = None, *, ref: str = "main", watch: bool = 
     If watch=True (default), blocks and streams status until completion.
     """
     import time
-    from gapp.admin.sdk.context import resolve_solution
+    from gapp.admin.sdk.core import GappSDK
 
     ci_repo = get_ci_repo()
     if not ci_repo:
@@ -212,7 +212,7 @@ def trigger_ci(solution: str | None = None, *, ref: str = "main", watch: bool = 
             "No CI repo configured. Run 'gapp ci init <repo-name>' first."
         )
 
-    ctx = resolve_solution(solution)
+    ctx = GappSDK().resolve_solution(solution)
     if not ctx:
         if not solution:
             raise RuntimeError(
@@ -588,7 +588,7 @@ def setup_ci(solution: str | None = None) -> dict:
     No local clone of the solution repo is required. Resolves everything
     from local config, GCP labels, and GitHub.
     """
-    from gapp.admin.sdk.context import resolve_full_context
+    from gapp.admin.sdk.core import GappSDK
 
     # 1. Find CI repo
     ci_repo = get_ci_repo()
@@ -598,7 +598,7 @@ def setup_ci(solution: str | None = None) -> dict:
         )
 
     # 2. Resolve full context (name, project_id, github_repo)
-    ctx = resolve_full_context(solution)
+    ctx = GappSDK().resolve_full_context(solution)
 
     solution_name = ctx.get("name")
     if not solution_name:
