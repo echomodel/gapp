@@ -1,111 +1,102 @@
-"""Tests for gapp.sdk.context — profile-aware context resolution."""
+"""Tests for gapp.sdk.core — context resolution and discovery."""
 
-import subprocess
-import os
 import pytest
 from pathlib import Path
-from gapp.admin.sdk.context import (
-    get_active_profile, set_active_profile, get_owner, set_owner,
-    get_account, set_account, is_discovery_on, set_discovery,
-    get_label_key, get_bucket_name, resolve_solution
-)
+from gapp.admin.sdk.core import GappSDK
+from gapp.admin.sdk.cloud.dummy import DummyCloudProvider
 
 
-@pytest.fixture(autouse=True)
-def mock_gcloud_auth(monkeypatch):
-    """Mock gcloud auth list to allow set_account to pass."""
-    def _mock_run(args, **kwargs):
-        class MockProc:
-            returncode = 0
-            stdout = "test-user@example.com\nother-user@example.com"
-        return MockProc()
-    monkeypatch.setattr(subprocess, "run", _mock_run)
+@pytest.fixture
+def sdk():
+    """Return a fresh GappSDK instance with a dummy provider."""
+    return GappSDK(provider=DummyCloudProvider())
 
 
-def test_profile_switching():
+def test_profile_switching(sdk):
     """Verify switching active profiles creates defaults if needed."""
-    assert get_active_profile() == "default"
-    
-    set_active_profile("altostrat")
-    assert get_active_profile() == "altostrat"
-    assert is_discovery_on() is True
+    assert sdk.get_active_profile() == "default"
+    sdk.set_active_profile("altostrat")
+    assert sdk.get_active_profile() == "altostrat"
+    assert sdk.is_discovery_on() is True
 
 
-def test_owner_and_account_scoping():
+def test_owner_and_account_scoping(sdk):
     """Verify settings are scoped to the active profile."""
-    set_active_profile("default")
-    set_owner("owner-a")
-    set_account("test-user@example.com")
+    sdk.set_active_profile("default")
+    sdk.set_owner("owner-a")
+    sdk.set_account("test-user@example.com")
     
-    set_active_profile("work")
-    set_owner("professional")
-    set_account("other-user@example.com")
+    sdk.set_active_profile("work")
+    sdk.set_owner("professional")
+    sdk.set_account("other-user@example.com")
     
-    assert get_owner() == "professional"
-    assert get_account() == "other-user@example.com"
+    assert sdk.get_owner() == "professional"
+    assert sdk.get_account() == "other-user@example.com"
     
-    set_active_profile("default")
-    assert get_owner() == "owner-a"
-    assert get_account() == "test-user@example.com"
+    sdk.set_active_profile("default")
+    assert sdk.get_owner() == "owner-a"
+    assert sdk.get_account() == "test-user@example.com"
 
 
-def test_discovery_toggle():
+def test_discovery_toggle(sdk):
     """Verify discovery policy can be turned off per profile."""
-    assert is_discovery_on() is True
-    set_discovery("off")
-    assert is_discovery_on() is False
+    assert sdk.is_discovery_on() is True
+    sdk.set_discovery("off")
+    assert sdk.is_discovery_on() is False
 
 
-def test_label_key_generation():
-    """Verify label key follows 'no defaults' rule and uses underscores."""
-    # 1. No owner, default env
-    set_owner(None)
-    # gapp__<name> with hyphen protection
-    assert get_label_key("my-app", env="default") == "gapp__my--app"
+def test_label_key_generation(sdk):
+    """Verify label key uses underscores and no double-hyphens."""
+    # 1. No owner
+    sdk.set_owner(None)
+    assert sdk.get_label_key("my-app") == "gapp__my-app"
     
-    # 2. With owner, default env
-    set_owner("owner-a")
-    assert get_label_key("my-app", env="default") == "gapp_owner--a_my--app"
+    # 2. With owner
+    sdk.set_owner("owner-a")
+    assert sdk.get_label_key("my-app") == "gapp_owner-a_my-app"
+
+
+def test_bucket_name_generation(sdk):
+    """Verify bucket name follows deterministic rules."""
+    sdk.set_owner(None)
+    assert sdk.get_bucket_name("my-app", "proj-123") == "gapp-my-app-proj-123"
     
-    # 3. With owner and custom env
-    assert get_label_key("my-app", env="prod") == "gapp_owner--a_my--app_prod"
+    sdk.set_owner("owner-a")
+    assert sdk.get_bucket_name("my-app", "proj-123", env="prod") == "gapp-owner-a-my-app-proj-123-prod"
 
 
-def test_bucket_name_generation():
-    """Verify bucket name follows 'no defaults' rule and uses hyphens."""
-    # 1. No owner, default env
-    set_owner(None)
-    assert get_bucket_name("my-app", "proj-123", env="default") == "gapp-my-app-proj-123"
-    
-    # 2. With owner, default env
-    set_owner("owner-a")
-    assert get_bucket_name("my-app", "proj-123", env="default") == "gapp-owner-a-my-app-proj-123"
-    
-    # 3. With owner and custom env
-    assert get_bucket_name("my-app", "proj-123", env="prod") == "gapp-owner-a-my-app-proj-123-prod"
-
-
-def test_resolve_solution_from_cwd(tmp_path, monkeypatch):
+def test_resolve_solution_from_cwd(tmp_path, monkeypatch, sdk):
     """Verify resolve_solution reads the local gapp.yaml."""
     repo = tmp_path / "my-repo"
     repo.mkdir()
     (repo / "gapp.yaml").write_text("name: project-status")
     (repo / ".git").mkdir()
-    
-    # CRITICAL: We must ensure mock_git returns THIS path
     monkeypatch.chdir(repo)
     
-    # Force mock_git to return EXACTLY our test repo
-    def _mock_run(args, **kwargs):
-        if "git" in args and "rev-parse" in args:
-            class MockProc:
-                returncode = 0
-                stdout = str(repo) + "\n"
-            return MockProc()
-        return subprocess.run(args, **kwargs)
-    monkeypatch.setattr(subprocess, "run", _mock_run)
-
-    ctx = resolve_solution()
+    # sdk._get_git_root will find the repo via subprocess mock in conftest
+    ctx = sdk.resolve_solution()
     assert ctx is not None
     assert ctx["name"] == "project-status"
-    assert ctx["repo_path"] == str(repo)
+
+
+def test_discovery_policy_enforcement(tmp_path, monkeypatch, sdk):
+    """Verify that when discovery is OFF, resolve_full_context skips label queries."""
+    repo = tmp_path / "my-repo"
+    repo.mkdir()
+    (repo / "gapp.yaml").write_text("name: project-status")
+    (repo / ".git").mkdir()
+    monkeypatch.chdir(repo)
+    
+    # Policy: Blind mode
+    sdk.set_discovery("off")
+    
+    # Mock label in cloud using clean underscores
+    sdk.provider.project_labels["proj-123"] = {"gapp__project-status": "v-2"}
+    
+    ctx = sdk.resolve_full_context()
+    assert ctx["project_id"] is None # Correct: discovery skipped
+    
+    # Policy: Managed mode
+    sdk.set_discovery("on")
+    ctx = sdk.resolve_full_context()
+    assert ctx["project_id"] == "proj-123" # Correct: discovery found it

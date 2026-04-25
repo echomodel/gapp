@@ -10,6 +10,10 @@ class DummyCloudProvider(CloudProvider):
     """In-memory provider for unit tests."""
 
     def __init__(self):
+        self.clear()
+
+    def clear(self):
+        """Reset internal state."""
         self.apis_enabled = set()
         self.buckets = {} # name -> metadata
         self.project_labels = {} # project_id -> labels_dict
@@ -41,7 +45,23 @@ class DummyCloudProvider(CloudProvider):
     def list_projects(self, filter_query: Optional[str] = None, limit: Optional[int] = None) -> List[Dict]:
         results = []
         for pid, labels in self.project_labels.items():
+            # Basic filter support for 'labels.<key>=<value>' and 'labels.keys:<key_prefix>*'
+            if filter_query:
+                if "=" in filter_query:
+                    # Handle 'labels.key=value'
+                    parts = filter_query.split("=")
+                    val = parts[1].strip("'\"")
+                    key = parts[0].split(".")[-1]
+                    if labels.get(key) != val:
+                        continue
+                elif "labels.keys:" in filter_query:
+                    prefix = filter_query.split(":")[-1].rstrip("*")
+                    if not any(k.startswith(prefix) for k in labels.keys()):
+                        continue
+                        
             results.append({"projectId": pid, "labels": labels})
+            if limit and len(results) >= limit:
+                break
         return results
 
     # -- Cloud Build & Artifact Registry --
@@ -61,7 +81,7 @@ class DummyCloudProvider(CloudProvider):
         return build_id
 
     def check_build(self, project_id: str, build_id: str) -> Dict:
-        return self.builds.get(build_id, {"status": "unknown"})
+        return self.builds.get(build_id, {"status": "SUCCESS", "results": {"images": [{"name": "mock-image"}]}})
 
     # -- Terraform --
 

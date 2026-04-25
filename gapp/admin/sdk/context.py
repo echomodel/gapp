@@ -6,6 +6,7 @@ from pathlib import Path
 
 from gapp.admin.sdk.config import load_config, save_config, get_active_config
 from gapp.admin.sdk.manifest import get_solution_name, load_manifest
+from gapp.admin.sdk.cloud import get_provider
 
 # -- Global Settings --
 
@@ -109,18 +110,15 @@ def get_label_key(solution_name: str, env: str = "default") -> str:
     """
     owner = get_owner()
     parts = ["gapp"]
-    if owner:
-        parts.append(owner)
-    else:
-        parts.append("") # Double underscore for global namespace
-    
+    # We use an empty string for owner if none is set, 
+    # resulting in a double underscore (gapp__<name>)
+    parts.append(owner if owner else "")
     parts.append(solution_name)
     
     if env != "default":
         parts.append(env)
     
-    # We protect internal hyphens by doubling them
-    return "_".join(p.replace("-", "--") for p in parts).lower()
+    return "_".join(parts).lower()
 
 def get_label_value(env: str = "default") -> str:
     """Generate the project label value: v-2[_env-<env>]"""
@@ -169,8 +167,9 @@ def resolve_solution(name: str | None = None) -> dict | None:
     return None
 
 
-def resolve_full_context(solution: str | None = None, env: str = "default") -> dict:
+def resolve_full_context(solution: str | None = None, env: str = "default", provider = None) -> dict:
     """Resolve solution context with remote fallbacks and environment support."""
+    provider = provider or get_provider()
     ctx = resolve_solution(solution)
     if not ctx and solution:
         ctx = {"name": solution, "project_id": None, "repo_path": None}
@@ -182,7 +181,7 @@ def resolve_full_context(solution: str | None = None, env: str = "default") -> d
     # Fill project_id from GCP labels if discovery is ON
     if not result.get("project_id") and is_discovery_on():
         from gapp.admin.sdk.deployments import discover_project_from_label
-        result["project_id"] = discover_project_from_label(result["name"], env=env)
+        result["project_id"] = discover_project_from_label(result["name"], env=env, provider=provider)
 
     # Fill github_repo from local git remote
     repo_path = result.get("repo_path")
