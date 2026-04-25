@@ -142,7 +142,7 @@ def projects_set_env(sdk: GappSDK, project_id, env):
 @click.pass_obj
 def projects_list(sdk: GappSDK, wide):
     """List projects with environment roles."""
-    res = sdk.list_projects(wide=wide)
+    res = sdk.list_target_projects(wide=wide)
     owner_str = f"owner: {res['owner']}" if res['owner'] else "global namespace"
     click.echo(f"\nProject Inventory ({owner_str}, mode: {res['mode'].upper()}):")
     
@@ -277,25 +277,23 @@ def status(sdk: GappSDK):
 @click.pass_obj
 def list_cmd(sdk: GappSDK, wide, project_limit):
     """List deployed apps from GCP labels."""
-    res = sdk.list(wide=wide, project_limit=project_limit)
-    
-    # Print messages
+    res = sdk.list_apps(wide=wide, project_limit=project_limit)
+
     for msg in res["messages"]:
         click.echo(msg)
-    
+
     if not res["apps"]:
         click.echo("\n  No apps found.")
     else:
-        # Table Header
-        header = f"\n  {'App':<20} {'Project':<20} {'Owner':<15} {'Env':<10} {'Version':<10}"
+        header = f"\n  {'App':<20} {'Project':<20} {'Owner':<15} {'Env':<10} {'Contract':<10}"
         click.echo(header)
         click.echo("  " + "-" * (len(header) - 2))
-        
+
         for app in res["apps"]:
-            click.echo(f"  {app['name']:<20} {app['project']:<20} {app['owner']:<15} {app['env']:<10} {app['version']:<10}")
-            
-    # Summary & Warnings
-    click.echo(f"\nSummary: {res['metadata']['apps']['count']} apps across {res['metadata']['projects']['count']} projects.")
+            contract = "legacy" if app["is_legacy"] else f"v-{app['contract_major']}"
+            click.echo(f"  {app['name']:<20} {app['project']:<20} {app['owner']:<15} {app['env']:<10} {contract:<10}")
+
+    click.echo(f"\nSummary: {res['metadata']['apps']['count']} apps across {res['metadata']['projects']['count']} projects (this build: v-{res['metadata']['contract_major']}).")
     for warn in res["warnings"]:
         click.echo(click.style(f"WARNING: {warn}", fg="yellow"))
 

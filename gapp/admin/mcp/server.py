@@ -51,12 +51,15 @@ def gapp_user(account: str | None = None, app_owner: str | None = None) -> dict:
         account: Google account email for gcloud commands.
         app_owner: Global app owner name for project labels.
     """
-    from gapp.admin.sdk.context import set_owner, get_owner, get_account
-    if account is not None or app_owner is not None:
-        set_owner(app_owner, account)
+    from gapp.admin.sdk.core import GappSDK
+    sdk = GappSDK()
+    if account is not None:
+        sdk.set_account(account)
+    if app_owner is not None:
+        sdk.set_owner(app_owner)
     return {
-        "account": get_account(),
-        "app_owner": get_owner(),
+        "account": sdk.get_account(),
+        "app_owner": sdk.get_owner(),
     }
 
 
@@ -89,7 +92,7 @@ def gapp_init(
 
 
 @_tool()
-def gapp_setup(project_id: str | None = None, solution: str | None = None) -> dict:
+def gapp_setup(project_id: str | None = None, solution: str | None = None, env: str = "default") -> dict:
     """Set up GCP foundation for a gapp solution.
 
     Enables APIs, creates per-solution GCS bucket, and labels the project.
@@ -97,74 +100,34 @@ def gapp_setup(project_id: str | None = None, solution: str | None = None) -> di
     Args:
         project_id: GCP project ID. Uses saved value if omitted.
         solution: Solution name. Defaults to current directory's solution.
+        env: Environment name. Defaults to "default".
     """
-    from gapp.admin.sdk.setup import setup_solution
-    return setup_solution(project_id, solution=solution)
-
-
-@_tool()
-def gapp_build(solution: str | None = None) -> dict:
-    """Submit a Cloud Build for a gapp solution (always async).
-
-    Returns immediately with a build_id. Use gapp_deploy with
-    build_ref=<build_id> to poll for completion and run terraform.
-
-    Flow: gapp_build → gapp_deploy(build_ref=...) → done.
-
-    Prerequisites: gapp_init and gapp_setup must have been run first.
-
-    Args:
-        solution: Solution name. Defaults to current directory's solution.
-    """
-    from gapp.admin.sdk.deploy import start_build
-    return start_build(solution=solution)
+    from gapp.admin.sdk.core import GappSDK
+    return GappSDK().setup(project_id, solution=solution, env=env)
 
 
 @_tool()
 def gapp_deploy(
-    auto_approve: bool = True,
     ref: str | None = None,
     solution: str | None = None,
-    build_ref: str | None = None,
-    build_check_timeout: int = 10,
+    env: str = "default",
+    dry_run: bool = False,
+    project_id: str | None = None,
 ) -> dict:
-    """Deploy a gapp solution to Cloud Run (terraform apply after a build).
-
-    Canonical flow: call gapp_build first, get a build_id back, then
-    call gapp_deploy with build_ref=<build_id>. gapp_deploy polls the
-    build and runs terraform once the image is ready. If the build is
-    still running when the timeout expires, returns a "running" status
-    — call again with the same build_ref to retry.
-
-    build_ref is required unless the package-bundled feature flag
-    ``allow_one_step_deploy_tool`` is enabled (off by default — the
-    one-step path times out on non-trivial builds).
+    """Deploy a gapp solution to Cloud Run (build + terraform apply).
 
     Prerequisites: gapp_init and gapp_setup must have been run first.
 
     Args:
-        auto_approve: Skip Terraform confirmation prompt (default: True).
-        ref: Git ref to deploy (commit, tag, branch). Skips dirty tree check.
+        ref: Git ref to deploy (commit, tag, branch). Defaults to HEAD.
         solution: Solution name. Defaults to current directory's solution.
-        build_ref: Cloud Build ID from a prior gapp_build call.
-        build_check_timeout: Max seconds to poll (default/minimum: 10).
+        env: Target environment. Defaults to "default".
+        dry_run: Preview only — do not build or apply.
+        project_id: Explicit GCP project ID override. Discovered if omitted.
     """
-    from gapp.admin.sdk.features import is_enabled
-    if build_ref is None and not is_enabled("allow_one_step_deploy_tool"):
-        return {
-            "error": "one_step_deploy_disabled",
-            "message": (
-                "gapp_deploy requires a build_ref from a prior gapp_build call. "
-                "Run gapp_build first, then call gapp_deploy(build_ref=<build_id>). "
-                "The one-step build+deploy path is disabled because it times out "
-                "on any non-trivial build."
-            ),
-        }
-
-    from gapp.admin.sdk.deploy import deploy_solution
-    return deploy_solution(
-        auto_approve=auto_approve, ref=ref, solution=solution,
-        build_ref=build_ref, build_check_timeout=build_check_timeout,
+    from gapp.admin.sdk.core import GappSDK
+    return GappSDK().deploy(
+        ref=ref, solution=solution, env=env, dry_run=dry_run, project_id=project_id,
     )
 
 
@@ -336,45 +299,44 @@ def gapp_ci_trigger(
 
 
 @_tool()
-def gapp_status(solution: str | None = None) -> dict:
+def gapp_status(solution: str | None = None, env: str = "default") -> dict:
     """Infrastructure health check for a gapp solution.
 
     Returns initialized, deployment.project, deployment.pending,
     deployment.services, and next_step with the recommended action.
 
-    If terraform or gcloud is unavailable, returns pending=true with
-    a hint explaining why deployment state couldn't be checked. Use
-    gapp_deployments_list to discover deployments via GCP labels
-    without needing terraform.
-
     Args:
         solution: Solution name. Defaults to current directory's solution.
+        env: Environment name. Defaults to "default".
     """
-    from gapp.admin.sdk.status import get_status
-    return get_status(solution).model_dump()
+    from gapp.admin.sdk.core import GappSDK
+    return GappSDK().status(name=solution, env=env).model_dump()
 
 
 @_tool()
-def gapp_deployments_list() -> dict:
-    """List GCP projects with deployed gapp solutions.
+def gapp_target_projects(wide: bool = False) -> dict:
+    """List GCP projects with gapp-env role labels.
 
-    Returns all GCP projects that have gapp-* labels, with the solutions
-    deployed to each. The default project (most solutions) is highlighted.
-    Use this to discover available projects when setting up a new solution.
-    """
-    from gapp.admin.sdk.deployments import list_deployments
-    return list_deployments()
-
-
-@_tool()
-def gapp_list(available: bool = False) -> list[dict]:
-    """List registered gapp solutions.
+    Shows the project inventory and the env roles assigned per owner.
+    Use this to discover candidate target projects for new deployments.
 
     Args:
-        available: Include remote GitHub solutions.
+        wide: Include all projects with any gapp-env label, not just the active owner's.
     """
-    from gapp.admin.sdk.solutions import list_solutions
-    return list_solutions(include_remote=available)
+    from gapp.admin.sdk.core import GappSDK
+    return GappSDK().list_target_projects(wide=wide)
+
+
+@_tool()
+def gapp_list(wide: bool = False, project_limit: int = 50) -> dict:
+    """List deployed gapp solutions discovered via GCP project labels.
+
+    Args:
+        wide: Show all apps across all owner namespaces (not just the active owner).
+        project_limit: Max projects to scan (default 50).
+    """
+    from gapp.admin.sdk.core import GappSDK
+    return GappSDK().list_apps(wide=wide, project_limit=project_limit)
 
 
 def main():

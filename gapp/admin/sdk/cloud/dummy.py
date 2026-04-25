@@ -43,22 +43,36 @@ class DummyCloudProvider(CloudProvider):
         self.project_labels[project_id] = labels
 
     def list_projects(self, filter_query: Optional[str] = None, limit: Optional[int] = None) -> List[Dict]:
+        """Mimic the subset of gcloud filter syntax gapp uses.
+
+        Supported forms:
+          labels.<key>=<value>     — exact key/value match
+          labels:<key>             — key exists (any value)
+          labels:<prefix>*         — at least one key starts with prefix
+        """
+        def matches(labels: Dict[str, str]) -> bool:
+            if not filter_query:
+                return True
+            q = filter_query.strip()
+            # labels.<key>=<value>
+            if q.startswith("labels.") and "=" in q:
+                key, _, val = q[len("labels."):].partition("=")
+                val = val.strip("'\"")
+                return labels.get(key) == val
+            # labels:<rest>
+            if q.startswith("labels:"):
+                rest = q[len("labels:"):]
+                if rest.endswith("*"):
+                    prefix = rest[:-1]
+                    return any(k.startswith(prefix) for k in labels.keys())
+                # exact key existence
+                return rest in labels
+            return True
+
         results = []
         for pid, labels in self.project_labels.items():
-            # Basic filter support for 'labels.<key>=<value>' and 'labels.keys:<key_prefix>*'
-            if filter_query:
-                if "=" in filter_query:
-                    # Handle 'labels.key=value'
-                    parts = filter_query.split("=")
-                    val = parts[1].strip("'\"")
-                    key = parts[0].split(".")[-1]
-                    if labels.get(key) != val:
-                        continue
-                elif "labels.keys:" in filter_query:
-                    prefix = filter_query.split(":")[-1].rstrip("*")
-                    if not any(k.startswith(prefix) for k in labels.keys()):
-                        continue
-                        
+            if not matches(labels):
+                continue
             results.append({"projectId": pid, "labels": labels})
             if limit and len(results) >= limit:
                 break

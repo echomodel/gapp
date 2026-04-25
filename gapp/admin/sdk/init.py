@@ -3,7 +3,7 @@
 import subprocess
 from pathlib import Path
 
-from gapp.admin.sdk.context import get_git_root
+from gapp.admin.sdk.util import get_git_root
 from gapp.admin.sdk.manifest import get_solution_name, load_manifest, save_manifest
 
 

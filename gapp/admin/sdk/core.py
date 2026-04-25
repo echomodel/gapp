@@ -9,6 +9,7 @@ import subprocess
 from pathlib import Path
 from typing import Optional, List, Dict
 
+from gapp import __version__, MIN_SUPPORTED_MAJOR
 from gapp.admin.sdk.cloud import get_provider
 from gapp.admin.sdk.cloud.base import CloudProvider
 from gapp.admin.sdk.config import load_config, save_config, get_active_config
@@ -18,6 +19,8 @@ from gapp.admin.sdk.manifest import (
     get_prerequisite_secrets, get_service_config, resolve_env_vars, get_public, get_env_vars
 )
 from gapp.admin.sdk.models import StatusResult, DeploymentInfo, NextStep, ServiceStatus, DomainStatus
+
+CURRENT_MAJOR = int(__version__.split(".")[0])
 
 
 class GappSDK:
@@ -90,10 +93,9 @@ class GappSDK:
             parts.append(env)
         return "_".join(parts).lower()
 
-    def get_label_value(self, env: str = "default") -> str:
-        value = "v-2"
-        if env != "default": value += f"_env-{env}"
-        return value
+    def get_label_value(self) -> str:
+        # Value is purely the contract version — env lives in the KEY.
+        return f"v-{CURRENT_MAJOR}"
 
     def get_role_key(self) -> str:
         owner = self.get_owner()
@@ -127,13 +129,13 @@ class GappSDK:
 
     def discover_project_from_label(self, solution_name: str, env: str = "default") -> Optional[str]:
         label_key = self.get_label_key(solution_name, env=env)
-        label_value = self.get_label_value(env)
-        
-        # O(1) Server-side direct match
-        projects = self.provider.list_projects(filter_query=f"labels.{label_key}={label_value}", limit=1)
+        # Match by KEY only — value is the contract version (v-N), which may
+        # vary across builds. Discovery should find the project regardless of
+        # which gapp version stamped it; gating happens later in setup/deploy.
+        projects = self.provider.list_projects(filter_query=f"labels:{label_key}", limit=1)
         if projects: return projects[0]["projectId"]
-        
-        # Legacy fallback
+
+        # Legacy fallback (pre-v-N labeling): gapp-<name>=<env>
         legacy_key = f"gapp-{solution_name}".replace("_", "-").lower()
         projects = self.provider.list_projects(filter_query=f"labels.{legacy_key}={env}", limit=1)
         if projects: return projects[0]["projectId"]
@@ -154,24 +156,24 @@ class GappSDK:
         self.provider.set_project_labels(project_id, labels)
         return "updated"
 
-    def list_projects(self, wide: bool = False) -> dict:
+    def list_target_projects(self, wide: bool = False) -> dict:
+        """List GCP projects with gapp-env role labels (default-target hints)."""
         owner = self.get_owner()
         role_key = self.get_role_key()
-        
-        # SURGICAL SERVER-SIDE FILTER: verified gcloud syntax
-        filter_query = "labels:gapp-env*"
-        projects_data = self.provider.list_projects(filter_query=filter_query)
-        
+
+        # Server-side filter on the role-label keyspace
+        projects_data = self.provider.list_projects(filter_query="labels:gapp-env*")
+
         projects = []
         for p in projects_data:
             labels = p.get("labels", {})
             roles = {k: v for k, v in labels.items() if k.startswith("gapp-env")}
-            
+
             if not wide and owner:
                 if role_key not in roles: continue
-            
+
             projects.append({"id": p["projectId"], "roles": roles})
-            
+
         return {"projects": sorted(projects, key=lambda x: x["id"]), "owner": owner, "mode": "all" if wide else "scoped"}
 
     # -- Infrastructure Operations --
@@ -185,24 +187,53 @@ class GappSDK:
             target_project = self.discover_project_from_label(solution_name, env=env) or self._discover_project_from_role(env=env)
         if not target_project: raise RuntimeError("No project specified or discovered.")
 
+        # Contract gating: if this solution is already stamped, refuse if outside our window.
+        labels = self.provider.get_project_labels(target_project)
+        self._check_contract(labels, solution_name, env, target_project)
+
         repo_path = Path(ctx["repo_path"]) if ctx.get("repo_path") else None
         manifest = load_manifest(repo_path) if repo_path else {}
+        apis_enabled = []
         for api in ["run.googleapis.com", "secretmanager.googleapis.com", "artifactregistry.googleapis.com", "cloudbuild.googleapis.com"] + get_required_apis(manifest):
             self.provider.enable_api(target_project, api)
+            apis_enabled.append(api)
 
         bucket_name = self.get_bucket_name(solution_name, target_project)
         bucket_status = "exists" if self.provider.bucket_exists(target_project, bucket_name) else "created"
         if bucket_status == "created": self.provider.create_bucket(target_project, bucket_name)
 
         self.provider.ensure_build_permissions(target_project)
-        label_key, label_value = self.get_label_key(solution_name, env=env), self.get_label_value(env)
-        labels = self.provider.get_project_labels(target_project)
+        label_key, label_value = self.get_label_key(solution_name, env=env), self.get_label_value()
         if labels.get(label_key) != label_value:
             labels[label_key] = label_value
             self.provider.set_project_labels(target_project, labels)
             label_status = "added"
         else: label_status = "exists"
-        return {"name": solution_name, "project_id": target_project, "env": env, "bucket": bucket_name, "bucket_status": bucket_status, "label_status": label_status}
+        return {"name": solution_name, "project_id": target_project, "env": env, "bucket": bucket_name, "bucket_status": bucket_status, "label_status": label_status, "apis": apis_enabled}
+
+    def _check_contract(self, labels: dict, solution_name: str, env: str, project_id: str) -> None:
+        """Refuse setup/deploy if the project's stamped contract for this solution is outside the supported window."""
+        target_key = self.get_label_key(solution_name, env=env)
+        existing = labels.get(target_key)
+        if not existing or not existing.startswith("v-"):
+            return  # unstamped or legacy — let the operation proceed and stamp current
+        try:
+            n = int(existing.split("-")[1])
+        except (IndexError, ValueError):
+            return  # malformed value; treat as unstamped
+        if n > CURRENT_MAJOR:
+            raise RuntimeError(
+                f"Project '{project_id}' has '{solution_name}' stamped at v{n}.x; "
+                f"this gapp build is v{__version__} (contract major {CURRENT_MAJOR}). "
+                f"Upgrade gapp to manage this project."
+            )
+        if n < MIN_SUPPORTED_MAJOR:
+            raise RuntimeError(
+                f"Project '{project_id}' has '{solution_name}' stamped at v{n}.x; "
+                f"below MIN_SUPPORTED_MAJOR={MIN_SUPPORTED_MAJOR}. "
+                f"Migrate the label manually (gcloud projects update --update-labels=...) "
+                f"or use an older gapp build."
+            )
 
     def deploy(self, ref: Optional[str] = None, solution: Optional[str] = None, env: str = "default", dry_run: bool = False, project_id: Optional[str] = None) -> dict:
         ctx = self.resolve_full_context(solution, env=env)
@@ -222,14 +253,14 @@ class GappSDK:
         if dry_run: return {**preview, "dry_run": True}
         if not target_project: raise RuntimeError(f"No GCP project resolved for '{solution_name}'.")
 
-        # Confirm Environment Safety
+        # Contract gating + presence check
         labels = self.provider.get_project_labels(target_project)
+        self._check_contract(labels, solution_name, env, target_project)
         label_key = self.get_label_key(solution_name, env=env)
-        label_value = self.get_label_value(env)
-        if labels.get(label_key) != label_value:
+        if not labels.get(label_key, "").startswith("v-"):
             legacy_key = f"gapp-{solution_name}".replace("_", "-").lower()
             if labels.get(legacy_key) != env:
-                raise RuntimeError(f"Project '{target_project}' is not designated for environment '{env}'.")
+                raise RuntimeError(f"Project '{target_project}' is not designated for environment '{env}'. Run 'gapp setup' first.")
 
         bucket_name = self.get_bucket_name(solution_name, target_project)
         if not self.provider.bucket_exists(target_project, bucket_name): raise RuntimeError(f"Foundation missing. Run 'gapp setup'")
@@ -264,49 +295,95 @@ class GappSDK:
                 result.deployment.pending = False
         return result
 
-    def list(self, wide: bool = False, project_limit: int = 50) -> dict:
+    def list_apps(self, wide: bool = False, project_limit: int = 50) -> dict:
+        """List deployed apps discovered via GCP project labels.
+
+        Returns one entry per (project × solution-label). Each app is parsed from
+        a single solution label; env comes from the trailing key segment, owner
+        from the second segment (empty = global). Contract version is parsed
+        from the value (`v-N`); legacy `gapp-<name>=<env>` labels are reported
+        with `is_legacy=True` and `contract_major=None`.
+        """
         owner = self.get_owner()
-        
-        # SURGICAL SERVER-SIDE FILTER: verified gcloud content-match syntax
-        filter_query = 'labels:gapp*'
+
+        filter_query = "labels:gapp*"
         if not wide and owner:
-            filter_query = f'labels:gapp_{owner}_*'
+            filter_query = f"labels:gapp_{owner}_*"
 
         projects_data = self.provider.list_projects(filter_query=filter_query, limit=project_limit)
-        
+
         apps = []
         is_global_mode = not wide and not owner
         for project in projects_data:
             pid = project["projectId"]
             for key, val in project.get("labels", {}).items():
-                if not key.startswith("gapp"): continue
-                app_info = {"name": None, "project": pid, "owner": "global", "env": "default", "version": "v-2"}
-                if key.startswith("gapp_"):
-                    parts = key.split("_")
-                    l_owner = parts[1] if parts[1] else "global"
-                    l_name = "_".join(parts[2:])
-                    if not wide and owner and l_owner != owner: continue
-                    if is_global_mode and l_owner != "global": continue
-                    v_parts = val.split("_")
-                    app_info.update({"name": l_name, "owner": l_owner, "version": v_parts[0]})
-                    for vp in v_parts:
-                        if vp.startswith("env-"): app_info["env"] = vp[4:]
-                elif key.startswith("gapp-"):
-                    if not wide and owner: continue
-                    app_info.update({"name": key[5:], "owner": "global", "env": val, "version": "legacy"})
-                else: continue
-                apps.append(app_info)
+                app = self._parse_app_label(key, val, pid)
+                if app is None: continue
+                if not wide and owner and app["owner"] != owner: continue
+                if is_global_mode and app["owner"] != "global": continue
+                apps.append(app)
 
         result = {
-            "apps": sorted(apps, key=lambda x: x["name"]),
-            "metadata": {"projects": {"count": len(projects_data), "limit": project_limit}, "apps": {"count": len(apps)}, "owner": owner},
-            "messages": [], "warnings": []
+            "apps": sorted(apps, key=lambda x: (x["owner"], x["name"], x["env"])),
+            "metadata": {
+                "projects": {"count": len(projects_data), "limit": project_limit},
+                "apps": {"count": len(apps)},
+                "owner": owner,
+                "contract_major": CURRENT_MAJOR,
+            },
+            "messages": [],
+            "warnings": [],
         }
         if wide: result["messages"].append("Showing all apps across all namespaces.")
         elif owner: result["messages"].append(f"Showing apps for owner '{owner}'. Use --all to check for more.")
         else: result["messages"].append("Showing global apps. Use --all to check for more.")
-        if len(projects_data) >= project_limit: result["warnings"].append(f"Project list limit reached ({project_limit}). Use --project-limit to increase.")
+        if len(projects_data) >= project_limit:
+            result["warnings"].append(f"Project list limit reached ({project_limit}). Use --project-limit to increase.")
         return result
+
+    @staticmethod
+    def _parse_app_label(key: str, val: str, project_id: str) -> Optional[dict]:
+        """Parse one project label into an app dict, or None if not a gapp label.
+
+        Recognized formats:
+          gapp_<owner>_<solution>           = v-N            (default env)
+          gapp_<owner>_<solution>_<env>     = v-N            (non-default env)
+          gapp__<solution>[_<env>]          = v-N            (global namespace)
+          gapp-<solution>                   = <env>          (legacy)
+
+        Solution names with underscores break the segment parser; gapp solutions
+        should use hyphens. Role labels (gapp-env*) are skipped here.
+        """
+        if key.startswith("gapp-env"):
+            return None  # role label, not a solution label
+        if key.startswith("gapp_"):
+            parts = key.split("_")
+            if len(parts) < 3: return None
+            l_owner = parts[1] if parts[1] else "global"
+            l_name = parts[2]
+            l_env = parts[3] if len(parts) >= 4 else "default"
+            major = None
+            if val.startswith("v-"):
+                try: major = int(val.split("-")[1].split("_")[0])
+                except (IndexError, ValueError): pass
+            return {
+                "name": l_name,
+                "project": project_id,
+                "owner": l_owner,
+                "env": l_env,
+                "contract_major": major,
+                "is_legacy": False,
+            }
+        if key.startswith("gapp-"):
+            return {
+                "name": key[5:],
+                "project": project_id,
+                "owner": "global",
+                "env": val,
+                "contract_major": None,
+                "is_legacy": True,
+            }
+        return None
 
     # -- Internal Helpers --
 

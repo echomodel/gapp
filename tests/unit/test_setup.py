@@ -65,6 +65,6 @@ def test_setup_with_env_scoping(tmp_path, monkeypatch, sdk):
     # env is no longer in the bucket name
     assert res["bucket"] == "gapp-my-app-test-proj-123"
     assert res["env"] == "prod"
+    # env lives in the key trailing segment; value is purely the contract version
     assert "gapp__my-app_prod" in sdk.provider.project_labels["test-proj-123"]
-    # Label value: v-2_env-prod
-    assert sdk.provider.project_labels["test-proj-123"]["gapp__my-app_prod"] == "v-2_env-prod"
+    assert sdk.provider.project_labels["test-proj-123"]["gapp__my-app_prod"] == "v-3"
