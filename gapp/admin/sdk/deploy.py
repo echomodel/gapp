@@ -87,6 +87,7 @@ def deploy_solution(
     build_check_timeout: int = 10,
     dry_run: bool = False,
     env: str = "default",
+    project_id: Optional[str] = None,
     provider = None
 ) -> dict:
     """Deploy the current solution."""
@@ -105,7 +106,7 @@ def deploy_solution(
     # 1. Resolve full context upfront
     ctx = resolve_full_context(solution, env=env)
     solution_name = ctx["name"]
-    project_id = ctx["project_id"]
+    project_id = project_id or ctx["project_id"]
     repo_path = Path(ctx["repo_path"]) if ctx.get("repo_path") else None
     
     if not solution_name:

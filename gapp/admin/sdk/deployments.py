@@ -13,12 +13,11 @@ def list_deployments(wide: bool = False, project_limit: int = 50, provider = Non
     owner = get_owner()
     
     # Prefix for identifying solutions server-side
-    # We check for both new format (gapp_) and legacy (gapp-)
     if not wide and owner:
-        # Optimized for owner namespace
-        label_filter = f"labels.keys:gapp_{owner}_*"
+        # Optimized for owner namespace (encoding hyphens for the query)
+        encoded_owner = owner.replace("-", "--")
+        label_filter = f"labels.keys:gapp_{encoded_owner}_*"
     else:
-        # Catch all formats
         label_filter = "labels.keys:gapp-*,labels.keys:gapp_*"
 
     projects_data = provider.list_projects(filter_query=label_filter, limit=project_limit)
@@ -36,13 +35,12 @@ def list_deployments(wide: bool = False, project_limit: int = 50, provider = Non
             if not key.startswith("gapp"):
                 continue
                 
-            # 1. New Underscore Format (gapp_<owner>_<name>)
+            # 1. New Underscore Format (gapp_[owner]_<name>)
             if key.startswith("gapp_"):
                 parts = key.split("_")
-                # Parts: [gapp, owner_or_empty, name]
-                
-                label_owner = parts[1] if parts[1] else None
-                label_name = "_".join(parts[2:]) # Handle names with underscores
+                # Decode segments by reversing hyphen protection
+                label_owner = parts[1].replace("--", "-") if parts[1] else None
+                label_name = "_".join(parts[2:]).replace("--", "-")
                 
                 if is_global_namespace:
                     if label_owner is None:
@@ -60,14 +58,14 @@ def list_deployments(wide: bool = False, project_limit: int = 50, provider = Non
             # 2. Legacy Hyphen Format (gapp-<name>)
             elif key.startswith("gapp-"):
                 if not is_global_namespace and not wide:
-                    continue # Legacy is always global
+                    continue
                 name = key[len("gapp-"):]
             
             else:
                 continue
 
             solutions.append({
-                "name": name.replace("--", "-"), # Reverse the dash protection
+                "name": name,
                 "instance": value,
                 "label": key,
             })
@@ -94,7 +92,7 @@ def discover_project_from_label(solution_name: str, env: str = "default", provid
     from gapp.admin.sdk.context import get_label_key, get_label_value
     
     # 1. Try current/configured label (Underscore format)
-    label_key = get_label_key(solution_name)
+    label_key = get_label_key(solution_name, env=env)
     label_value = get_label_value(env)
     
     filter_query = f"labels.{label_key}={label_value}"
@@ -102,7 +100,7 @@ def discover_project_from_label(solution_name: str, env: str = "default", provid
     if projects:
         return projects[0]["projectId"]
 
-    # 2. Try legacy fallback (Hyphen format, value always 'default' or provided env)
+    # 2. Try legacy fallback
     legacy_key = f"gapp-{solution_name}".replace("_", "-").lower()
     if legacy_key != label_key:
         filter_query = f"labels.{legacy_key}={env}"

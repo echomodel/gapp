@@ -100,25 +100,30 @@ def get_bucket_name(solution_name: str, project_id: str, env: str = "default") -
     if env != "default":
         parts.append(env)
     
-    # Bucket names always use hyphens and must be lowercase
     return "-".join(parts).replace("_", "-").lower()
 
-def get_label_key(solution_name: str) -> str:
-    """Generate the project label key: gapp_[<owner>]_<solution>
+def get_label_key(solution_name: str, env: str = "default") -> str:
+    """Generate the project label key: gapp_[<owner>]_<solution>[_<env>]
     
-    Uses underscores as structural delimiters to avoid ambiguity with 
-    hyphens used in owner/solution names.
+    Uses underscores as structural delimiters. Omits 'default' env.
     """
     owner = get_owner()
+    parts = ["gapp"]
     if owner:
-        return f"gapp_{owner}_{solution_name}".replace("-", "--").lower()
-    return f"gapp__{solution_name}".replace("-", "--").lower()
+        parts.append(owner)
+    else:
+        parts.append("") # Double underscore for global namespace
+    
+    parts.append(solution_name)
+    
+    if env != "default":
+        parts.append(env)
+    
+    # We protect internal hyphens by doubling them
+    return "_".join(p.replace("-", "--") for p in parts).lower()
 
 def get_label_value(env: str = "default") -> str:
-    """Generate the project label value: v-2[_env-<env>]
-    
-    Contract version is v-2. Omits env segment for 'default'.
-    """
+    """Generate the project label value: v-2[_env-<env>]"""
     value = "v-2"
     if env != "default":
         value += f"_env-{env}"

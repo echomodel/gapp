@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Optional
 
 from gapp.admin.sdk.cloud import get_provider
-from gapp.admin.sdk.context import get_git_root, resolve_solution, get_label_key, get_bucket_name
+from gapp.admin.sdk.context import get_git_root, resolve_solution, get_label_key, get_bucket_name, get_label_value
 from gapp.admin.sdk.manifest import get_required_apis, load_manifest
 from gapp.admin.sdk.deployments import discover_project_from_label
 
@@ -75,12 +75,13 @@ def setup_solution(
 
     # 4. Label project
     label_key = get_label_key(solution_name, env=env)
+    label_value = get_label_value(env)
     
     current_labels = provider.get_project_labels(project_id)
-    if current_labels.get(label_key) == env:
+    if current_labels.get(label_key) == label_value:
         result["label_status"] = "exists"
     else:
-        current_labels[label_key] = env
+        current_labels[label_key] = label_value
         provider.set_project_labels(project_id, current_labels)
         result["label_status"] = "added"
 

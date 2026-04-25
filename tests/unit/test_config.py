@@ -27,7 +27,7 @@ def test_save_and_load_roundtrip():
         "active": "altostrat",
         "profiles": {
             "default": {"account": "owner-a@example.com", "discovery": "on"},
-            "altostrat": {"account": "admin@example.com", "discovery": "off", "owner": "user-a"}
+            "altostrat": {"account": "admin@example.com", "discovery": "off", "owner": "owner-a"}
         }
     }
     save_config(config)
@@ -56,6 +56,11 @@ def test_save_prunes_missing_attributes():
 
 def test_migrate_legacy_solutions_yaml(tmp_path, monkeypatch):
     """Verify automatic migration from legacy solutions.yaml."""
+    # We must remove the config.yaml created by the fixture to test migration
+    config_file = get_config_file()
+    if config_file.exists():
+        config_file.unlink()
+        
     legacy_file = get_legacy_file()
     legacy_file.parent.mkdir(parents=True, exist_ok=True)
     
@@ -70,8 +75,6 @@ def test_migrate_legacy_solutions_yaml(tmp_path, monkeypatch):
     config = load_config()
     
     # Verify migration results
-    # (Note: we ripped out the registry, so solutions are currently IGNORED in migration, 
-    # but the owner should be preserved if we kept that logic)
     assert config["profiles"]["default"]["owner"] == "owner-a"
 
 

@@ -25,33 +25,38 @@ def get_legacy_file() -> Path:
 def load_config() -> dict:
     """Load the global config (active profile + all profiles)."""
     path = get_config_file()
-    if not path.exists():
-        return {
-            "active": "default",
-            "profiles": {"default": {"discovery": "on"}}
-        }
+    if path.exists():
+        with open(path) as f:
+            data = yaml.safe_load(f) or {}
+            # Ensure basic structure
+            if "profiles" not in data:
+                data = {"active": "default", "profiles": {"default": data}}
+            if "active" not in data:
+                data["active"] = "default"
+            return data
     
-    with open(path) as f:
-        data = yaml.safe_load(f) or {}
-    
-    # Ensure structure and migration
-    if "profiles" not in data:
-        # Migrate flat config to profiles
-        old_owner = data.get("owner")
-        old_account = data.get("account")
-        p = {"discovery": "on"}
-        if old_owner: p["owner"] = old_owner
-        if old_account: p["account"] = old_account
+    # Try legacy migration
+    legacy_path = get_legacy_file()
+    if legacy_path.exists():
+        with open(legacy_path) as f:
+            legacy_data = yaml.safe_load(f) or {}
         
-        data = {
+        owner = legacy_data.get("owner") or legacy_data.get("defaults", {}).get("owner")
+        account = legacy_data.get("account")
+        
+        p = {"discovery": "on"}
+        if owner: p["owner"] = owner
+        if account: p["account"] = account
+        
+        return {
             "active": "default",
             "profiles": {"default": p}
         }
-    
-    if "active" not in data:
-        data["active"] = "default"
         
-    return data
+    return {
+        "active": "default",
+        "profiles": {"default": {"discovery": "on"}}
+    }
 
 
 def save_config(config: dict) -> None:

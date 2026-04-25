@@ -87,6 +87,11 @@ def init_solution(
     solution_name = get_solution_name(manifest, git_root)
     result["name"] = solution_name
 
+    if manifest.get("name") != solution_name:
+        manifest["name"] = solution_name
+        save_manifest(git_root, manifest)
+        result["manifest_status"] = "updated" if result["manifest_status"] == "unchanged" else "created"
+
     # Add GitHub topic
     result["topic_status"] = _add_github_topic(git_root)
 

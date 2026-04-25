@@ -32,7 +32,7 @@ def test_setup_enables_apis_and_creates_bucket(tmp_path, monkeypatch):
 
 
 def test_setup_with_owner_namespace(tmp_path, monkeypatch):
-    """Verify setup_solution uses the owner namespace in the bucket name."""
+    """Verify setup_solution uses the owner namespace in the bucket name and label key."""
     repo = tmp_path / "app"
     repo.mkdir()
     (repo / ".git").mkdir()
@@ -45,7 +45,8 @@ def test_setup_with_owner_namespace(tmp_path, monkeypatch):
     
     assert res["bucket"] == "gapp-owner-a-my-app-test-proj-123"
     assert res["label_status"] == "added"
-    assert "gapp-owner-a-my-app" in provider.project_labels["test-proj-123"]
+    # Key: gapp_<owner>_<solution> (hyphens protected)
+    assert "gapp_owner--a_my--app" in provider.project_labels["test-proj-123"]
 
 
 def test_setup_with_env_scoping(tmp_path, monkeypatch):
@@ -62,4 +63,6 @@ def test_setup_with_env_scoping(tmp_path, monkeypatch):
     # env != 'default', so it should appear in the bucket name and label key
     assert res["bucket"] == "gapp-my-app-test-proj-123-prod"
     assert res["env"] == "prod"
-    assert "gapp-my-app-prod" in provider.project_labels["test-proj-123"]
+    assert "gapp__my--app_prod" in provider.project_labels["test-proj-123"]
+    # Label value: v-2_env-prod
+    assert provider.project_labels["test-proj-123"]["gapp__my--app_prod"] == "v-2_env-prod"
