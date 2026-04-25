@@ -14,32 +14,31 @@ def sdk():
 def test_list_solutions_from_labels(sdk):
     """Verify sdk.list() extracts all gapp solutions from GCP labels."""
     sdk.provider.project_labels["proj-123"] = {
-        "gapp__api": "default",
-        "gapp__worker": "default",
-        "gapp_owner-a_status": "prod"
+        "gapp__api": "v-2",
+        "gapp__worker": "v-2",
+        "gapp_owner-a_status": "v-2_env-prod"
     }
     
-    results_data = sdk.list(wide=True)
-    solutions = []
-    for p in results_data["projects"]:
-        solutions.extend(p["solutions"])
+    res = sdk.list(wide=True)
+    apps = res["apps"]
     
-    # Sort for consistent assertion
-    solutions.sort(key=lambda s: s["name"])
+    assert len(apps) == 3
+    assert apps[0]["name"] == "api"
+    assert apps[0]["owner"] == "global"
     
-    assert len(solutions) == 3
-    assert solutions[0]["name"] == "api"
-    assert solutions[1]["name"] == "status"
-    assert solutions[2]["name"] == "worker"
+    status_app = next(a for a in apps if a["name"] == "status")
+    assert status_app["project"] == "proj-123"
+    assert status_app["owner"] == "owner-a"
+    assert status_app["env"] == "prod"
 
 
 def test_list_solutions_with_limit_reached(sdk):
-    """Verify limit_reached flag is correctly reported."""
+    """Verify limit_reached warning is correctly reported."""
     # Add 3 projects
-    sdk.provider.project_labels["p1"] = {"gapp__app1": "default"}
-    sdk.provider.project_labels["p2"] = {"gapp__app2": "default"}
-    sdk.provider.project_labels["p3"] = {"gapp__app3": "default"}
+    sdk.provider.project_labels["p1"] = {"gapp__app1": "v-2"}
+    sdk.provider.project_labels["p2"] = {"gapp__app2": "v-2"}
+    sdk.provider.project_labels["p3"] = {"gapp__app3": "v-2"}
     
     # List with limit of 2
     res = sdk.list(project_limit=2, wide=True)
-    assert res["limit_reached"] is True
+    assert any("limit reached" in w for w in res["warnings"])

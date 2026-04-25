@@ -74,7 +74,6 @@ class GappSDK:
     # -- Naming Logic --
 
     def get_bucket_name(self, solution_name: str, project_id: str) -> str:
-        """Bucket name is Environment-Blind. Isolation is handled by project_id."""
         owner = self._resolve_effective_owner(project_id, solution_name)
         parts = ["gapp"]
         if owner: parts.append(owner)
@@ -83,7 +82,6 @@ class GappSDK:
         return "-".join(parts).lower()
 
     def get_label_key(self, solution_name: str, env: str = "default") -> str:
-        """Label key includes the env suffix for unique identification."""
         owner = self.get_owner()
         parts = ["gapp", owner if owner else "", solution_name]
         if env != "default":
@@ -128,8 +126,12 @@ class GappSDK:
     def discover_project_from_label(self, solution_name: str, env: str = "default") -> Optional[str]:
         label_key = self.get_label_key(solution_name, env=env)
         label_value = self.get_label_value(env)
+        
+        # Try direct app match with labels.keys filter (safe for exact keys)
         projects = self.provider.list_projects(filter_query=f"labels.{label_key}={label_value}", limit=1)
         if projects: return projects[0]["projectId"]
+        
+        # Fallback to legacy label search
         legacy_key = f"gapp-{solution_name}".replace("_", "-").lower()
         projects = self.provider.list_projects(filter_query=f"labels.{legacy_key}={env}", limit=1)
         if projects: return projects[0]["projectId"]
@@ -153,12 +155,21 @@ class GappSDK:
     def list_projects(self, wide: bool = False) -> dict:
         owner = self.get_owner()
         role_key = self.get_role_key()
-        filter_query = f"labels.keys:gapp-env*" if wide else f"labels.keys:{role_key}"
-        projects_data = self.provider.list_projects(filter_query=filter_query)
+        # We list all with role labels and filter client-side for reliability
+        projects_data = self.provider.list_projects()
+        
         projects = []
         for p in projects_data:
-            roles = {k: v for k, v in p.get("labels", {}).items() if k.startswith("gapp-env")}
-            if roles: projects.append({"id": p["projectId"], "roles": roles})
+            pid = p["projectId"]
+            labels = p.get("labels", {})
+            roles = {k: v for k, v in labels.items() if k.startswith("gapp-env")}
+            if not roles: continue
+            
+            if not wide and owner:
+                if role_key not in roles: continue
+            
+            projects.append({"id": pid, "roles": roles})
+            
         return {"projects": sorted(projects, key=lambda x: x["id"]), "owner": owner, "mode": "all" if wide else "scoped"}
 
     # -- Infrastructure Operations --
@@ -229,7 +240,7 @@ class GappSDK:
         ctx = self.resolve_full_context(name, env=env)
         if not ctx["name"]: return StatusResult(initialized=False, next_step=NextStep(action="init"))
         solution_name, project_id, repo_path = ctx["name"], ctx.get("project_id"), ctx.get("repo_path")
-        result = StatusResult(initialized=True, name=solution_name, repo_path=repo_path, deployment=DeploymentInfo(project=project_id, pending=True))
+        result = StatusResult(initialized=True, name=solution_name, repo_path=repo_path, deployment= DeploymentInfo(project=project_id, pending=True))
         if not project_id:
             result.next_step = NextStep(action="setup", hint=f"No GCP project attached for '{solution_name}' in '{env}'.")
             return result
@@ -253,26 +264,38 @@ class GappSDK:
 
     def list(self, wide: bool = False, project_limit: int = 50) -> dict:
         owner = self.get_owner()
-        label_filter = f"labels.keys:gapp_{owner}_*" if not wide and owner else "labels.keys:gapp-*,labels.keys:gapp_*"
-        projects_data = self.provider.list_projects(filter_query=label_filter, limit=project_limit)
-        gapp_projects = []
-        total_solutions = 0
-        is_global = not wide and not owner
+        # Fetch all projects and filter client-side due to gcloud filter reliability issues
+        projects_data = self.provider.list_projects(limit=project_limit)
+        
+        apps = []
+        is_global_mode = not wide and not owner
         for project in projects_data:
-            solutions = []
-            for key, value in project.get("labels", {}).items():
+            pid = project["projectId"]
+            for key, val in project.get("labels", {}).items():
                 if not key.startswith("gapp"): continue
+                app_info = {"name": None, "project": pid, "owner": "global", "env": "default", "version": "v-2"}
                 if key.startswith("gapp_"):
                     parts = key.split("_")
-                    l_owner, l_name = parts[1] if parts[1] else None, "_".join(parts[2:])
-                    if (is_global and l_owner is None) or (not wide and owner and l_owner == owner) or wide:
-                        solutions.append({"name": l_name, "instance": value, "label": key})
-                        total_solutions += 1
-                elif key.startswith("gapp-") and (is_global or wide):
-                    solutions.append({"name": key[len("gapp-"):], "instance": value, "label": key})
-                    total_solutions += 1
-            if solutions: gapp_projects.append({"id": project["projectId"], "solutions": sorted(solutions, key=lambda s: s["name"])})
-        return {"projects": gapp_projects, "total_projects": len(gapp_projects), "total_solutions": total_solutions, "limit_reached": len(projects_data) >= project_limit, "filter_mode": "all" if wide else (f"owner:{owner}" if owner else "global")}
+                    l_owner = parts[1] if parts[1] else "global"
+                    l_name = "_".join(parts[2:])
+                    if not wide and owner and l_owner != owner: continue
+                    if is_global_mode and l_owner != "global": continue
+                    v_parts = val.split("_")
+                    app_info.update({"name": l_name, "owner": l_owner, "version": v_parts[0]})
+                    for vp in v_parts:
+                        if vp.startswith("env-"): app_info["env"] = vp[4:]
+                elif key.startswith("gapp-"):
+                    if not wide and owner: continue
+                    app_info.update({"name": key[5:], "owner": "global", "env": val, "version": "legacy"})
+                else: continue
+                apps.append(app_info)
+
+        result = {"apps": sorted(apps, key=lambda x: x["name"]), "metadata": {"projects": {"count": len(projects_data), "limit": project_limit}, "apps": {"count": len(apps)}, "owner": owner}, "messages": [], "warnings": []}
+        if wide: result["messages"].append("Showing all apps across all namespaces.")
+        elif owner: result["messages"].append(f"Showing apps for owner '{owner}'. Use --all to see more.")
+        else: result["messages"].append("Showing global apps. Use --all to check for more.")
+        if len(projects_data) >= project_limit: result["warnings"].append(f"Project list limit reached ({project_limit}). Use --project-limit to increase.")
+        return result
 
     # -- Internal Helpers --
 
@@ -293,20 +316,9 @@ class GappSDK:
             build_dir, build_ep = _prepare_build_dir(repo_path, image, entrypoint)
             try: self.provider.submit_build_sync(project_id, Path(build_dir), image, build_ep)
             finally: shutil.rmtree(build_dir, ignore_errors=True)
-
         bucket_name = self.get_bucket_name(parent_solution or name, project_id)
         state_prefix = f"terraform/state/{name}" if parent_solution else "terraform/state"
-        
-        # Build tfvars ensuring custom_domain is null if empty
-        tfvars = _build_tfvars(
-            name, project_id, image, 
-            get_service_config(manifest), 
-            get_prerequisite_secrets(manifest), 
-            Path(repo_path) / service_path, 
-            get_public(manifest), 
-            get_domain(manifest)
-        )
-        
+        tfvars = _build_tfvars(name, project_id, image, get_service_config(manifest), get_prerequisite_secrets(manifest), Path(repo_path) / service_path, get_public(manifest), get_domain(manifest))
         outputs = self.provider.apply_infrastructure(staging_dir=_get_staging_dir(name), bucket_name=bucket_name, state_prefix=state_prefix, auto_approve=True, tfvars=tfvars)
         return {"name": name, "project_id": project_id, "image": image, "terraform_status": "applied", "service_url": outputs.get("service_url"), "env": env}
 
@@ -338,16 +350,12 @@ def _prepare_build_dir(path, image, ep):
 def _build_tfvars(name, pid, img, cfg, secrets, repo_path, public, domain):
     from gapp.admin.sdk.manifest import resolve_env_vars, get_env_vars, load_manifest
     env = dict(cfg.get("env", {}))
-    # Correct env var resolution by loading manifest from the specific repo_path
     manifest = load_manifest(repo_path)
     env_vars = get_env_vars(manifest)
     if env_vars:
         for e in resolve_env_vars(env_vars, {"SOLUTION_DATA_PATH": "/mnt/data", "SOLUTION_NAME": name}):
             if "value" in e: env[e["name"]] = e["value"]
-    
-    # Ensure domain is null if empty string or None to avoid Terraform validation errors
-    custom_domain = domain if domain and domain.strip() else None
-    
+    custom_domain = domain if domain and domain.strip() else ""
     return {"project_id": pid, "service_name": name, "image": img, "memory": cfg["memory"], "cpu": cfg["cpu"], "max_instances": cfg["max_instances"], "env": env, "secrets": {n.upper().replace("-", "_"): n for n in (secrets or {})}, "public": bool(public), "custom_domain": custom_domain}
 
 def _get_staging_dir(name):
