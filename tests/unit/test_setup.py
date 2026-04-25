@@ -62,8 +62,8 @@ def test_setup_with_env_scoping(tmp_path, monkeypatch, sdk):
     
     res = sdk.setup(project_id="test-proj-123", env="prod")
     
-    # env != 'default', so it should appear in the bucket name and label key
-    assert res["bucket"] == "gapp-my-app-test-proj-123-prod"
+    # env is no longer in the bucket name
+    assert res["bucket"] == "gapp-my-app-test-proj-123"
     assert res["env"] == "prod"
     assert "gapp__my-app_prod" in sdk.provider.project_labels["test-proj-123"]
     # Label value: v-2_env-prod

@@ -57,12 +57,13 @@ def test_label_key_generation(sdk):
 
 
 def test_bucket_name_generation(sdk):
-    """Verify bucket name follows deterministic rules."""
+    """Verify bucket name is Environment-Blind."""
     sdk.set_owner(None)
     assert sdk.get_bucket_name("my-app", "proj-123") == "gapp-my-app-proj-123"
     
     sdk.set_owner("owner-a")
-    assert sdk.get_bucket_name("my-app", "proj-123", env="prod") == "gapp-owner-a-my-app-proj-123-prod"
+    # env is ignored in bucket name now
+    assert sdk.get_bucket_name("my-app", "proj-123") == "gapp-owner-a-my-app-proj-123"
 
 
 def test_resolve_solution_from_cwd(tmp_path, monkeypatch, sdk):
@@ -73,7 +74,6 @@ def test_resolve_solution_from_cwd(tmp_path, monkeypatch, sdk):
     (repo / ".git").mkdir()
     monkeypatch.chdir(repo)
     
-    # sdk._get_git_root will find the repo via subprocess mock in conftest
     ctx = sdk.resolve_solution()
     assert ctx is not None
     assert ctx["name"] == "project-status"
