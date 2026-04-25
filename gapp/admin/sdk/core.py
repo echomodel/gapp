@@ -15,7 +15,7 @@ from gapp.admin.sdk.config import load_config, save_config, get_active_config
 from gapp.admin.sdk.manifest import (
     get_solution_name, load_manifest, save_manifest, get_required_apis,
     get_domain, get_entrypoint, get_name, get_paths,
-    get_prerequisite_secrets, get_service_config, resolve_env_vars, get_public
+    get_prerequisite_secrets, get_service_config, resolve_env_vars, get_public, get_env_vars
 )
 from gapp.admin.sdk.models import StatusResult, DeploymentInfo, NextStep, ServiceStatus, DomainStatus
 
@@ -211,8 +211,12 @@ class GappSDK:
 
         # Confirm Environment Safety
         labels = self.provider.get_project_labels(target_project)
-        if labels.get(self.get_label_key(solution_name, env=env)) != self.get_label_value(env):
-            raise RuntimeError(f"Project '{target_project}' is not designated for environment '{env}'.")
+        label_key = self.get_label_key(solution_name, env=env)
+        label_value = self.get_label_value(env)
+        if labels.get(label_key) != label_value:
+            legacy_key = f"gapp-{solution_name}".replace("_", "-").lower()
+            if labels.get(legacy_key) != env:
+                raise RuntimeError(f"Project '{target_project}' is not designated for environment '{env}'.")
 
         bucket_name = self.get_bucket_name(solution_name, target_project)
         if not self.provider.bucket_exists(target_project, bucket_name): raise RuntimeError(f"Foundation missing. Run 'gapp setup'")
@@ -289,9 +293,21 @@ class GappSDK:
             build_dir, build_ep = _prepare_build_dir(repo_path, image, entrypoint)
             try: self.provider.submit_build_sync(project_id, Path(build_dir), image, build_ep)
             finally: shutil.rmtree(build_dir, ignore_errors=True)
+
         bucket_name = self.get_bucket_name(parent_solution or name, project_id)
         state_prefix = f"terraform/state/{name}" if parent_solution else "terraform/state"
-        outputs = self.provider.apply_infrastructure(staging_dir=_get_staging_dir(name), bucket_name=bucket_name, state_prefix=state_prefix, auto_approve=True, tfvars=_build_tfvars(name, project_id, image, get_service_config(manifest), get_prerequisite_secrets(manifest), Path(repo_path), get_public(manifest), get_domain(manifest)))
+        
+        # Build tfvars ensuring custom_domain is null if empty
+        tfvars = _build_tfvars(
+            name, project_id, image, 
+            get_service_config(manifest), 
+            get_prerequisite_secrets(manifest), 
+            Path(repo_path) / service_path, 
+            get_public(manifest), 
+            get_domain(manifest)
+        )
+        
+        outputs = self.provider.apply_infrastructure(staging_dir=_get_staging_dir(name), bucket_name=bucket_name, state_prefix=state_prefix, auto_approve=True, tfvars=tfvars)
         return {"name": name, "project_id": project_id, "image": image, "terraform_status": "applied", "service_url": outputs.get("service_url"), "env": env}
 
     def _get_git_root(self) -> Optional[Path]:
@@ -320,14 +336,19 @@ def _prepare_build_dir(path, image, ep):
     return d, ep
 
 def _build_tfvars(name, pid, img, cfg, secrets, repo_path, public, domain):
-    from gapp.admin.sdk.manifest import resolve_env_vars, get_env_vars
+    from gapp.admin.sdk.manifest import resolve_env_vars, get_env_vars, load_manifest
     env = dict(cfg.get("env", {}))
+    # Correct env var resolution by loading manifest from the specific repo_path
     manifest = load_manifest(repo_path)
     env_vars = get_env_vars(manifest)
     if env_vars:
         for e in resolve_env_vars(env_vars, {"SOLUTION_DATA_PATH": "/mnt/data", "SOLUTION_NAME": name}):
             if "value" in e: env[e["name"]] = e["value"]
-    return {"project_id": pid, "service_name": name, "image": img, "memory": cfg["memory"], "cpu": cfg["cpu"], "max_instances": cfg["max_instances"], "env": env, "secrets": {n.upper().replace("-", "_"): n for n in (secrets or {})}, "public": bool(public), "custom_domain": domain}
+    
+    # Ensure domain is null if empty string or None to avoid Terraform validation errors
+    custom_domain = domain if domain and domain.strip() else None
+    
+    return {"project_id": pid, "service_name": name, "image": img, "memory": cfg["memory"], "cpu": cfg["cpu"], "max_instances": cfg["max_instances"], "env": env, "secrets": {n.upper().replace("-", "_"): n for n in (secrets or {})}, "public": bool(public), "custom_domain": custom_domain}
 
 def _get_staging_dir(name):
     return Path(os.environ.get("XDG_CACHE_HOME", os.path.expanduser("~/.cache"))) / "gapp" / name / "terraform"
