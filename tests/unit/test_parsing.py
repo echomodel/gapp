@@ -20,20 +20,15 @@ def test_parsing_new_underscore_labels(sdk):
     
     sdk.set_owner(None)
     res = sdk.list(wide=True)
+    apps = res["apps"]
     
-    # Extract solutions from results
-    solutions = []
-    for p in res["projects"]:
-        solutions.extend(p["solutions"])
+    assert apps[0]["name"] == "my-app"
+    assert apps[0]["env"] == "prod"
+    assert apps[0]["owner"] == "global"
     
-    # Sort for consistent assertion
-    solutions.sort(key=lambda s: s["name"])
-    
-    assert solutions[0]["name"] == "my-app"
-    assert solutions[0]["instance"] == "v-2_env-prod"
-    
-    assert solutions[1]["name"] == "status"
-    assert solutions[1]["label"] == "gapp_owner-a_status"
+    assert apps[1]["name"] == "status"
+    assert apps[1]["env"] == "dev"
+    assert apps[1]["owner"] == "owner-a"
 
 
 def test_parsing_forward_compatibility(sdk):
@@ -42,10 +37,11 @@ def test_parsing_forward_compatibility(sdk):
     sdk.provider.project_labels["p1"] = {"gapp__my-app": "v-2_env-prod_region-us-central1_team-alpha"}
     
     res = sdk.list(wide=True)
-    sol = res["projects"][0]["solutions"][0]
+    app = res["apps"][0]
     
-    assert sol["name"] == "my-app"
-    assert sol["instance"] == "v-2_env-prod_region-us-central1_team-alpha"
+    assert app["name"] == "my-app"
+    assert app["version"] == "v-2"
+    assert app["env"] == "prod"
 
 
 def test_parsing_with_hyphens(sdk):
@@ -54,7 +50,7 @@ def test_parsing_with_hyphens(sdk):
     
     sdk.set_owner("owner-a")
     res = sdk.list()
-    sol = res["projects"][0]["solutions"][0]
+    app = res["apps"][0]
     
-    assert sol["name"] == "multi-word-app"
-    assert sol["label"] == "gapp_owner-a_multi-word-app"
+    assert app["name"] == "multi-word-app"
+    assert app["owner"] == "owner-a"

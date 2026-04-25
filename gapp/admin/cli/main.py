@@ -169,7 +169,7 @@ def init(sdk: GappSDK):
         raise SystemExit(1)
 
     click.echo()
-    click.echo(f"  Initialized gapp solution: {result['name']}")
+    click.echo(f"  Initialized gapp app: {result['name']}")
     click.echo(f"    gapp.yaml {result['manifest_status']} \u2713")
     click.echo(f"    GitHub topic 'gapp-solution' {result['topic_status']} \u2713")
     click.echo()
@@ -250,7 +250,7 @@ def status(sdk: GappSDK):
     """Infrastructure health check."""
     try:
         result = sdk.status()
-        click.echo(f"Solution: {result.name}")
+        click.echo(f"App:      {result.name}")
         if result.deployment.project:
             click.echo(f"Project:  {result.deployment.project}")
         
@@ -272,20 +272,32 @@ def status(sdk: GappSDK):
 
 
 @main.command("list")
-@click.option("--all", "wide", is_flag=True, help="Show all solutions.")
+@click.option("--all", "wide", is_flag=True, help="Show all apps across all namespaces.")
 @click.option("--project-limit", default=50, help="Max projects to scan.")
 @click.pass_obj
 def list_cmd(sdk: GappSDK, wide, project_limit):
-    """List solutions from GCP labels."""
-    results = sdk.list(wide=wide, project_limit=project_limit)
-    click.echo(f"\nSolutions (Filter: {results['filter_mode'].upper()}, Limit: {project_limit}):")
-    if not results["projects"]:
-        click.echo("  No solutions found.")
+    """List deployed apps from GCP labels."""
+    res = sdk.list(wide=wide, project_limit=project_limit)
+    
+    # Print messages
+    for msg in res["messages"]:
+        click.echo(msg)
+    
+    if not res["apps"]:
+        click.echo("\n  No apps found.")
     else:
-        for p in results["projects"]:
-            for sol in p["solutions"]:
-                click.echo(f"  {sol['name']} (project: {p['id']})")
-    click.echo(f"\nTotal: {results['total_solutions']} solutions across {results['total_projects']} projects.")
+        # Table Header
+        header = f"\n  {'App':<20} {'Project':<20} {'Owner':<15} {'Env':<10} {'Version':<10}"
+        click.echo(header)
+        click.echo("  " + "-" * (len(header) - 2))
+        
+        for app in res["apps"]:
+            click.echo(f"  {app['name']:<20} {app['project']:<20} {app['owner']:<15} {app['env']:<10} {app['version']:<10}")
+            
+    # Summary & Warnings
+    click.echo(f"\nSummary: {res['metadata']['apps']['count']} apps across {res['metadata']['projects']['count']} projects.")
+    for warn in res["warnings"]:
+        click.echo(click.style(f"WARNING: {warn}", fg="yellow"))
 
 
 def cli_entry():
