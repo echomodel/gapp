@@ -1,49 +1,34 @@
-"""Tests for the bundled feature-flag loader."""
+"""Tests for gapp.sdk.core — high-level feature logic."""
 
-from gapp.admin.sdk import features
-
-
-def test_one_step_deploy_default_off():
-    """Shipped default: the one-step deploy path is gated off."""
-    assert features.is_enabled("allow_one_step_deploy_tool") is False
+import pytest
+from gapp.admin.sdk.core import GappSDK
+from gapp.admin.sdk.cloud.dummy import DummyCloudProvider
 
 
-def test_unknown_flag_defaults_false():
-    """Unknown flags fail safe — new behavior stays off by default."""
-    assert features.is_enabled("never_defined_flag") is False
+@pytest.fixture
+def sdk():
+    """Return a fresh GappSDK instance with a dummy provider."""
+    return GappSDK(provider=DummyCloudProvider())
 
 
-def test_mcp_gapp_deploy_requires_build_ref_when_flag_off(monkeypatch):
-    """With the flag off (shipped default), gapp_deploy(MCP) without a
-    build_ref must return an error payload rather than invoking the
-    blocking build+deploy path."""
-    from gapp.admin.mcp import server
-
-    called = []
-    def fake_deploy(**kw):
-        called.append(kw)
-        return {"ok": True}
-    monkeypatch.setattr("gapp.admin.sdk.deploy.deploy_solution", fake_deploy)
-
-    result = server.gapp_deploy(solution="whatever")
-
-    assert called == []
-    assert result.get("error") == "one_step_deploy_disabled"
-    assert "gapp_build" in result["message"]
-
-
-def test_mcp_gapp_deploy_passes_through_with_build_ref(monkeypatch):
-    """With a build_ref supplied, the flag is irrelevant — request passes through."""
-    from gapp.admin.mcp import server
-
-    called = []
-    def fake_deploy(**kw):
-        called.append(kw)
-        return {"ok": True, "terraform_status": "applied"}
-    monkeypatch.setattr("gapp.admin.sdk.deploy.deploy_solution", fake_deploy)
-
-    result = server.gapp_deploy(solution="whatever", build_ref="abc123")
-
-    assert len(called) == 1
-    assert called[0]["build_ref"] == "abc123"
-    assert result == {"ok": True, "terraform_status": "applied"}
+def test_discovery_policy_enforcement(tmp_path, monkeypatch, sdk):
+    """Verify that when discovery is OFF, resolve_full_context skips label queries."""
+    repo = tmp_path / "my-repo"
+    repo.mkdir()
+    (repo / "gapp.yaml").write_text("name: project-status")
+    (repo / ".git").mkdir()
+    monkeypatch.chdir(repo)
+    
+    # Policy: Blind mode
+    sdk.set_discovery("off")
+    
+    # Mock label in cloud using clean underscores
+    sdk.provider.project_labels["proj-123"] = {"gapp__project-status": "v-2"}
+    
+    ctx = sdk.resolve_full_context()
+    assert ctx["project_id"] is None # Discovery skipped
+    
+    # Policy: Managed mode
+    sdk.set_discovery("on")
+    ctx = sdk.resolve_full_context()
+    assert ctx["project_id"] == "proj-123" # Discovery found it

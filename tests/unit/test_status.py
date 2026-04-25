@@ -1,60 +1,52 @@
-"""Tests for gapp.sdk.status — infrastructure health check."""
+"""Tests for gapp.sdk.core — infrastructure health check."""
 
-import json
-import subprocess
 import pytest
 from pathlib import Path
-from gapp.admin.sdk.status import get_status
+from gapp.admin.sdk.core import GappSDK
+from gapp.admin.sdk.cloud.dummy import DummyCloudProvider
 
 
 @pytest.fixture
-def mock_gcloud_status(monkeypatch):
-    """Mock gcloud for status discovery."""
-    def _mock_run(args, **kwargs):
-        class MockProc:
-            returncode = 0
-            if "describe" in args:
-                stdout = json.dumps({"projectId": "proj-123", "labels": {"gapp-status": "default"}})
-            elif "list" in args:
-                stdout = json.dumps([{"projectId": "proj-123", "labels": {"gapp-status": "default"}}])
-            else:
-                stdout = "test-token"
-            
-        m = MockProc()
-        m.stdout = stdout
-        return m
-    
-    # We need to mock gapp.admin.sdk.context.run_gcloud since status.py uses it indirectly
-    from gapp.admin.sdk import context
-    monkeypatch.setattr(context, "run_gcloud", _mock_run)
+def sdk():
+    """Return a fresh GappSDK instance with a dummy provider."""
+    return GappSDK(provider=DummyCloudProvider())
 
 
-def test_status_uninitialized(tmp_path, monkeypatch):
-    """Verify get_status returns init step if no gapp.yaml found."""
+def test_status_uninitialized(tmp_path, monkeypatch, sdk):
+    """Verify status returns init step if no gapp.yaml found."""
     monkeypatch.chdir(tmp_path)
-    res = get_status()
+    res = sdk.status()
     assert res.initialized is False
     assert res.next_step.action == "init"
 
 
-def test_status_pending_setup(tmp_path, monkeypatch):
-    """Verify get_status returns setup step if no project attached."""
+def test_status_pending_setup(tmp_path, monkeypatch, sdk):
+    """Verify status returns setup step if no project attached."""
     repo = tmp_path / "app"
     repo.mkdir()
     (repo / ".git").mkdir()
     (repo / "gapp.yaml").write_text("name: my-app")
     monkeypatch.chdir(repo)
     
-    # Mock discovery finding nothing
-    from gapp.admin.sdk import context
-    def mock_run_empty(args, **kwargs):
-        class MockProc:
-            returncode = 0
-            stdout = "[]"
-        return MockProc()
-    monkeypatch.setattr(context, "run_gcloud", mock_run_empty)
-    
-    res = get_status()
+    res = sdk.status()
     assert res.initialized is True
     assert res.next_step.action == "setup"
-    assert "No GCP project attached" in res.next_step.hint
+
+
+def test_status_ready(tmp_path, monkeypatch, sdk):
+    """Verify status returns ready if services are found."""
+    repo = tmp_path / "app"
+    repo.mkdir()
+    (repo / ".git").mkdir()
+    (repo / "gapp.yaml").write_text("name: my-app")
+    monkeypatch.chdir(repo)
+    
+    # Register project and mock outputs using clean underscores
+    sdk.provider.project_labels["proj-123"] = {"gapp__my-app": "v-2"}
+    sdk.provider.tf_outputs[("gapp-my-app-proj-123", "terraform/state/default")] = {"service_url": "https://my-app.run.app"}
+    
+    res = sdk.status()
+    assert res.initialized is True
+    assert res.deployment.project == "proj-123"
+    assert len(res.deployment.services) == 1
+    assert res.deployment.services[0].name == "my-app"

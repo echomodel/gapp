@@ -32,14 +32,6 @@ def isolate_config(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def enable_mock_provider(monkeypatch):
-    """Force all tests to use the DummyCloudProvider and reset it for each test."""
-    monkeypatch.setenv("GAPP_MOCK_PROVIDER", "true")
-    from gapp.admin.sdk.cloud import reset_provider
-    reset_provider()
-
-
-@pytest.fixture(autouse=True)
 def mock_git(monkeypatch):
     """Mock git calls to return the current CWD as the git root."""
     orig_run = subprocess.run
