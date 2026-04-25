@@ -24,7 +24,6 @@ def config_group(sdk: GappSDK):
     """View or set workstation configuration."""
     if click.get_current_context().invoked_subcommand is None:
         profile = sdk.get_active_profile()
-        cfg = sdk.provider.get_active_config() # wait this is sdk.get_active_config
         from gapp.admin.sdk.config import get_active_config
         cfg = get_active_config()
         
@@ -57,12 +56,18 @@ def config_account(sdk: GappSDK, email):
 
 @config_group.command("owner")
 @click.argument("name", required=False)
+@click.option("--unset", is_flag=True, help="Clear the current owner setting.")
 @click.pass_obj
-def config_owner(sdk: GappSDK, name):
+def config_owner(sdk: GappSDK, name, unset):
     """View or set the global app owner for project labels."""
+    if unset:
+        sdk.set_owner(None)
+        click.echo("  App owner cleared.")
+        return
+
     if name is not None:
         sdk.set_owner(name)
-        click.echo(f"  App owner set to: {name or '(none)'}")
+        click.echo(f"  App owner set to: {name}")
     else:
         current = sdk.get_owner()
         if current:
@@ -105,6 +110,49 @@ def config_profile(sdk: GappSDK, name, list_profiles):
         click.echo(f"  Switched to profile: {name}")
     else:
         click.echo(sdk.get_active_profile())
+
+
+# -- gapp projects --
+
+@main.group("projects")
+def projects_group():
+    """Manage GCP project environment roles."""
+    pass
+
+
+@projects_group.command("set-env")
+@click.argument("project_id")
+@click.option("--env", default="default", help="Environment name (default, prod, dev).")
+@click.pass_obj
+def projects_set_env(sdk: GappSDK, project_id, env):
+    """Designate a project's environment role."""
+    owner = sdk.get_owner()
+    owner_str = f"owner: {owner}" if owner else "global namespace"
+    click.echo(f"Targeting {owner_str}")
+    
+    status = sdk.set_project_env(project_id, env=env)
+    if status == "exists":
+        click.echo(f"  Project {project_id} is already designated as '{env}'.")
+    else:
+        click.echo(f"  Project {project_id} now designated as '{env}'.")
+
+
+@projects_group.command("list")
+@click.option("--all", "wide", is_flag=True, help="Show all project designations.")
+@click.pass_obj
+def projects_list(sdk: GappSDK, wide):
+    """List projects with environment roles."""
+    res = sdk.list_projects(wide=wide)
+    owner_str = f"owner: {res['owner']}" if res['owner'] else "global namespace"
+    click.echo(f"\nProject Inventory ({owner_str}, mode: {res['mode'].upper()}):")
+    
+    if not res["projects"]:
+        click.echo("  No project designations found.")
+    else:
+        for p in res["projects"]:
+            roles_str = ", ".join([f"{k}={v}" for k, v in p["roles"].items()])
+            click.echo(f"  {p['id']} [{roles_str}]")
+    click.echo()
 
 
 # -- gapp init/setup/deploy --
@@ -193,16 +241,41 @@ def deploy(sdk: GappSDK, ref, solution, env, project, dry_run):
         click.echo()
         return
 
-    # Actual output (truncated for brevity here, logic same as before)
     click.echo("  Deployed successfully.")
 
 
+@main.command()
+@click.pass_obj
+def status(sdk: GappSDK):
+    """Infrastructure health check."""
+    try:
+        result = sdk.status()
+        click.echo(f"Solution: {result.name}")
+        if result.deployment.project:
+            click.echo(f"Project:  {result.deployment.project}")
+        
+        click.echo(f"Status:   {'READY' if not result.deployment.pending else 'PENDING'}")
+        
+        if result.deployment.services:
+            for s in result.deployment.services:
+                click.echo(f"  Service: {s.name}")
+                click.echo(f"  URL:     {s.url}")
+                click.echo(f"  Healthy: {'\u2713' if s.healthy else 'X'}")
+        
+        if result.next_step:
+            click.echo(f"\nNext Step: {result.next_step.action}")
+            if result.next_step.hint:
+                click.echo(f"  {result.next_step.hint}")
+
+    except Exception as e:
+        click.echo(f"  Error: {e}", err=True)
+
+
 @main.command("list")
-@click.option("--available", is_flag=True, help="Include remote solutions.")
 @click.option("--all", "wide", is_flag=True, help="Show all solutions.")
 @click.option("--project-limit", default=50, help="Max projects to scan.")
 @click.pass_obj
-def list_cmd(sdk: GappSDK, available, wide, project_limit):
+def list_cmd(sdk: GappSDK, wide, project_limit):
     """List solutions from GCP labels."""
     results = sdk.list(wide=wide, project_limit=project_limit)
     click.echo(f"\nSolutions (Filter: {results['filter_mode'].upper()}, Limit: {project_limit}):")

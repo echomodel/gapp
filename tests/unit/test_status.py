@@ -43,7 +43,9 @@ def test_status_ready(tmp_path, monkeypatch, sdk):
     
     # Register project and mock outputs using clean underscores
     sdk.provider.project_labels["proj-123"] = {"gapp__my-app": "v-2"}
-    sdk.provider.tf_outputs[("gapp-my-app-proj-123", "terraform/state/default")] = {"service_url": "https://my-app.run.app"}
+    
+    # Bucket and state paths are now environment-blind
+    sdk.provider.tf_outputs[("gapp-my-app-proj-123", "terraform/state")] = {"service_url": "https://my-app.run.app"}
     
     res = sdk.status()
     assert res.initialized is True

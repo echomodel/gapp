@@ -73,19 +73,21 @@ class GappSDK:
 
     # -- Naming Logic --
 
-    def get_bucket_name(self, solution_name: str, project_id: str, env: str = "default") -> str:
-        owner = self.get_owner()
+    def get_bucket_name(self, solution_name: str, project_id: str) -> str:
+        """Bucket name is Environment-Blind. Isolation is handled by project_id."""
+        owner = self._resolve_effective_owner(project_id, solution_name)
         parts = ["gapp"]
         if owner: parts.append(owner)
         parts.append(solution_name)
         parts.append(project_id)
-        if env != "default": parts.append(env)
         return "-".join(parts).lower()
 
     def get_label_key(self, solution_name: str, env: str = "default") -> str:
+        """Label key includes the env suffix for unique identification."""
         owner = self.get_owner()
         parts = ["gapp", owner if owner else "", solution_name]
-        if env != "default": parts.append(env)
+        if env != "default":
+            parts.append(env)
         return "_".join(parts).lower()
 
     def get_label_value(self, env: str = "default") -> str:
@@ -93,12 +95,15 @@ class GappSDK:
         if env != "default": value += f"_env-{env}"
         return value
 
+    def get_role_key(self) -> str:
+        owner = self.get_owner()
+        return f"gapp-env_{owner}" if owner else "gapp-env"
+
     # -- Context Resolution --
 
     def resolve_solution(self, name: str | None = None) -> dict | None:
         if name:
             return {"name": name, "project_id": None, "repo_path": None}
-
         git_root = self._get_git_root()
         if git_root and (git_root / "gapp.yaml").is_file():
             manifest = load_manifest(git_root)
@@ -115,8 +120,9 @@ class GappSDK:
 
         result = {**ctx, "github_repo": None, "owner": self.get_owner()}
         if not result.get("project_id") and self.is_discovery_on():
-            result["project_id"] = self.discover_project_from_label(result["name"], env=env)
-
+            pid = self.discover_project_from_label(result["name"], env=env)
+            if not pid: pid = self._discover_project_from_role(env=env)
+            result["project_id"] = pid
         return result
 
     def discover_project_from_label(self, solution_name: str, env: str = "default") -> Optional[str]:
@@ -124,75 +130,93 @@ class GappSDK:
         label_value = self.get_label_value(env)
         projects = self.provider.list_projects(filter_query=f"labels.{label_key}={label_value}", limit=1)
         if projects: return projects[0]["projectId"]
-
         legacy_key = f"gapp-{solution_name}".replace("_", "-").lower()
-        if legacy_key != label_key:
-            projects = self.provider.list_projects(filter_query=f"labels.{legacy_key}={env}", limit=1)
-            if projects: return projects[0]["projectId"]
+        projects = self.provider.list_projects(filter_query=f"labels.{legacy_key}={env}", limit=1)
+        if projects: return projects[0]["projectId"]
         return None
+
+    def _discover_project_from_role(self, env: str = "default") -> Optional[str]:
+        projects = self.provider.list_projects(filter_query=f"labels.{self.get_role_key()}={env}", limit=1)
+        if projects: return projects[0]["projectId"]
+        return None
+
+    # -- Fleet Operations --
+
+    def set_project_env(self, project_id: str, env: str = "default") -> str:
+        key = self.get_role_key()
+        labels = self.provider.get_project_labels(project_id)
+        if labels.get(key) == env: return "exists"
+        labels[key] = env
+        self.provider.set_project_labels(project_id, labels)
+        return "updated"
+
+    def list_projects(self, wide: bool = False) -> dict:
+        owner = self.get_owner()
+        role_key = self.get_role_key()
+        filter_query = f"labels.keys:gapp-env*" if wide else f"labels.keys:{role_key}"
+        projects_data = self.provider.list_projects(filter_query=filter_query)
+        projects = []
+        for p in projects_data:
+            roles = {k: v for k, v in p.get("labels", {}).items() if k.startswith("gapp-env")}
+            if roles: projects.append({"id": p["projectId"], "roles": roles})
+        return {"projects": sorted(projects, key=lambda x: x["id"]), "owner": owner, "mode": "all" if wide else "scoped"}
 
     # -- Infrastructure Operations --
 
     def setup(self, project_id: Optional[str] = None, solution: Optional[str] = None, env: str = "default") -> dict:
         ctx = self.resolve_solution(solution)
         if not ctx: raise RuntimeError("Not inside a gapp solution.")
-        
         solution_name = ctx["name"]
-        target_project = project_id or os.environ.get("GOOGLE_CLOUD_PROJECT")
-        if not target_project:
-            target_project = self.discover_project_from_label(solution_name, env=env)
-        if not target_project: raise RuntimeError("No GCP project specified or discovered.")
+        target_project = project_id
+        if not target_project and self.is_discovery_on():
+            target_project = self.discover_project_from_label(solution_name, env=env) or self._discover_project_from_role(env=env)
+        if not target_project: raise RuntimeError("No project specified or discovered.")
 
         repo_path = Path(ctx["repo_path"]) if ctx.get("repo_path") else None
         manifest = load_manifest(repo_path) if repo_path else {}
         for api in ["run.googleapis.com", "secretmanager.googleapis.com", "artifactregistry.googleapis.com", "cloudbuild.googleapis.com"] + get_required_apis(manifest):
             self.provider.enable_api(target_project, api)
 
-        bucket_name = self.get_bucket_name(solution_name, target_project, env=env)
+        bucket_name = self.get_bucket_name(solution_name, target_project)
         bucket_status = "exists" if self.provider.bucket_exists(target_project, bucket_name) else "created"
         if bucket_status == "created": self.provider.create_bucket(target_project, bucket_name)
 
         self.provider.ensure_build_permissions(target_project)
-        label_key = self.get_label_key(solution_name, env=env)
-        label_value = self.get_label_value(env)
+        label_key, label_value = self.get_label_key(solution_name, env=env), self.get_label_value(env)
         labels = self.provider.get_project_labels(target_project)
-        label_status = "exists" if labels.get(label_key) == label_value else "added"
-        if label_status == "added":
+        if labels.get(label_key) != label_value:
             labels[label_key] = label_value
             self.provider.set_project_labels(target_project, labels)
-
+            label_status = "added"
+        else: label_status = "exists"
         return {"name": solution_name, "project_id": target_project, "env": env, "bucket": bucket_name, "bucket_status": bucket_status, "label_status": label_status}
 
     def deploy(self, ref: Optional[str] = None, solution: Optional[str] = None, env: str = "default", dry_run: bool = False, project_id: Optional[str] = None) -> dict:
         ctx = self.resolve_full_context(solution, env=env)
-        solution_name = ctx["name"]
-        target_project = project_id or ctx["project_id"]
+        solution_name, target_project = ctx["name"], project_id or ctx["project_id"]
         repo_path = Path(ctx["repo_path"]) if ctx.get("repo_path") else None
-
         if not solution_name: raise RuntimeError("Could not determine solution name.")
         
-        preview = {
-            "name": solution_name, "owner": self.get_owner(), "env": env, "project_id": target_project, 
-            "label": self.get_label_key(solution_name, env=env),
-            "bucket": self.get_bucket_name(solution_name, target_project, env=env) if target_project else None,
-            "repo_path": str(repo_path) if repo_path else None,
-            "status": "ready" if target_project and repo_path else "pending_setup",
-            "services": []
-        }
-
+        preview = {"name": solution_name, "owner": self.get_owner(), "env": env, "project_id": target_project, "label": self.get_label_key(solution_name, env=env), "bucket": self.get_bucket_name(solution_name, target_project) if target_project else None, "repo_path": str(repo_path) if repo_path else None, "status": "ready" if target_project and repo_path else "pending_setup", "services": []}
         if repo_path:
             manifest = load_manifest(repo_path)
-            paths = get_paths(manifest)
-            if paths:
+            if paths := get_paths(manifest):
                 for p in paths:
-                    sub_manifest = load_manifest(repo_path / p) if (repo_path / p).is_dir() else {}
-                    preview["services"].append({"name": get_name(sub_manifest) or f"{solution_name}-{p.replace('/', '-')}", "path": p})
-            else:
-                preview["services"].append({"name": solution_name, "path": "."})
+                    sub_m = load_manifest(repo_path / p) if (repo_path / p).is_dir() else {}
+                    preview["services"].append({"name": get_name(sub_m) or f"{solution_name}-{p.replace('/', '-')}", "path": p})
+            else: preview["services"].append({"name": solution_name, "path": "."})
 
         if dry_run: return {**preview, "dry_run": True}
         if not target_project: raise RuntimeError(f"No GCP project resolved for '{solution_name}'.")
 
+        # Confirm Environment Safety
+        labels = self.provider.get_project_labels(target_project)
+        if labels.get(self.get_label_key(solution_name, env=env)) != self.get_label_value(env):
+            raise RuntimeError(f"Project '{target_project}' is not designated for environment '{env}'.")
+
+        bucket_name = self.get_bucket_name(solution_name, target_project)
+        if not self.provider.bucket_exists(target_project, bucket_name): raise RuntimeError(f"Foundation missing. Run 'gapp setup'")
+        
         if paths := get_paths(load_manifest(repo_path)):
             return {"services": [self._deploy_single_service(s["name"], target_project, repo_path, load_manifest(repo_path / s["path"]), service_path=s["path"], env=env, parent_solution=solution_name) for s in preview["services"]]}
         return self._deploy_single_service(solution_name, target_project, repo_path, load_manifest(repo_path), env=env)
@@ -200,28 +224,23 @@ class GappSDK:
     def status(self, name: str | None = None, env: str = "default") -> StatusResult:
         ctx = self.resolve_full_context(name, env=env)
         if not ctx["name"]: return StatusResult(initialized=False, next_step=NextStep(action="init"))
-
         solution_name, project_id, repo_path = ctx["name"], ctx.get("project_id"), ctx.get("repo_path")
         result = StatusResult(initialized=True, name=solution_name, repo_path=repo_path, deployment=DeploymentInfo(project=project_id, pending=True))
-
         if not project_id:
-            result.next_step = NextStep(action="setup", hint=f"No GCP project attached for solution '{solution_name}' in env '{env}'.")
+            result.next_step = NextStep(action="setup", hint=f"No GCP project attached for '{solution_name}' in '{env}'.")
             return result
-
         services_to_check = []
         if repo_path:
             manifest = load_manifest(Path(repo_path))
-            paths = get_paths(manifest)
-            if paths:
+            if paths := get_paths(manifest):
                 for p in paths:
-                    sub_manifest = load_manifest(Path(repo_path) / p) if (Path(repo_path) / p).is_dir() else {}
-                    services_to_check.append({"name": get_name(sub_manifest) or f"{solution_name}-{p.replace('/', '-')}", "is_workspace": True})
+                    sub_m = load_manifest(Path(repo_path) / p) if (Path(repo_path) / p).is_dir() else {}
+                    services_to_check.append({"name": get_name(sub_m) or f"{solution_name}-{p.replace('/', '-')}", "is_workspace": True})
             else: services_to_check.append({"name": solution_name, "is_workspace": False})
         else: services_to_check.append({"name": solution_name, "is_workspace": False})
-
         for svc in services_to_check:
-            bucket_name = self.get_bucket_name(solution_name, project_id, env=env)
-            state_prefix = f"terraform/state/{env}/{svc['name']}" if svc["is_workspace"] else f"terraform/state/{env}"
+            bucket_name = self.get_bucket_name(solution_name, project_id)
+            state_prefix = f"terraform/state/{svc['name']}" if svc["is_workspace"] else "terraform/state"
             outputs = self.provider.get_infrastructure_outputs(_get_staging_dir(svc["name"]), bucket_name, state_prefix)
             if outputs and (url := outputs.get("service_url")):
                 result.deployment.services.append(ServiceStatus(name=svc["name"], url=url, healthy=self.provider.check_http_health(url)))
@@ -232,32 +251,33 @@ class GappSDK:
         owner = self.get_owner()
         label_filter = f"labels.keys:gapp_{owner}_*" if not wide and owner else "labels.keys:gapp-*,labels.keys:gapp_*"
         projects_data = self.provider.list_projects(filter_query=label_filter, limit=project_limit)
-        
         gapp_projects = []
         total_solutions = 0
         is_global = not wide and not owner
-        
         for project in projects_data:
             solutions = []
             for key, value in project.get("labels", {}).items():
                 if not key.startswith("gapp"): continue
                 if key.startswith("gapp_"):
                     parts = key.split("_")
-                    l_owner = parts[1] if parts[1] else None
-                    l_name = "_".join(parts[2:])
+                    l_owner, l_name = parts[1] if parts[1] else None, "_".join(parts[2:])
                     if (is_global and l_owner is None) or (not wide and owner and l_owner == owner) or wide:
                         solutions.append({"name": l_name, "instance": value, "label": key})
                         total_solutions += 1
                 elif key.startswith("gapp-") and (is_global or wide):
                     solutions.append({"name": key[len("gapp-"):], "instance": value, "label": key})
                     total_solutions += 1
-
-            if solutions:
-                gapp_projects.append({"id": project["projectId"], "solutions": sorted(solutions, key=lambda s: s["name"])})
-
+            if solutions: gapp_projects.append({"id": project["projectId"], "solutions": sorted(solutions, key=lambda s: s["name"])})
         return {"projects": gapp_projects, "total_projects": len(gapp_projects), "total_solutions": total_solutions, "limit_reached": len(projects_data) >= project_limit, "filter_mode": "all" if wide else (f"owner:{owner}" if owner else "global")}
 
     # -- Internal Helpers --
+
+    def _resolve_effective_owner(self, project_id: str, solution_name: str) -> Optional[str]:
+        labels = self.provider.get_project_labels(project_id)
+        owner = self.get_owner()
+        if owner and f"gapp_{owner}_{solution_name}" in labels: return owner
+        if f"gapp__{solution_name}" in labels or f"gapp-{solution_name}".replace("_", "-").lower() in labels: return None
+        return owner
 
     def _deploy_single_service(self, name, project_id, repo_path, manifest, service_path=".", env="default", parent_solution=None):
         service_root = repo_path / service_path
@@ -265,22 +285,13 @@ class GappSDK:
         sha = self._resolve_ref(repo_path, "HEAD")
         self.provider.ensure_artifact_registry(project_id, "us-central1")
         image = f"us-central1-docker.pkg.dev/{project_id}/gapp/{name}:{sha}"
-        
         if not self.provider.image_exists(project_id, "us-central1", name, sha):
             build_dir, build_ep = _prepare_build_dir(repo_path, image, entrypoint)
             try: self.provider.submit_build_sync(project_id, Path(build_dir), image, build_ep)
             finally: shutil.rmtree(build_dir, ignore_errors=True)
-
-        bucket_owner = parent_solution or name
-        bucket_name = self.get_bucket_name(bucket_owner, project_id, env=env)
-        state_prefix = f"terraform/state/{env}/{name}" if parent_solution else f"terraform/state/{env}"
-        
-        from gapp.admin.sdk.manifest import get_env_vars
-        outputs = self.provider.apply_infrastructure(
-            staging_dir=_get_staging_dir(name), bucket_name=bucket_name,
-            state_prefix=state_prefix, auto_approve=True, 
-            tfvars=_build_tfvars(name, project_id, image, get_service_config(manifest), get_prerequisite_secrets(manifest), get_env_vars(manifest), get_public(manifest), get_domain(manifest))
-        )
+        bucket_name = self.get_bucket_name(parent_solution or name, project_id)
+        state_prefix = f"terraform/state/{name}" if parent_solution else "terraform/state"
+        outputs = self.provider.apply_infrastructure(staging_dir=_get_staging_dir(name), bucket_name=bucket_name, state_prefix=state_prefix, auto_approve=True, tfvars=_build_tfvars(name, project_id, image, get_service_config(manifest), get_prerequisite_secrets(manifest), Path(repo_path), get_public(manifest), get_domain(manifest)))
         return {"name": name, "project_id": project_id, "image": image, "terraform_status": "applied", "service_url": outputs.get("service_url"), "env": env}
 
     def _get_git_root(self) -> Optional[Path]:
@@ -308,9 +319,11 @@ def _prepare_build_dir(path, image, ep):
     if ep != "__dockerfile__": shutil.copy2(t / "Dockerfile", Path(d) / "Dockerfile")
     return d, ep
 
-def _build_tfvars(name, pid, img, cfg, secrets, env_vars, public, domain):
-    from gapp.admin.sdk.manifest import resolve_env_vars
+def _build_tfvars(name, pid, img, cfg, secrets, repo_path, public, domain):
+    from gapp.admin.sdk.manifest import resolve_env_vars, get_env_vars
     env = dict(cfg.get("env", {}))
+    manifest = load_manifest(repo_path)
+    env_vars = get_env_vars(manifest)
     if env_vars:
         for e in resolve_env_vars(env_vars, {"SOLUTION_DATA_PATH": "/mnt/data", "SOLUTION_NAME": name}):
             if "value" in e: env[e["name"]] = e["value"]
