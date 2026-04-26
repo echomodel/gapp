@@ -360,26 +360,29 @@ def gapp_projects_clear_env(project_id: str) -> dict:
 
 
 @_tool()
-def gapp_projects_list(wide: bool = False) -> dict:
+def gapp_projects_list() -> dict:
     """List GCP projects that have a gapp-env binding.
 
-    Args:
-        wide: Reserved. There is no owner-scoping for gapp-env in v-3.
+    No owner scoping — gapp-env is a single project-wide label with no owner
+    segment, so the same set is returned regardless of the active owner.
     """
     from gapp.admin.sdk.core import GappSDK
-    return GappSDK().list_target_projects(wide=wide)
+    return GappSDK().list_target_projects()
 
 
 @_tool()
-def gapp_list(wide: bool = False, project_limit: int = 50) -> dict:
+def gapp_list(all_owners: bool = False, project_limit: int = 50) -> dict:
     """List deployed gapp solutions discovered via GCP project labels.
 
     Args:
-        wide: Show all apps across all owner namespaces (not just the active owner).
+        all_owners: When False (default), scope listing to the active owner
+            namespace (or global apps if no owner is configured). When True,
+            return apps across every owner namespace. Maps to the CLI flag
+            `--all` on `gapp list`.
         project_limit: Max projects to scan (default 50).
     """
     from gapp.admin.sdk.core import GappSDK
-    return GappSDK().list_apps(wide=wide, project_limit=project_limit)
+    return GappSDK().list_apps(all_owners=all_owners, project_limit=project_limit)
 
 
 def main():

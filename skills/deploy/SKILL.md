@@ -345,9 +345,9 @@ needs a GCP project. Help them pick one and run `gapp_setup`.
 
 ### Discovering existing projects
 
-Call `gapp_list(wide=True)` to see every gapp solution the user
-already has deployed across all projects, regardless of owner
-namespace. Look at the results:
+Call `gapp_list(all_owners=True)` (CLI: `gapp list --all`) to see
+every gapp solution the user already has deployed across all
+projects, regardless of owner namespace. Look at the results:
 
 1. **Solution already appears in the list** — it's already
    deployed somewhere. Recommend attaching to that project:
@@ -372,8 +372,10 @@ solutions deployed onto it inherit.
 
 - **Setup never writes `gapp-env`** — only
   `gapp_projects_set_env` does.
-- A project with no env binding is "undefined-env" — addressable
-  only by `--project`, not by `--env`.
+- A project with no `gapp-env` label has no env binding —
+  addressable only by `--project` / `project_id=...`, not by
+  `--env` / `env=...`. `gapp list` displays its env as
+  `<undefined>`.
 - For multi-env users (dev/staging/prod), bind each project once:
   `gapp_projects_set_env(project_id="prod-proj", env="prod")`.
   Then `gapp_setup` and `gapp_deploy(env="prod")` resolve via
@@ -565,14 +567,14 @@ uses `git archive HEAD` for source integrity.
 
 ### List and discover
 
-- `gapp_list` — solutions in the active owner namespace
-- `gapp_list(wide=True)` — every gapp solution across all owner namespaces
-- `gapp_projects_list` — projects with `gapp-env` bindings
+- `gapp_list` — solutions in the active owner namespace (CLI: `gapp list`)
+- `gapp_list(all_owners=True)` — every gapp solution across all owner namespaces (CLI: `gapp list --all`)
+- `gapp_projects_list` — projects with `gapp-env` bindings (CLI: `gapp projects list`)
 
 ### Manage env bindings
 
 - `gapp_projects_set_env(project_id, env)` — bind a project to an env (idempotent if same value; requires `force=True` to overwrite)
-- `gapp_projects_clear_env(project_id)` — remove the binding (project becomes undefined-env)
+- `gapp_projects_clear_env(project_id)` — remove the binding (the project's env becomes `<undefined>` again)
 
 ## MCP Tools Reference
 
@@ -593,7 +595,7 @@ workflow as needed:
 | `gapp_ci_trigger` | Trigger GitHub Actions deploy |
 | `gapp_ci_status` | CI/CD readiness check |
 | `gapp_status` | Infrastructure health check (local, fast) |
-| `gapp_list` | List deployed solutions in the active owner namespace; `wide=True` for all owners |
+| `gapp_list` | List deployed solutions in the active owner namespace; `all_owners=True` for every namespace |
 | `gapp_projects_list` | List GCP projects with `gapp-env` bindings |
 | `gapp_projects_set_env` | Bind a project to a named env (writes `gapp-env`); `force=True` to overwrite |
 | `gapp_projects_clear_env` | Remove a project's `gapp-env` binding |

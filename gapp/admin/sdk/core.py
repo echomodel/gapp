@@ -384,11 +384,11 @@ class GappSDK:
 
     # -- Fleet listing --
 
-    def list_target_projects(self, wide: bool = False) -> dict:
+    def list_target_projects(self) -> dict:
         """List GCP projects with a gapp-env label.
 
-        wide=False: just projects with gapp-env (project-wide env binding).
-        wide=True: same — there's no owner-scoping for gapp-env in v-3.
+        gapp-env is a single project-wide label with no owner segment, so this
+        returns the same set regardless of the active owner. No filtering knob.
         """
         projects_data = self.provider.list_projects(
             filter_query=f"labels:{PROJECT_ENV_LABEL}"
@@ -405,17 +405,25 @@ class GappSDK:
             "owner": self.get_owner(),
         }
 
-    def list_apps(self, wide: bool = False, project_limit: int = 50) -> dict:
+    def list_apps(self, all_owners: bool = False, project_limit: int = 50) -> dict:
         """List deployed apps via project labels.
 
+        Args:
+            all_owners: When False (default), scope listing to the active
+                owner namespace (or global if no owner is set). When True,
+                ignore the active owner and return apps across every owner
+                namespace. Backs the CLI flag `--all`.
+            project_limit: Max projects to scan in one call.
+
         Returns one entry per (project × solution-label). Solution labels are
-        env-blind; env comes from the project's gapp-env label (or None for
-        undefined). Contract major is parsed from the value.
+        env-blind; env comes from the project's gapp-env label (or None when
+        the project has no env binding). Contract major is parsed from the
+        value.
         """
         owner = self.get_owner()
-        is_global_mode = not wide and not owner
+        is_global_mode = not all_owners and not owner
 
-        if wide:
+        if all_owners:
             filter_query = "labels:gapp*"
         elif owner:
             filter_query = f"labels:gapp_{owner}_*"
@@ -435,7 +443,7 @@ class GappSDK:
                 app = self._parse_app_label(key, val, pid, project_env)
                 if app is None:
                     continue
-                if not wide and owner and app["owner"] != owner:
+                if not all_owners and owner and app["owner"] != owner:
                     continue
                 if is_global_mode and app["owner"] != "global":
                     continue
@@ -466,8 +474,8 @@ class GappSDK:
             "messages": [],
             "warnings": [],
         }
-        if wide:
-            result["messages"].append("Showing all apps across all namespaces.")
+        if all_owners:
+            result["messages"].append("Showing apps across all owner namespaces.")
         elif owner:
             result["messages"].append(f"Showing apps for owner '{owner}'. Use --all to check for more.")
         else:

@@ -27,7 +27,7 @@ def test_parsing_owned_and_global(sdk):
     }
 
     sdk.set_owner(None)
-    res = sdk.list_apps(wide=True)
+    res = sdk.list_apps(all_owners=True)
     apps = res["apps"]
 
     by_name = {a["name"]: a for a in apps}
@@ -47,7 +47,7 @@ def test_parsing_undefined_env(sdk):
     sdk.provider.project_labels["p1"] = {"gapp__my-app": "v-3"}
 
     sdk.set_owner(None)
-    res = sdk.list_apps(wide=True)
+    res = sdk.list_apps(all_owners=True)
     app = res["apps"][0]
 
     assert app["name"] == "my-app"
@@ -62,7 +62,7 @@ def test_parsing_forward_compatibility(sdk):
         "gapp__my-app": "v-9",
     }
 
-    res = sdk.list_apps(wide=True)
+    res = sdk.list_apps(all_owners=True)
     app = res["apps"][0]
 
     assert app["name"] == "my-app"
@@ -90,7 +90,7 @@ def test_parsing_legacy_label(sdk):
     sdk.provider.project_labels["p1"] = {"gapp-old-app": "default"}
 
     sdk.set_owner(None)
-    res = sdk.list_apps(wide=True)
+    res = sdk.list_apps(all_owners=True)
     app = res["apps"][0]
 
     assert app["name"] == "old-app"

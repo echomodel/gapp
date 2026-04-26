@@ -149,11 +149,14 @@ def projects_clear_env(sdk: GappSDK, project_id):
 
 
 @projects_group.command("list")
-@click.option("--all", "wide", is_flag=True, help="Show all projects with env bindings.")
 @click.pass_obj
-def projects_list(sdk: GappSDK, wide):
-    """List GCP projects with gapp-env bindings."""
-    res = sdk.list_target_projects(wide=wide)
+def projects_list(sdk: GappSDK):
+    """List GCP projects with gapp-env bindings.
+
+    The gapp-env label has no owner segment, so listing is owner-agnostic —
+    every owner sees the same set. There is no --all flag here.
+    """
+    res = sdk.list_target_projects()
     owner_str = f"owner: {res['owner']}" if res["owner"] else GLOBAL_OWNER_DISPLAY
     click.echo(f"\nProject Inventory ({owner_str}):")
     if not res["projects"]:
@@ -279,12 +282,22 @@ def status(sdk: GappSDK, env):
 
 
 @main.command("list")
-@click.option("--all", "wide", is_flag=True, help="Show all apps across all namespaces.")
+@click.option(
+    "--all",
+    "all_owners",
+    is_flag=True,
+    help="Include apps from every owner namespace, not just the active owner.",
+)
 @click.option("--project-limit", default=50, help="Max projects to scan.")
 @click.pass_obj
-def list_cmd(sdk: GappSDK, wide, project_limit):
-    """List deployed apps from GCP labels."""
-    res = sdk.list_apps(wide=wide, project_limit=project_limit)
+def list_cmd(sdk: GappSDK, all_owners, project_limit):
+    """List deployed apps from GCP labels.
+
+    Without --all, listing is scoped to the active owner namespace (or to
+    global apps when no owner is configured). --all overrides that scope
+    and shows apps across every owner namespace.
+    """
+    res = sdk.list_apps(all_owners=all_owners, project_limit=project_limit)
 
     for msg in res["messages"]:
         click.echo(msg)

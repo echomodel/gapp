@@ -19,7 +19,7 @@ def test_list_apps_from_labels(sdk):
         "gapp_owner-a_status": "v-3",
     }
 
-    res = sdk.list_apps(wide=True)
+    res = sdk.list_apps(all_owners=True)
     apps = res["apps"]
 
     assert len(apps) == 3
@@ -54,7 +54,7 @@ def test_list_apps_with_limit_reached(sdk):
     sdk.provider.project_labels["p2"] = {"gapp__app2": "v-3"}
     sdk.provider.project_labels["p3"] = {"gapp__app3": "v-3"}
 
-    res = sdk.list_apps(project_limit=2, wide=True)
+    res = sdk.list_apps(project_limit=2, all_owners=True)
     assert any("limit reached" in w for w in res["warnings"])
 
 
