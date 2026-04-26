@@ -341,36 +341,67 @@ If the user wants to proceed and there's no `gapp.yaml`:
 ## Phase 2: GCP Foundation
 
 If `gapp_status` shows `deployment.project` is null, the user
-needs a GCP project. Call `gapp_deployments_list` to discover
-available projects.
+needs a GCP project. Help them pick one and run `gapp_setup`.
 
-The response has:
-- `default` — project ID with the most gapp solutions (the
-  primary gapp project)
-- `projects` — all GCP projects with gapp solutions, each
-  listing its deployed solutions with instance names
+### Discovering existing projects
 
-Present the results:
+Call `gapp_list(wide=True)` to see every gapp solution the user
+already has deployed across all projects, regardless of owner
+namespace. Look at the results:
 
-1. If the solution appears in a project's solutions list, it's
-   already deployed there. Recommend that project:
+1. **Solution already appears in the list** — it's already
+   deployed somewhere. Recommend attaching to that project:
 
    > This solution is already deployed to project `<id>`.
    > Want to attach to that?
 
-2. If not deployed anywhere but `default` exists, recommend it:
+2. **Solution not listed but other solutions share a project** —
+   recommend reusing that project:
 
    > Your other solutions (X, Y) are deployed to project
-   > `<default>`. Want to use the same one?
+   > `<id>`. Want to use the same one?
 
-3. If no projects found at all, ask the user to provide a
-   project ID or create one in the Google Cloud Console.
+3. **No prior deployments** — ask the user to provide a project
+   ID or create one in the Google Cloud Console.
 
-Once confirmed, call `gapp_setup(project_id="the-project-id")`.
+### Project env binding (the v-3 model)
 
-This enables APIs, creates a per-solution GCS bucket for Terraform
-state, and labels the project. The project ID is remembered for
-future commands.
+In v-3, **env is a property of the project, not the solution**.
+A project carries a single `gapp-env=<env>` label that all
+solutions deployed onto it inherit.
+
+- **Setup never writes `gapp-env`** — only
+  `gapp_projects_set_env` does.
+- A project with no env binding is "undefined-env" — addressable
+  only by `--project`, not by `--env`.
+- For multi-env users (dev/staging/prod), bind each project once:
+  `gapp_projects_set_env(project_id="prod-proj", env="prod")`.
+  Then `gapp_setup` and `gapp_deploy(env="prod")` resolve via
+  discovery without needing `--project`.
+- `gapp_projects_list` shows all projects with env bindings.
+- Reserved env names (`default`) are rejected.
+
+If the user wants env-targeted addressing later, bind the project
+before or after setup — order doesn't matter, the binding is just
+a label on the project.
+
+### Running setup
+
+Call `gapp_setup(project_id="the-project-id")`. For first-time
+install on a project, `project_id` is required (no labels exist
+to discover from). Subsequent runs are idempotent — discovery
+finds the existing project automatically.
+
+If a different owner already has a solution with the same name
+on the target project, setup refuses with a Layer-1 cross-owner
+warning. Pass `force=True` only if intentional — bucket and
+Cloud Run service names are owner-blind, so two owners with the
+same solution name share resources.
+
+Setup enables APIs, creates a per-solution GCS bucket for
+Terraform state, and writes the solution label
+(`gapp_<owner>_<solution>=v-N`, or `gapp__<solution>=v-N` for
+global mode). The project ID is remembered for future commands.
 
 ## Phase 3: Secrets
 
@@ -389,32 +420,27 @@ Two paths — present both and let the user choose:
 
 Requires `terraform` and `gcloud` locally.
 
-**Always use the async build + deploy flow.** This gives the
-user visibility into build progress instead of blocking silently
-for minutes.
+Call `gapp_deploy()` — this builds the image (Cloud Build) and
+applies Terraform in a single blocking call. When finished,
+returns the service URL.
 
-1. `gapp_build` — submits Cloud Build and returns immediately
-   with a `build_id`. The image builds remotely while the agent
-   can do other work (check secrets, review config, etc.).
-2. `gapp_deploy(build_ref=<build_id>)` — polls the build status.
-   Keep `build_check_timeout` short (10-30s) so the user sees
-   progress updates. If the build is still running, returns
-   `"status": "running"` with the same `build_ref` and log
-   progress — call again to keep polling. When done, runs
-   Terraform and returns the service URL.
+If the user has bound projects to envs, pass `env="prod"` (or
+the appropriate name) to disambiguate when the same solution is
+deployed to multiple projects:
 
-**Do not use long timeouts.** The point of the async flow is to
-report back frequently. Use 10-30s so each poll returns quickly
-with updated log lines and status. The user should see build
-progress, not a spinner.
+```
+gapp_deploy(env="prod")
+```
 
-**Fallback: blocking deploy.** `gapp_deploy` with no `build_ref`
-does a full blocking build + terraform in one call. Avoid this —
-it blocks with no progress feedback.
+Or override with an explicit project ID:
 
-Both paths require a clean git tree — uncommitted changes block
-the build. The build is skipped if the image for the current
-commit already exists.
+```
+gapp_deploy(project_id="my-prod-project")
+```
+
+Requires a clean git tree — uncommitted changes block the build.
+The build is skipped if the image for the current commit SHA
+already exists.
 
 ### Path B: CI/CD (recommended for ongoing use)
 
@@ -531,7 +557,7 @@ migrate, reorganize, or back up data before the redeploy.
 
 After confirming data compatibility (or for code-only changes):
 
-- **Path A:** `gapp_build` then `gapp_deploy(build_ref=...)` — rebuilds if the commit SHA changed
+- **Path A:** `gapp_deploy()` — rebuilds if the commit SHA changed, applies Terraform
 - **Path B:** `gapp_ci_trigger` — dispatches GitHub Actions
 
 Remind the user: uncommitted changes won't be included. The build
@@ -539,8 +565,14 @@ uses `git archive HEAD` for source integrity.
 
 ### List and discover
 
-- `gapp_list` — all registered solutions
-- `gapp_list(available=True)` — include remote GitHub solutions
+- `gapp_list` — solutions in the active owner namespace
+- `gapp_list(wide=True)` — every gapp solution across all owner namespaces
+- `gapp_projects_list` — projects with `gapp-env` bindings
+
+### Manage env bindings
+
+- `gapp_projects_set_env(project_id, env)` — bind a project to an env (idempotent if same value; requires `force=True` to overwrite)
+- `gapp_projects_clear_env(project_id)` — remove the binding (project becomes undefined-env)
 
 ## MCP Tools Reference
 
@@ -550,9 +582,8 @@ workflow as needed:
 | Tool | Purpose |
 |------|---------|
 | `gapp_init` | Initialize a solution (create gapp.yaml, register, GitHub topic) |
-| `gapp_setup` | GCP foundation (APIs, bucket, labels) |
-| `gapp_build` | Submit async Cloud Build, returns build_id |
-| `gapp_deploy` | Poll build + Terraform apply (use with build_ref) |
+| `gapp_setup` | GCP foundation (APIs, bucket, solution label). Accepts `force` to bypass Layer-1 cross-owner check. |
+| `gapp_deploy` | Build (Cloud Build) + Terraform apply, blocking. Accepts `env` and `project_id`. |
 | `gapp_schema` | Live gapp.yaml JSON Schema |
 | `gapp_secret_list` | List declared secrets and their state in Secret Manager |
 | `gapp_secret_set` | Store a secret value in Secret Manager (labeled gapp-solution=<name>) |
@@ -562,8 +593,10 @@ workflow as needed:
 | `gapp_ci_trigger` | Trigger GitHub Actions deploy |
 | `gapp_ci_status` | CI/CD readiness check |
 | `gapp_status` | Infrastructure health check (local, fast) |
-| `gapp_deployments_list` | Discover GCP projects with gapp solutions |
-| `gapp_list` | List registered solutions |
+| `gapp_list` | List deployed solutions in the active owner namespace; `wide=True` for all owners |
+| `gapp_projects_list` | List GCP projects with `gapp-env` bindings |
+| `gapp_projects_set_env` | Bind a project to a named env (writes `gapp-env`); `force=True` to overwrite |
+| `gapp_projects_clear_env` | Remove a project's `gapp-env` binding |
 
 ## Important Reminders
 
