@@ -41,10 +41,13 @@ def test_status_ready(tmp_path, monkeypatch, sdk):
     (repo / "gapp.yaml").write_text("name: my-app")
     monkeypatch.chdir(repo)
     
-    # Register project and mock outputs using clean underscores
-    sdk.provider.project_labels["proj-123"] = {"gapp__my-app": "v-2"}
-    
-    # Bucket and state paths are now environment-blind
+    # Register project (env-blind label, optional gapp-env)
+    sdk.provider.project_labels["proj-123"] = {
+        "gapp-env": "prod",
+        "gapp__my-app": "v-3",
+    }
+
+    # Bucket name: gapp-{solution}-{project_id} — owner-blind, env-blind
     sdk.provider.tf_outputs[("gapp-my-app-proj-123", "terraform/state")] = {"service_url": "https://my-app.run.app"}
     
     res = sdk.status()

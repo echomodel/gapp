@@ -1,4 +1,9 @@
-"""Tests for gapp project discovery fallbacks and role roles."""
+"""Tests for project resolution from solution labels.
+
+Discovery in v-3 is solution-label-driven, not env-label-driven. The query
+is `labels:gapp_<owner>_<solution>` (or `labels:gapp__<solution>` for global)
+and the project's gapp-env is read from the same response.
+"""
 
 import pytest
 from gapp.admin.sdk.core import GappSDK
@@ -10,46 +15,139 @@ def sdk():
     return GappSDK(provider=DummyCloudProvider())
 
 
-def test_discovery_fallback_to_global_role(sdk):
-    """Verify setup finds project via global gapp-env label."""
+def test_resolve_single_match(sdk):
+    """One project hosting the solution → resolves to it."""
     sdk.set_owner(None)
-    sdk.provider.project_labels["proj-default"] = {"gapp-env": "default"}
-    
-    # We use a solution name that has no direct label
-    ctx = sdk.resolve_full_context(solution="new-app", env="default")
-    assert ctx["project_id"] == "proj-default"
+    sdk.provider.project_labels["proj-1"] = {
+        "gapp-env": "prod",
+        "gapp__my-app": "v-3",
+    }
+
+    res = sdk.resolve_project_for_solution("my-app")
+    assert res["project_id"] == "proj-1"
+    assert res["env"] == "prod"
 
 
-def test_discovery_fallback_to_scoped_role(sdk):
-    """Verify setup finds project via owner-scoped gapp-env label."""
-    sdk.set_owner("kris")
-    # Global role exists but should be ignored if scoped role matches
-    sdk.provider.project_labels["proj-global"] = {"gapp-env": "default"}
-    sdk.provider.project_labels["proj-kris"] = {"gapp-env_kris": "default"}
-    
-    ctx = sdk.resolve_full_context(solution="new-app", env="default")
-    assert ctx["project_id"] == "proj-kris"
-
-
-def test_discovery_env_specific_role(sdk):
-    """Verify setup finds the right project for the requested environment."""
+def test_resolve_zero_matches_raises(sdk):
+    """No project hosting the solution → error."""
     sdk.set_owner(None)
-    sdk.provider.project_labels["proj-dev"] = {"gapp-env": "dev"}
-    sdk.provider.project_labels["proj-prod"] = {"gapp-env": "prod"}
-    
-    ctx = sdk.resolve_full_context(solution="app", env="dev")
-    assert ctx["project_id"] == "proj-dev"
-    
-    ctx = sdk.resolve_full_context(solution="app", env="prod")
-    assert ctx["project_id"] == "proj-prod"
+    with pytest.raises(RuntimeError, match="not deployed"):
+        sdk.resolve_project_for_solution("my-app")
 
 
-def test_discovery_precedence_app_over_role(sdk):
-    """Verify app-specific label takes precedence over project role label."""
+def test_resolve_multi_match_no_env_raises(sdk):
+    """Multiple projects, no --env → ambiguous, list candidates."""
     sdk.set_owner(None)
-    # Role designates proj-1, but app specifically claims proj-2
-    sdk.provider.project_labels["proj-1"] = {"gapp-env": "default"}
-    sdk.provider.project_labels["proj-2"] = {"gapp__my-app": "v-2"}
-    
-    ctx = sdk.resolve_full_context(solution="my-app", env="default")
-    assert ctx["project_id"] == "proj-2"
+    sdk.provider.project_labels["proj-1"] = {
+        "gapp-env": "prod",
+        "gapp__my-app": "v-3",
+    }
+    sdk.provider.project_labels["proj-2"] = {
+        "gapp-env": "dev",
+        "gapp__my-app": "v-3",
+    }
+
+    with pytest.raises(RuntimeError, match="multiple projects"):
+        sdk.resolve_project_for_solution("my-app")
+
+
+def test_resolve_multi_match_env_narrows_to_one(sdk):
+    """Multiple projects, --env narrows to exactly one → resolved."""
+    sdk.set_owner(None)
+    sdk.provider.project_labels["proj-1"] = {
+        "gapp-env": "prod",
+        "gapp__my-app": "v-3",
+    }
+    sdk.provider.project_labels["proj-2"] = {
+        "gapp-env": "dev",
+        "gapp__my-app": "v-3",
+    }
+
+    res = sdk.resolve_project_for_solution("my-app", env="prod")
+    assert res["project_id"] == "proj-1"
+
+
+def test_resolve_multi_match_env_zero_after_filter(sdk):
+    """--env that matches none of the candidates → error listing what we DO have."""
+    sdk.set_owner(None)
+    sdk.provider.project_labels["proj-1"] = {
+        "gapp-env": "prod",
+        "gapp__my-app": "v-3",
+    }
+    sdk.provider.project_labels["proj-2"] = {
+        "gapp-env": "dev",
+        "gapp__my-app": "v-3",
+    }
+
+    with pytest.raises(RuntimeError, match="not found in env='staging'"):
+        sdk.resolve_project_for_solution("my-app", env="staging")
+
+
+def test_resolve_multi_match_same_env_corruption(sdk):
+    """Multiple projects in the same named env → corruption refusal."""
+    sdk.set_owner(None)
+    sdk.provider.project_labels["proj-1"] = {
+        "gapp-env": "prod",
+        "gapp__my-app": "v-3",
+    }
+    sdk.provider.project_labels["proj-2"] = {
+        "gapp-env": "prod",
+        "gapp__my-app": "v-3",
+    }
+
+    with pytest.raises(RuntimeError, match="corruption"):
+        sdk.resolve_project_for_solution("my-app", env="prod")
+
+
+def test_resolve_owner_namespacing(sdk):
+    """alice's solution and bob's solution with same name don't collide."""
+    sdk.provider.project_labels["proj-alice"] = {
+        "gapp-env": "prod",
+        "gapp_alice_my-app": "v-3",
+    }
+    sdk.provider.project_labels["proj-bob"] = {
+        "gapp-env": "dev",
+        "gapp_bob_my-app": "v-3",
+    }
+
+    sdk.set_owner("alice")
+    res = sdk.resolve_project_for_solution("my-app")
+    assert res["project_id"] == "proj-alice"
+
+    sdk.set_owner("bob")
+    res = sdk.resolve_project_for_solution("my-app")
+    assert res["project_id"] == "proj-bob"
+
+
+def test_resolve_explicit_project_bypasses_discovery(sdk):
+    """--project bypasses solution-label discovery; just verifies state."""
+    sdk.set_owner(None)
+    sdk.provider.project_labels["proj-1"] = {
+        "gapp-env": "prod",
+        "gapp__my-app": "v-3",
+    }
+
+    res = sdk.resolve_project_for_solution("my-app", project="proj-1")
+    assert res["project_id"] == "proj-1"
+    assert res["env"] == "prod"
+
+
+def test_resolve_explicit_project_env_mismatch_refuses(sdk):
+    """--project with --env that doesn't match P's gapp-env → refuse."""
+    sdk.set_owner(None)
+    sdk.provider.project_labels["proj-1"] = {
+        "gapp-env": "prod",
+        "gapp__my-app": "v-3",
+    }
+
+    with pytest.raises(RuntimeError, match="bound to env='prod'"):
+        sdk.resolve_project_for_solution("my-app", project="proj-1", env="dev")
+
+
+def test_resolve_discovery_off_requires_project(sdk):
+    """If discovery is off, the resolver requires --project."""
+    sdk.set_discovery("off")
+    sdk.provider.project_labels["proj-1"] = {"gapp__my-app": "v-3"}
+
+    with pytest.raises(RuntimeError, match="Discovery is OFF"):
+        sdk.resolve_project_for_solution("my-app")

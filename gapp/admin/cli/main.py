@@ -5,7 +5,9 @@ import sys
 import click
 
 from gapp import __version__
-from gapp.admin.sdk.core import GappSDK
+from gapp.admin.sdk.core import (
+    GappSDK, UNDEFINED_ENV_DISPLAY, GLOBAL_OWNER_DISPLAY,
+)
 
 
 @click.group()
@@ -26,7 +28,6 @@ def config_group(sdk: GappSDK):
         profile = sdk.get_active_profile()
         from gapp.admin.sdk.config import get_active_config
         cfg = get_active_config()
-        
         click.echo(f"Active Profile: {profile}")
         click.echo("Settings:")
         click.echo(f"  gcloud account: {cfg.get('account', '(none)')}")
@@ -48,10 +49,7 @@ def config_account(sdk: GappSDK, email):
             raise SystemExit(1)
     else:
         current = sdk.get_account()
-        if current:
-            click.echo(current)
-        else:
-            click.echo("No gcloud account configured.")
+        click.echo(current if current else "No gcloud account configured.")
 
 
 @config_group.command("owner")
@@ -64,16 +62,12 @@ def config_owner(sdk: GappSDK, name, unset):
         sdk.set_owner(None)
         click.echo("  App owner cleared.")
         return
-
     if name is not None:
         sdk.set_owner(name)
         click.echo(f"  App owner set to: {name}")
     else:
         current = sdk.get_owner()
-        if current:
-            click.echo(current)
-        else:
-            click.echo("No app owner configured.")
+        click.echo(current if current else "No app owner configured.")
 
 
 @config_group.command("discovery")
@@ -85,8 +79,7 @@ def config_discovery(sdk: GappSDK, state):
         sdk.set_discovery(state)
         click.echo(f"  Discovery turned {state.upper()}")
     else:
-        current = "on" if sdk.is_discovery_on() else "off"
-        click.echo(current)
+        click.echo("on" if sdk.is_discovery_on() else "off")
 
 
 @config_group.command("profile")
@@ -104,7 +97,6 @@ def config_profile(sdk: GappSDK, name, list_profiles):
             prefix = "* " if p == active else "  "
             click.echo(f"{prefix}{p}")
         return
-
     if name:
         sdk.set_active_profile(name)
         click.echo(f"  Switched to profile: {name}")
@@ -116,42 +108,59 @@ def config_profile(sdk: GappSDK, name, list_profiles):
 
 @main.group("projects")
 def projects_group():
-    """Manage GCP project environment roles."""
+    """Manage GCP project env bindings."""
     pass
 
 
 @projects_group.command("set-env")
 @click.argument("project_id")
-@click.option("--env", default="default", help="Environment name (default, prod, dev).")
+@click.argument("env")
+@click.option("--force", is_flag=True, help="Overwrite an existing gapp-env value.")
 @click.pass_obj
-def projects_set_env(sdk: GappSDK, project_id, env):
-    """Designate a project's environment role."""
-    owner = sdk.get_owner()
-    owner_str = f"owner: {owner}" if owner else "global namespace"
-    click.echo(f"Targeting {owner_str}")
-    
-    status = sdk.set_project_env(project_id, env=env)
-    if status == "exists":
-        click.echo(f"  Project {project_id} is already designated as '{env}'.")
+def projects_set_env(sdk: GappSDK, project_id, env, force):
+    """Bind a GCP project to a named env (writes the gapp-env label)."""
+    try:
+        res = sdk.set_project_env(project_id, env=env, force=force)
+    except (RuntimeError, ValueError) as e:
+        click.echo(f"  Error: {e}", err=True)
+        raise SystemExit(1)
+    if res["status"] == "exists":
+        click.echo(f"  Project {project_id} is already bound to env='{res['env']}'.")
+    elif res["status"] == "added":
+        click.echo(f"  Project {project_id} bound to env='{res['env']}'.")
     else:
-        click.echo(f"  Project {project_id} now designated as '{env}'.")
+        click.echo(f"  Project {project_id} env changed: '{res.get('previous')}' → '{res['env']}'.")
+
+
+@projects_group.command("clear-env")
+@click.argument("project_id")
+@click.pass_obj
+def projects_clear_env(sdk: GappSDK, project_id):
+    """Remove the gapp-env label from a project (becomes undefined)."""
+    try:
+        res = sdk.clear_project_env(project_id)
+    except RuntimeError as e:
+        click.echo(f"  Error: {e}", err=True)
+        raise SystemExit(1)
+    if res["status"] == "absent":
+        click.echo(f"  Project {project_id} had no env binding.")
+    else:
+        click.echo(f"  Project {project_id} env binding removed (was '{res['previous']}').")
 
 
 @projects_group.command("list")
-@click.option("--all", "wide", is_flag=True, help="Show all project designations.")
+@click.option("--all", "wide", is_flag=True, help="Show all projects with env bindings.")
 @click.pass_obj
 def projects_list(sdk: GappSDK, wide):
-    """List projects with environment roles."""
+    """List GCP projects with gapp-env bindings."""
     res = sdk.list_target_projects(wide=wide)
-    owner_str = f"owner: {res['owner']}" if res['owner'] else "global namespace"
-    click.echo(f"\nProject Inventory ({owner_str}, mode: {res['mode'].upper()}):")
-    
+    owner_str = f"owner: {res['owner']}" if res["owner"] else GLOBAL_OWNER_DISPLAY
+    click.echo(f"\nProject Inventory ({owner_str}):")
     if not res["projects"]:
-        click.echo("  No project designations found.")
+        click.echo("  No projects with env bindings found.")
     else:
         for p in res["projects"]:
-            roles_str = ", ".join([f"{k}={v}" for k, v in p["roles"].items()])
-            click.echo(f"  {p['id']} [{roles_str}]")
+            click.echo(f"  {p['id']} (env={p['env']})")
     click.echo()
 
 
@@ -167,46 +176,47 @@ def init(sdk: GappSDK):
     except RuntimeError as e:
         click.echo(f"  Error: {e}", err=True)
         raise SystemExit(1)
-
     click.echo()
     click.echo(f"  Initialized gapp app: {result['name']}")
-    click.echo(f"    gapp.yaml {result['manifest_status']} \u2713")
-    click.echo(f"    GitHub topic 'gapp-solution' {result['topic_status']} \u2713")
+    click.echo(f"    gapp.yaml {result['manifest_status']} ✓")
+    click.echo(f"    GitHub topic 'gapp-solution' {result['topic_status']} ✓")
     click.echo()
     click.echo("  No GCP project attached yet.")
-    click.echo("  Next: gapp setup <project-id>")
+    click.echo("  Next: gapp setup --project <project-id>")
 
 
 @main.command("setup")
 @click.argument("project_id", required=False)
 @click.option("--solution", default=None, help="Solution name.")
-@click.option("--env", default="default", help="Environment name.")
+@click.option("--env", default=None, help="Verify project's gapp-env matches.")
 @click.option("--project", "project_arg", help="Explicit GCP Project ID.")
+@click.option("--force", is_flag=True, help="Override Layer-1 cross-owner check.")
 @click.pass_obj
-def setup_cmd(sdk: GappSDK, project_id, solution, env, project_arg):
+def setup_cmd(sdk: GappSDK, project_id, solution, env, project_arg, force):
     """GCP foundation: enable APIs, create solution bucket, label project."""
     pid = project_arg or project_id
     try:
-        result = sdk.setup(pid, solution=solution, env=env)
-    except RuntimeError as e:
+        result = sdk.setup(pid, solution=solution, env=env, force=force)
+    except (RuntimeError, ValueError) as e:
         click.echo(f"  Error: {e}", err=True)
         raise SystemExit(1)
 
+    env_str = result["env"] or UNDEFINED_ENV_DISPLAY
     click.echo()
-    click.echo(f"  {result['name']} (env: {result['env']}) → {result['project_id']}")
+    click.echo(f"  {result['name']} (env: {env_str}) → {result['project_id']}")
     click.echo()
     if result["apis"]:
         for api in result["apis"]:
-            click.echo(f"    API {api} enabled \u2713")
-    click.echo(f"    Bucket gs://{result['bucket']} {result['bucket_status']} \u2713")
-    click.echo(f"    Project label {result['project_id']} {result['label_status']} \u2713")
+            click.echo(f"    API {api} enabled ✓")
+    click.echo(f"    Bucket gs://{result['bucket']} {result['bucket_status']} ✓")
+    click.echo(f"    Project label {result['project_id']} {result['label_status']} ✓")
     click.echo()
 
 
 @main.command()
 @click.option("--ref", default=None, help="Git ref to deploy.")
 @click.option("--solution", default=None, help="Solution name.")
-@click.option("--env", default="default", help="Target environment.")
+@click.option("--env", default=None, help="Verify project's gapp-env matches.")
 @click.option("--project", help="Explicit GCP Project ID override.")
 @click.option("--dry-run", is_flag=True, help="Preview deployment.")
 @click.pass_obj
@@ -214,21 +224,21 @@ def deploy(sdk: GappSDK, ref, solution, env, project, dry_run):
     """Build + terraform apply."""
     try:
         result = sdk.deploy(ref=ref, solution=solution, env=env, dry_run=dry_run, project_id=project)
-    except RuntimeError as e:
+    except (RuntimeError, ValueError) as e:
         click.echo(f"  Error: {e}", err=True)
         raise SystemExit(1)
 
     if dry_run:
+        env_str = result["env"] or UNDEFINED_ENV_DISPLAY
         click.echo()
         click.echo("  DRY RUN: Project Deployment Preview")
         click.echo(f"    Solution:    {result['name']}")
         if result["owner"]:
-            click.echo(f"    Owner:       {result['owner']} (as solution namespace)")
+            click.echo(f"    Owner:       {result['owner']}")
         else:
-            click.echo("    Owner:       <none> (global solution namespace)")
+            click.echo(f"    Owner:       {GLOBAL_OWNER_DISPLAY}")
         click.echo(f"    GCP Label:   {result['label']}")
-        env_label = f"{result['env']} (singular target)" if result['env'] == "default" else result['env']
-        click.echo(f"    Environment: {env_label}")
+        click.echo(f"    Environment: {env_str}")
         if result["project_id"]:
             click.echo(f"    Project:     {result['project_id']}")
         if result["bucket"]:
@@ -245,28 +255,25 @@ def deploy(sdk: GappSDK, ref, solution, env, project, dry_run):
 
 
 @main.command()
+@click.option("--env", default=None, help="Verify project's gapp-env matches.")
 @click.pass_obj
-def status(sdk: GappSDK):
+def status(sdk: GappSDK, env):
     """Infrastructure health check."""
     try:
-        result = sdk.status()
+        result = sdk.status(env=env)
         click.echo(f"App:      {result.name}")
         if result.deployment.project:
             click.echo(f"Project:  {result.deployment.project}")
-        
         click.echo(f"Status:   {'READY' if not result.deployment.pending else 'PENDING'}")
-        
         if result.deployment.services:
             for s in result.deployment.services:
                 click.echo(f"  Service: {s.name}")
                 click.echo(f"  URL:     {s.url}")
-                click.echo(f"  Healthy: {'\u2713' if s.healthy else 'X'}")
-        
+                click.echo(f"  Healthy: {'✓' if s.healthy else 'X'}")
         if result.next_step:
             click.echo(f"\nNext Step: {result.next_step.action}")
             if result.next_step.hint:
                 click.echo(f"  {result.next_step.hint}")
-
     except Exception as e:
         click.echo(f"  Error: {e}", err=True)
 
@@ -285,15 +292,24 @@ def list_cmd(sdk: GappSDK, wide, project_limit):
     if not res["apps"]:
         click.echo("\n  No apps found.")
     else:
-        header = f"\n  {'App':<20} {'Project':<20} {'Owner':<15} {'Env':<10} {'Contract':<10}"
+        header = f"\n  {'App':<20} {'Project':<20} {'Owner':<15} {'Env':<14} {'Contract':<10}"
         click.echo(header)
         click.echo("  " + "-" * (len(header) - 2))
-
         for app in res["apps"]:
             contract = "legacy" if app["is_legacy"] else f"v-{app['contract_major']}"
-            click.echo(f"  {app['name']:<20} {app['project']:<20} {app['owner']:<15} {app['env']:<10} {contract:<10}")
+            env_disp = app["env"] or UNDEFINED_ENV_DISPLAY
+            owner_disp = app["owner"] if app["owner"] != "global" else GLOBAL_OWNER_DISPLAY
+            marker = "  ⚠" if app.get("duplicate") else ""
+            click.echo(
+                f"  {app['name']:<20} {app['project']:<20} "
+                f"{owner_disp:<15} {env_disp:<14} {contract:<10}{marker}"
+            )
 
-    click.echo(f"\nSummary: {res['metadata']['apps']['count']} apps across {res['metadata']['projects']['count']} projects (this build: v-{res['metadata']['contract_major']}).")
+    click.echo(
+        f"\nSummary: {res['metadata']['apps']['count']} apps across "
+        f"{res['metadata']['projects']['count']} projects "
+        f"(this build: v-{res['metadata']['contract_major']})."
+    )
     for warn in res["warnings"]:
         click.echo(click.style(f"WARNING: {warn}", fg="yellow"))
 

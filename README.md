@@ -43,28 +43,34 @@ git clone <your-repo>              # Get your source code
 gapp deploy                        # Discovers home in the cloud and "Just Works"
 ```
 
-### **4. Hands-Free Setup (The Home Base)**
-Designate a project as your **Home Base** for new apps so they find it automatically.
+### **4. Project env binding**
+Bind a GCP project to a named env so you can address it by `--env` later.
 ```bash
-# Designate your sandbox as the default target for this workstation
-gapp projects set-env <project-id> --env default
+# Mark a project as your prod environment
+gapp projects set-env <project-id> prod
 
-# Start a brand new app
+# Setup deploys the solution onto a project that's already bound to prod
 gapp init
-gapp setup                         # Auto-registers into your Home Base!
-gapp deploy                        # Deploys automatically!
+gapp setup --project <project-id>
+gapp deploy
 ```
 
 ### **5. Managing Multiple Environments**
 Deploy the same app to different projects for `dev`, `staging`, or `prod`.
 ```bash
-# Prep and register your production project
-gapp setup --env prod <prod-project-id>
+# Bind the production project to env=prod (one-time)
+gapp projects set-env <prod-project-id> prod
 
-# Deploy to production
+# Setup the solution there
+gapp setup --project <prod-project-id>
+
+# Deploy — gapp finds the only project hosting this solution
+gapp deploy
+
+# Or, when the same solution is on multiple projects, disambiguate with --env
 gapp deploy --env prod
 ```
-`gapp` ensures you never accidentally deploy `dev` code to a `prod` project by verifying the cloud designation before every push.
+`gapp` ensures you never accidentally deploy to the wrong env: when `--env` is given, it verifies the resolved project's `gapp-env` label matches before applying.
 
 ### **6. Team & Enterprise Isolation (Namespacing)**
 Work in shared organization projects without colliding with colleagues. By setting an **Owner**, you create an isolated namespace for your apps.
@@ -79,12 +85,12 @@ gapp config owner owner-a
 # Now 'list' only shows your apps
 gapp list
 
-# Deploy an app that someone else already has in the same project
-gapp deploy    # FAILS: gapp sees the other person's version and protects it.
-
-# Run 'setup' to create your own isolated home in that same project
-gapp setup
-gapp deploy    # SUCCESS: You now have gs://gapp-owner-a-app-... isolated from others.
+# Try to setup an app that someone else already has on the same project
+gapp setup --project <pid>
+# FAILS (Layer-1 cross-owner check): gapp warns about the other owner.
+# Pass --force only if intentional — bucket and Cloud Run service names
+# are owner-blind, so two owners with the same solution name share resources.
+gapp setup --project <pid> --force
 ```
 
 ### **7. Audit & Recovery**
@@ -93,13 +99,13 @@ Use this when it's been a while and you have no idea where your apps are or what
 # Audit everything across your entire GCP footprint
 gapp list --all
 
-# Result: 
-#   app-a (project: project-123) [label: gapp-app-a]
-#   app-b (project: project-456) [label: gapp_owner-a_app-b]
+# Result:
+#   app-a    project-123    <global>      <undefined>   v-3
+#   app-b    project-456    owner-a       prod          v-3
 
-# Insight: Now you know you have one Global app and one owned by 'owner-a'.
-# You can now set your owner to 'owner-a' to work on app-b, 
-# or unset it to work on app-a.
+# Insight: Now you know you have one global app (no owner declared) and
+# one owned by 'owner-a' under env=prod. You can set your owner to 'owner-a'
+# to work on app-b, or unset it to work on app-a.
 ```
 
 ### **8. Expert Mode (Explicit Management)**
@@ -125,8 +131,9 @@ gapp deploy --project <project-id>
 > **Note on Enterprise Usage**: `gapp` follows your `gcloud` login wherever you go, but it also allows you to optionally work in a team or enterprise environment (e.g., a large GCP organization with thousands of users and projects) via the completely optional `owner` namespace configuration. You can use this to switch between team, personal, or org contexts at will, all without forcing that complexity on you as a required initial setup barrier.
 
 ### **Fleet Management (`gapp projects`)**
-*   `gapp projects set-env <id> [--env default]`: Designate a project's role.
-*   `gapp projects list [--all]`: View your project inventory and roles.
+*   `gapp projects set-env <id> <env> [--force]`: Bind a project to a named env (writes the `gapp-env` label). `--force` required to overwrite an existing binding.
+*   `gapp projects clear-env <id>`: Remove the env binding (project becomes undefined-env).
+*   `gapp projects list`: View projects with env bindings.
 
 ### **Development**
 *   `gapp status`: Check infrastructure health and service URLs.
