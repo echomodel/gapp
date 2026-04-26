@@ -597,25 +597,26 @@ def setup_ci(solution: str | None = None) -> dict:
             "No CI repo configured. Run 'gapp ci init <repo-name>' first."
         )
 
-    # 2. Resolve full context (name, project_id, github_repo)
-    ctx = GappSDK().resolve_full_context(solution)
-
-    solution_name = ctx.get("name")
-    if not solution_name:
+    # 2. Resolve solution + project
+    sdk = GappSDK()
+    sol_ctx = sdk.resolve_solution(solution)
+    if not sol_ctx or not sol_ctx.get("name"):
         raise RuntimeError(
             "No solution specified and not inside a solution repo.\n"
             "  Run: gapp ci setup <solution-name>"
         )
+    solution_name = sol_ctx["name"]
 
-    project_id = ctx.get("project_id")
-    if not project_id:
+    try:
+        res = sdk.resolve_project_for_solution(solution_name)
+        project_id = res["project_id"]
+    except RuntimeError as e:
         raise RuntimeError(
-            f"No GCP project found for '{solution_name}'.\n"
-            f"  Run 'gapp setup <project-id>' first, or ensure the GCP project "
-            f"has label gapp-{solution_name}=default."
+            f"No GCP project found for '{solution_name}': {e}\n"
+            f"  Run 'gapp setup --project <project-id>' first."
         )
 
-    full_solution_repo = ctx.get("github_repo")
+    full_solution_repo = sol_ctx.get("github_repo")
     if not full_solution_repo:
         raise RuntimeError(
             f"Could not determine GitHub repo for '{solution_name}'.\n"

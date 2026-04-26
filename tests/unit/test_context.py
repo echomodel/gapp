@@ -1,14 +1,12 @@
-"""Tests for gapp.sdk.core — context resolution and discovery."""
+"""Tests for gapp.sdk.core — config/identity and naming."""
 
 import pytest
-from pathlib import Path
 from gapp.admin.sdk.core import GappSDK
 from gapp.admin.sdk.cloud.dummy import DummyCloudProvider
 
 
 @pytest.fixture
 def sdk():
-    """Return a fresh GappSDK instance with a dummy provider."""
     return GappSDK(provider=DummyCloudProvider())
 
 
@@ -25,14 +23,14 @@ def test_owner_and_account_scoping(sdk):
     sdk.set_active_profile("default")
     sdk.set_owner("owner-a")
     sdk.set_account("test-user@example.com")
-    
+
     sdk.set_active_profile("work")
     sdk.set_owner("professional")
     sdk.set_account("other-user@example.com")
-    
+
     assert sdk.get_owner() == "professional"
     assert sdk.get_account() == "other-user@example.com"
-    
+
     sdk.set_active_profile("default")
     assert sdk.get_owner() == "owner-a"
     assert sdk.get_account() == "test-user@example.com"
@@ -46,57 +44,32 @@ def test_discovery_toggle(sdk):
 
 
 def test_label_key_generation(sdk):
-    """Verify label key uses underscores and no double-hyphens."""
-    # 1. No owner
+    """Solution label keys are env-blind. Owner segment empty for global."""
     sdk.set_owner(None)
     assert sdk.get_label_key("my-app") == "gapp__my-app"
-    
-    # 2. With owner
+
     sdk.set_owner("owner-a")
     assert sdk.get_label_key("my-app") == "gapp_owner-a_my-app"
 
 
-def test_bucket_name_generation(sdk):
-    """Verify bucket name is Environment-Blind."""
+def test_bucket_name_is_owner_blind_and_env_blind(sdk):
+    """Bucket name is just gapp-{solution}-{project_id}."""
     sdk.set_owner(None)
     assert sdk.get_bucket_name("my-app", "proj-123") == "gapp-my-app-proj-123"
-    
+
     sdk.set_owner("owner-a")
-    # env is ignored in bucket name now
-    assert sdk.get_bucket_name("my-app", "proj-123") == "gapp-owner-a-my-app-proj-123"
+    # Owner makes no difference to the bucket name — it lives at label/identity layer.
+    assert sdk.get_bucket_name("my-app", "proj-123") == "gapp-my-app-proj-123"
 
 
 def test_resolve_solution_from_cwd(tmp_path, monkeypatch, sdk):
-    """Verify resolve_solution reads the local gapp.yaml."""
+    """resolve_solution reads the local gapp.yaml."""
     repo = tmp_path / "my-repo"
     repo.mkdir()
     (repo / "gapp.yaml").write_text("name: project-status")
     (repo / ".git").mkdir()
     monkeypatch.chdir(repo)
-    
+
     ctx = sdk.resolve_solution()
     assert ctx is not None
     assert ctx["name"] == "project-status"
-
-
-def test_discovery_policy_enforcement(tmp_path, monkeypatch, sdk):
-    """Verify that when discovery is OFF, resolve_full_context skips label queries."""
-    repo = tmp_path / "my-repo"
-    repo.mkdir()
-    (repo / "gapp.yaml").write_text("name: project-status")
-    (repo / ".git").mkdir()
-    monkeypatch.chdir(repo)
-    
-    # Policy: Blind mode
-    sdk.set_discovery("off")
-    
-    # Mock label in cloud using clean underscores
-    sdk.provider.project_labels["proj-123"] = {"gapp__project-status": "v-2"}
-    
-    ctx = sdk.resolve_full_context()
-    assert ctx["project_id"] is None # Correct: discovery skipped
-    
-    # Policy: Managed mode
-    sdk.set_discovery("on")
-    ctx = sdk.resolve_full_context()
-    assert ctx["project_id"] == "proj-123" # Correct: discovery found it

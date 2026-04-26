@@ -1,4 +1,9 @@
-"""Tests for underscore-delimited label parsing and forward compatibility."""
+"""Tests for env-blind solution label parsing.
+
+In v-3 the env is a project property (gapp-env label), not part of the
+solution label key. The parser reads owner and solution name from the
+key and expects env from the project's gapp-env value (passed in).
+"""
 
 import pytest
 from gapp.admin.sdk.core import GappSDK
@@ -7,16 +12,19 @@ from gapp.admin.sdk.cloud.dummy import DummyCloudProvider
 
 @pytest.fixture
 def sdk():
-    """Return a fresh GappSDK instance with a dummy provider."""
     return GappSDK(provider=DummyCloudProvider())
 
 
-def test_parsing_new_underscore_labels(sdk):
-    """Verify list_apps correctly parses underscore-delimited keys (env in key, not value)."""
-    # 1. Global app, prod env in key
-    sdk.provider.project_labels["p1"] = {"gapp__my-app_prod": "v-3"}
-    # 2. Scoped app, dev env in key
-    sdk.provider.project_labels["p2"] = {"gapp_owner-a_status_dev": "v-3"}
+def test_parsing_owned_and_global(sdk):
+    """Owned solution label and global solution label both parse correctly."""
+    sdk.provider.project_labels["p1"] = {
+        "gapp-env": "prod",
+        "gapp__my-app": "v-3",
+    }
+    sdk.provider.project_labels["p2"] = {
+        "gapp-env": "dev",
+        "gapp_owner-a_status": "v-3",
+    }
 
     sdk.set_owner(None)
     res = sdk.list_apps(wide=True)
@@ -34,10 +42,25 @@ def test_parsing_new_underscore_labels(sdk):
     assert by_name["status"]["contract_major"] == 3
 
 
+def test_parsing_undefined_env(sdk):
+    """A project with no gapp-env shows env=None for its solutions."""
+    sdk.provider.project_labels["p1"] = {"gapp__my-app": "v-3"}
+
+    sdk.set_owner(None)
+    res = sdk.list_apps(wide=True)
+    app = res["apps"][0]
+
+    assert app["name"] == "my-app"
+    assert app["env"] is None
+    assert app["contract_major"] == 3
+
+
 def test_parsing_forward_compatibility(sdk):
-    """Verify parser tolerates a label value stamped by a newer gapp build."""
-    # A future v-9 build wrote this; we should still parse it (read ops are not gated).
-    sdk.provider.project_labels["p1"] = {"gapp__my-app_prod": "v-9"}
+    """Parser tolerates a label value stamped by a newer gapp build."""
+    sdk.provider.project_labels["p1"] = {
+        "gapp-env": "prod",
+        "gapp__my-app": "v-9",
+    }
 
     res = sdk.list_apps(wide=True)
     app = res["apps"][0]
@@ -48,8 +71,10 @@ def test_parsing_forward_compatibility(sdk):
 
 
 def test_parsing_with_hyphens(sdk):
-    """Verify that hyphens in solution and owner names are correctly handled."""
-    sdk.provider.project_labels["p1"] = {"gapp_owner-a_multi-word-app": "v-3"}
+    """Hyphens in solution and owner names are correctly handled."""
+    sdk.provider.project_labels["p1"] = {
+        "gapp_owner-a_multi-word-app": "v-3",
+    }
 
     sdk.set_owner("owner-a")
     res = sdk.list_apps()
@@ -57,11 +82,11 @@ def test_parsing_with_hyphens(sdk):
 
     assert app["name"] == "multi-word-app"
     assert app["owner"] == "owner-a"
-    assert app["env"] == "default"
+    assert app["env"] is None
 
 
 def test_parsing_legacy_label(sdk):
-    """Legacy `gapp-<name>=<env>` labels are still parsed for read ops."""
+    """Legacy v-2 `gapp-<name>=<env>` labels are still parsed for read ops."""
     sdk.provider.project_labels["p1"] = {"gapp-old-app": "default"}
 
     sdk.set_owner(None)
@@ -74,10 +99,11 @@ def test_parsing_legacy_label(sdk):
     assert app["env"] == "default"
 
 
-def test_parsing_skips_role_labels(sdk):
-    """Role labels (gapp-env*) are not surfaced as apps in list_apps."""
+def test_parsing_skips_project_env_label(sdk):
+    """gapp-env (and v-2 gapp-env_<owner>) are not surfaced as apps."""
     sdk.provider.project_labels["p1"] = {
-        "gapp-env_owner-a": "prod",
+        "gapp-env": "prod",
+        "gapp-env_owner-a": "prod",  # legacy v-2 role label
         "gapp_owner-a_my-app": "v-3",
     }
 
@@ -86,3 +112,4 @@ def test_parsing_skips_role_labels(sdk):
 
     assert len(res["apps"]) == 1
     assert res["apps"][0]["name"] == "my-app"
+    assert res["apps"][0]["env"] == "prod"
