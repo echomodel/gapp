@@ -10,20 +10,15 @@ See issue #27 for the full design rationale.
 import subprocess
 from pathlib import Path
 
+from gapp.admin.sdk.core import GappSDK
 from gapp.admin.sdk.manifest import get_env_vars, load_manifest, save_manifest
-
-
-def _resolve_solution(name: str | None = None) -> dict | None:
-    from gapp.admin.sdk.core import GappSDK
-    return GappSDK().resolve_solution(name)
-
 
 GAPP_SOLUTION_LABEL = "gapp-solution"
 
 
 def add_secret(secret_name: str, description: str, value: str | None = None, solution: str | None = None) -> dict:
     """Add a secret declaration to gapp.yaml and optionally set its value."""
-    ctx = resolve_solution(solution)
+    ctx = GappSDK().resolve_solution(solution)
     if not ctx:
         raise RuntimeError(
             "Not inside a gapp solution. Run 'gapp init' first, or cd into a solution repo."
@@ -65,7 +60,7 @@ def add_secret(secret_name: str, description: str, value: str | None = None, sol
 
 def remove_secret(secret_name: str, solution: str | None = None) -> dict:
     """Remove a secret declaration from gapp.yaml. Does NOT delete from Secret Manager."""
-    ctx = resolve_solution(solution)
+    ctx = GappSDK().resolve_solution(solution)
     if not ctx:
         raise RuntimeError(
             "Not inside a gapp solution. Run 'gapp init' first, or cd into a solution repo."
@@ -125,7 +120,7 @@ def list_secrets(solution: str | None = None) -> dict:
         missing   — declared but not present in GCP (must be set or generated)
         orphan    — present in GCP with our label but not declared in gapp.yaml
     """
-    ctx = resolve_solution(solution)
+    ctx = GappSDK().resolve_solution(solution)
     if not ctx:
         raise RuntimeError(
             "Not inside a gapp solution. Run 'gapp init' first, or cd into a solution repo."
@@ -236,7 +231,7 @@ def validate_declared_secrets(project_id: str, solution_name: str, manifest: dic
 
 def _find_secret(name: str, solution: str | None = None) -> dict:
     """Look up a secret by its short name as declared in gapp.yaml."""
-    ctx = resolve_solution(solution)
+    ctx = GappSDK().resolve_solution(solution)
     if not ctx:
         raise RuntimeError(
             "Not inside a gapp solution. Run 'gapp init' first, or cd into a solution repo."
