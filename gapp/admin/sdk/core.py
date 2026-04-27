@@ -246,12 +246,23 @@ class GappSDK:
 
     # -- Solution & project resolution --
 
-    def resolve_solution(self, name: str | None = None) -> dict | None:
+    def resolve_solution(self, name: str | None = None, strict: bool = True) -> dict | None:
+        """Resolve a solution context.
+
+        With an explicit name, returns a no-repo context immediately —
+        no filesystem access, no manifest validation. This is the path
+        used by status/list when called with --solution.
+
+        Without a name, falls back to git-root + gapp.yaml discovery.
+        strict controls whether the manifest is schema-validated; pass
+        strict=False from read-only commands so a stale gapp.yaml does
+        not block cloud reads.
+        """
         if name:
             return {"name": name, "project_id": None, "repo_path": None}
         git_root = self._get_git_root()
         if git_root and (git_root / "gapp.yaml").is_file():
-            manifest = load_manifest(git_root)
+            manifest = load_manifest(git_root, strict=strict)
             solution_name = get_solution_name(manifest, git_root)
             return {"name": solution_name, "project_id": None, "repo_path": str(git_root)}
         return None
@@ -757,7 +768,10 @@ class GappSDK:
         )
 
     def status(self, name: str | None = None, env: Optional[str] = None) -> StatusResult:
-        ctx = self.resolve_solution(name)
+        # Lenient: status is read-only and must work even if the local
+        # gapp.yaml predates the current schema or is missing fields the
+        # build pipeline would require.
+        ctx = self.resolve_solution(name, strict=False)
         if not ctx:
             return StatusResult(initialized=False, next_step=NextStep(action="init"))
         solution_name = ctx["name"]
@@ -786,10 +800,10 @@ class GappSDK:
 
         services_to_check = []
         if repo_path:
-            manifest = load_manifest(Path(repo_path))
+            manifest = load_manifest(Path(repo_path), strict=False)
             if paths := get_paths(manifest):
                 for p in paths:
-                    sub_m = load_manifest(Path(repo_path) / p) if (Path(repo_path) / p).is_dir() else {}
+                    sub_m = load_manifest(Path(repo_path) / p, strict=False) if (Path(repo_path) / p).is_dir() else {}
                     services_to_check.append({
                         "name": get_name(sub_m) or f"{solution_name}-{p.replace('/', '-')}",
                         "is_workspace": True,

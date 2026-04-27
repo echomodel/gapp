@@ -7,18 +7,27 @@ import yaml
 from gapp.admin.sdk.schema import ManifestValidationError, validate_manifest
 
 
-def load_manifest(repo_path: Path) -> dict:
-    """Load and validate gapp.yaml from a repo. Returns empty dict if missing.
+def load_manifest(repo_path: Path, strict: bool = True) -> dict:
+    """Load gapp.yaml from a repo. Returns empty dict if missing.
 
-    Raises ManifestValidationError if the file exists but fails schema
-    validation. The message names each offending field by yaml path.
+    When strict (default), validates against the schema and raises
+    ManifestValidationError on failure. The message names each offending
+    field by yaml path.
+
+    When not strict, skips schema enforcement and returns the parsed dict
+    as-is. Use for read-only operations (status, list) where a stale or
+    unsupported gapp.yaml should not block cloud reads — a deployment can
+    still be probed even if its local manifest predates the current
+    schema. Strict mode remains the default for setup/deploy, which need
+    a manifest the build pipeline can actually consume.
     """
     manifest_path = repo_path / "gapp.yaml"
     if not manifest_path.exists():
         return {}
     with open(manifest_path) as f:
         data = yaml.safe_load(f) or {}
-    validate_manifest(data)
+    if strict:
+        validate_manifest(data)
     return data
 
 

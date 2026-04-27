@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from gapp.admin.sdk.manifest import (
     get_entrypoint,
     get_prerequisite_secrets,
@@ -10,6 +12,7 @@ from gapp.admin.sdk.manifest import (
     get_solution_name,
     load_manifest,
 )
+from gapp.admin.sdk.schema import ManifestValidationError
 
 
 def test_load_manifest_missing(tmp_path):
@@ -47,6 +50,33 @@ def test_prerequisite_secrets():
 
 def test_prerequisite_secrets_empty():
     assert get_prerequisite_secrets({}) == {}
+
+
+def test_load_manifest_strict_rejects_invalid_schema(tmp_path):
+    """Strict mode (default) raises on schema-invalid gapp.yaml."""
+    (tmp_path / "gapp.yaml").write_text(
+        "service:\n"
+        "  bogus_field: 1\n"
+    )
+    with pytest.raises(ManifestValidationError):
+        load_manifest(tmp_path)
+
+
+def test_load_manifest_lenient_returns_invalid_data(tmp_path):
+    """Lenient mode returns parsed data even when schema validation would fail."""
+    (tmp_path / "gapp.yaml").write_text(
+        "name: stale-app\n"
+        "service:\n"
+        "  bogus_field: 1\n"
+    )
+    result = load_manifest(tmp_path, strict=False)
+    assert result["name"] == "stale-app"
+    assert result["service"]["bogus_field"] == 1
+
+
+def test_load_manifest_lenient_still_returns_empty_when_missing(tmp_path):
+    """Lenient mode preserves the missing-file => empty-dict contract."""
+    assert load_manifest(tmp_path, strict=False) == {}
 
 
 def test_required_apis():

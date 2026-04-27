@@ -258,12 +258,24 @@ def deploy(sdk: GappSDK, ref, solution, env, project, dry_run):
 
 
 @main.command()
+@click.option(
+    "--solution",
+    "-s",
+    default=None,
+    help="Solution name. Bypasses local gapp.yaml discovery and validation; "
+         "lets status run from any directory against any deployed solution.",
+)
 @click.option("--env", default=None, help="Verify project's gapp-env matches.")
 @click.pass_obj
-def status(sdk: GappSDK, env):
-    """Infrastructure health check."""
+def status(sdk: GappSDK, solution, env):
+    """Infrastructure health check.
+
+    With no --solution flag, status discovers the solution from the current
+    repo's gapp.yaml. Schema validation is lenient — a stale or unsupported
+    gapp.yaml does not block cloud reads.
+    """
     try:
-        result = sdk.status(env=env)
+        result = sdk.status(name=solution, env=env)
         click.echo(f"App:      {result.name}")
         if result.deployment.project:
             click.echo(f"Project:  {result.deployment.project}")
