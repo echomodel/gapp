@@ -846,12 +846,24 @@ class GappSDK:
                 self.provider.submit_build_sync(project_id, Path(build_dir), image, build_ep)
             finally:
                 shutil.rmtree(build_dir, ignore_errors=True)
+        # Secret materialization runs unconditionally before tfvars are built.
+        # Skipping it on "already deployed" runs would leave the secrets tfvar
+        # empty for legacy state still owning random_password.signing_key etc.,
+        # and terraform would destroy those resources as drift.
+        from gapp.admin.sdk.secrets import (
+            validate_declared_secrets,
+            materialize_generated_secrets,
+        )
+        validate_declared_secrets(project_id, parent_solution or name, manifest)
+        materialize_generated_secrets(project_id, parent_solution or name, manifest)
+
         bucket_name = self.get_bucket_name(parent_solution or name, project_id)
         state_prefix = f"terraform/state/{name}" if parent_solution else "terraform/state"
         tfvars = _build_tfvars(
             name, project_id, image, get_service_config(manifest),
             get_prerequisite_secrets(manifest), Path(repo_path) / service_path,
             get_public(manifest), get_domain(manifest),
+            solution_name=parent_solution or name,
         )
         outputs = self.provider.apply_infrastructure(
             staging_dir=_get_staging_dir(name), bucket_name=bucket_name,
@@ -901,20 +913,25 @@ def _prepare_build_dir(path, image, ep, ref="HEAD"):
     return d, ep
 
 
-def _build_tfvars(name, pid, img, cfg, secrets, repo_path, public, domain):
+def _build_tfvars(name, pid, img, cfg, secrets, repo_path, public, domain, solution_name=None):
     from gapp.admin.sdk.manifest import resolve_env_vars, get_env_vars, load_manifest
     env = dict(cfg.get("env", {}))
     manifest = load_manifest(repo_path)
     env_vars = get_env_vars(manifest)
+    sol = solution_name or name
+    secrets_map = {n.upper().replace("-", "_"): n for n in (secrets or {})}
     if env_vars:
         for e in resolve_env_vars(env_vars, {"SOLUTION_DATA_PATH": "/mnt/data", "SOLUTION_NAME": name}):
-            if "value" in e: env[e["name"]] = e["value"]
+            if "value" in e:
+                env[e["name"]] = e["value"]
+            elif isinstance(e.get("secret"), dict):
+                secrets_map[e["name"]] = f"{sol}-{e['secret']['name']}"
     custom_domain = domain if domain and domain.strip() else ""
     return {
         "project_id": pid, "service_name": name, "image": img,
         "memory": cfg["memory"], "cpu": cfg["cpu"], "max_instances": cfg["max_instances"],
         "env": env,
-        "secrets": {n.upper().replace("-", "_"): n for n in (secrets or {})},
+        "secrets": secrets_map,
         "public": bool(public), "custom_domain": custom_domain,
     }
 

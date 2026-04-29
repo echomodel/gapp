@@ -229,6 +229,40 @@ def validate_declared_secrets(project_id: str, solution_name: str, manifest: dic
         raise RuntimeError("\n".join(lines))
 
 
+def materialize_generated_secrets(project_id: str, solution_name: str, manifest: dict) -> list[dict]:
+    """Idempotently create + version-set every env-declared secret with generate: true.
+
+    Walks every env entry whose `secret:` block declares `generate: true`. For
+    any such secret missing from Secret Manager, creates it with the standard
+    gapp-solution label and writes a freshly generated 32-char alphanumeric
+    value as its first version. Already-present secrets are left untouched
+    (no rotation on redeploy).
+
+    Returns a list of {"name", "secret_id", "status": "created"|"exists"} for
+    every generate:true declaration encountered, in declaration order.
+    """
+    import secrets as _secrets
+    import string
+
+    present_ids = {s["id"] for s in list_secrets_by_label(project_id, solution_name)}
+    alphabet = string.ascii_letters + string.digits
+    results = []
+    for entry in get_env_vars(manifest):
+        secret_cfg = entry.get("secret")
+        if not isinstance(secret_cfg, dict) or not secret_cfg.get("generate"):
+            continue
+        name = secret_cfg["name"]
+        secret_id = f"{solution_name}-{name}"
+        if secret_id in present_ids:
+            results.append({"name": name, "secret_id": secret_id, "status": "exists"})
+            continue
+        _ensure_secret(project_id, secret_id, solution_name)
+        value = "".join(_secrets.choice(alphabet) for _ in range(32))
+        _add_secret_version(project_id, secret_id, value)
+        results.append({"name": name, "secret_id": secret_id, "status": "created"})
+    return results
+
+
 def _find_secret(name: str, solution: str | None = None) -> dict:
     """Look up a secret by its short name as declared in gapp.yaml."""
     ctx = GappSDK().resolve_solution(solution)
