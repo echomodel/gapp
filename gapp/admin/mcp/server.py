@@ -227,7 +227,17 @@ def gapp_secret_list(solution: str | None = None) -> dict:
     - env_var: the name in gapp.yaml (what the app reads at runtime)
     - secret_id: the resolved Secret Manager ID
     - generate: true if gapp auto-creates this on deploy
-    - status: "set", "empty", "not created"
+    - status: one of "ready", "missing", "missing-generate" (will be
+              created on deploy), "unattached" (a secret with this ID
+              exists in GCP but lacks the gapp-solution label),
+              "conflict" (the ID is owned by a different solution), or
+              "no-project" (no GCP project resolved yet).
+
+    The response also includes:
+    - orphans: secret IDs labeled for this solution but not in gapp.yaml
+    - hints: structured remediation entries for unattached / conflict /
+             orphan scenarios — each with a message and concrete `gcloud`
+             commands. See docs/SECRETS.md for the full recovery guide.
 
     Args:
         solution: Solution name. Defaults to current directory's solution.

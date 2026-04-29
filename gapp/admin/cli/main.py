@@ -340,6 +340,101 @@ def list_cmd(sdk: GappSDK, all_owners, project_limit):
         click.echo(click.style(f"WARNING: {warn}", fg="yellow"))
 
 
+# -- gapp secrets --
+
+@main.group("secrets")
+def secrets_group():
+    """List, get, and set secret values for the current solution."""
+
+
+@secrets_group.command("list")
+@click.option("--solution", "-s", default=None, help="Solution name. Defaults to current directory.")
+def secrets_list_cmd(solution):
+    """Show declared secrets, deploy-readiness, and remediation hints."""
+    from gapp.admin.sdk.secrets import list_secrets
+    try:
+        result = list_secrets(solution=solution)
+    except RuntimeError as e:
+        click.echo(f"  Error: {e}", err=True)
+        raise SystemExit(1)
+
+    click.echo(f"App:     {result['solution']}")
+    if result.get("project_id"):
+        click.echo(f"Project: {result['project_id']}")
+    else:
+        click.echo("Project: (none — run `gapp setup` first)")
+
+    if result["secrets"]:
+        click.echo()
+        click.echo(f"  {'Secret':<20} {'Env Var':<25} {'Status':<18} Generate")
+        click.echo("  " + "-" * 70)
+        for s in result["secrets"]:
+            click.echo(
+                f"  {s['name']:<20} {s['env_var']:<25} "
+                f"{s['status']:<18} {'yes' if s['generate'] else 'no'}"
+            )
+    else:
+        click.echo("\n  No secrets declared in gapp.yaml.")
+
+    if result["orphans"]:
+        click.echo("\n  Orphans (labeled in GCP but not declared in gapp.yaml):")
+        for orphan_id in result["orphans"]:
+            click.echo(f"    - {orphan_id}")
+
+    if result["hints"]:
+        click.echo("\n" + "=" * 72)
+        click.echo("Resolution options")
+        click.echo("=" * 72)
+        for i, hint in enumerate(result["hints"], start=1):
+            click.echo(f"\n[{i}] {hint['secret_id']} — {hint['issue']}")
+            click.echo(f"    {hint['message']}")
+            for opt in hint["options"]:
+                click.echo(f"\n    Option: {opt['label']}")
+                click.echo(f"      $ {opt['command']}")
+
+
+@secrets_group.command("get")
+@click.argument("name")
+@click.option("--solution", "-s", default=None, help="Solution name. Defaults to current directory.")
+@click.option("--plaintext", is_flag=True, help="Print the actual secret value (default: hash + length only).")
+def secrets_get_cmd(name, solution, plaintext):
+    """Fetch a secret. Default output is a hash + length; --plaintext prints the value."""
+    from gapp.admin.sdk.secrets import get_secret
+    try:
+        result = get_secret(name, plaintext=plaintext, solution=solution)
+    except RuntimeError as e:
+        click.echo(f"  Error: {e}", err=True)
+        raise SystemExit(1)
+
+    if plaintext:
+        click.echo(result["value"])
+    else:
+        click.echo(f"  Name:      {result['name']}")
+        click.echo(f"  Secret ID: {result['secret_id']}")
+        click.echo(f"  Hash:      {result['hash']}")
+        click.echo(f"  Length:    {result['length']}")
+
+
+@secrets_group.command("set")
+@click.argument("name")
+@click.argument("value", required=False)
+@click.option("--solution", "-s", default=None, help="Solution name. Defaults to current directory.")
+@click.option("--from-stdin", is_flag=True, help="Read value from stdin (use to avoid shell history).")
+def secrets_set_cmd(name, value, solution, from_stdin):
+    """Store a secret value. Without VALUE, prompts (or pass --from-stdin to pipe)."""
+    from gapp.admin.sdk.secrets import set_secret
+    if from_stdin:
+        value = sys.stdin.read().rstrip("\n")
+    elif value is None:
+        value = click.prompt("Value", hide_input=True, confirmation_prompt=True)
+    try:
+        result = set_secret(name, value, solution=solution)
+    except RuntimeError as e:
+        click.echo(f"  Error: {e}", err=True)
+        raise SystemExit(1)
+    click.echo(f"  {result.get('status', 'set')}: {result.get('secret_id', name)}")
+
+
 def cli_entry():
     from gapp.admin.sdk.schema import ManifestValidationError
     try:

@@ -113,12 +113,20 @@ def set_secret(name: str, value: str, solution: str | None = None) -> dict:
 def list_secrets(solution: str | None = None) -> dict:
     """List secret-backed env vars and diff them against what exists in GCP.
 
-    Uses a single label-filtered `gcloud secrets list` call to enumerate
-    secrets owned by this solution, then diffs against what gapp.yaml
-    declares. Reports each as:
-        ready     — declared and present in GCP with our label
-        missing   — declared but not present in GCP (must be set or generated)
-        orphan    — present in GCP with our label but not declared in gapp.yaml
+    First does a single label-filtered `gcloud secrets list` to enumerate
+    secrets gapp manages for this solution. For each declared secret that
+    didn't appear in the labeled set, follows up with one `gcloud secrets
+    describe` to distinguish:
+        ready       — declared and present, labeled for this solution
+        missing     — declared but no secret with that ID exists in GCP
+        unattached  — secret exists at the expected ID but has no gapp label
+        conflict    — secret exists labeled for a different solution
+        orphan      — present in GCP with our label but not in gapp.yaml
+
+    Each non-ready scenario produces a structured hint with concrete
+    `gcloud` commands the operator can run to resolve. Hints are surfaced
+    in the top-level `hints` array; CLI renderers can emit them as
+    footnotes after the table.
     """
     ctx = GappSDK().resolve_solution(solution)
     if not ctx:
@@ -126,6 +134,7 @@ def list_secrets(solution: str | None = None) -> dict:
             "Not inside a gapp solution. Run 'gapp init' first, or cd into a solution repo."
         )
 
+    solution_name = ctx["name"]
     project_id = ctx.get("project_id")
     repo_path = ctx.get("repo_path")
     manifest = load_manifest(Path(repo_path).expanduser()) if repo_path else {}
@@ -133,27 +142,37 @@ def list_secrets(solution: str | None = None) -> dict:
 
     present_ids = set()
     if project_id:
-        present_ids = {s["id"] for s in list_secrets_by_label(project_id, ctx["name"])}
+        present_ids = {s["id"] for s in list_secrets_by_label(project_id, solution_name)}
 
     secrets = []
+    hints = []
     declared_ids = set()
     for entry in env_entries:
         secret_cfg = entry.get("secret")
         if not isinstance(secret_cfg, dict):
             continue
-        secret_name = secret_cfg["name"]  # required by schema
-        secret_id = f"{ctx['name']}-{secret_name}"
+        secret_name = secret_cfg["name"]
+        secret_id = f"{solution_name}-{secret_name}"
         declared_ids.add(secret_id)
         generate = secret_cfg.get("generate", False)
 
         if not project_id:
-            status = "no project attached"
+            status = "no-project"
         elif secret_id in present_ids:
             status = "ready"
-        elif generate:
-            status = "missing (will be generated on deploy)"
         else:
-            status = "missing (run `gapp secrets set`)"
+            classification = _classify_unlabeled(project_id, secret_id)
+            kind = classification["kind"]
+            if kind == "missing":
+                status = "missing-generate" if generate else "missing"
+            elif kind == "unattached":
+                status = "unattached"
+                hints.append(_hint_unattached(project_id, solution_name, secret_id))
+            else:  # conflict
+                status = "conflict"
+                hints.append(_hint_conflict(
+                    project_id, solution_name, secret_id, classification["owner"], secret_name,
+                ))
 
         secrets.append({
             "name": secret_name,
@@ -164,12 +183,109 @@ def list_secrets(solution: str | None = None) -> dict:
         })
 
     orphans = sorted(present_ids - declared_ids)
+    for orphan_id in orphans:
+        hints.append(_hint_orphan(project_id, solution_name, orphan_id))
 
     return {
-        "solution": ctx["name"],
+        "solution": solution_name,
         "project_id": project_id,
         "secrets": secrets,
         "orphans": orphans,
+        "hints": hints,
+    }
+
+
+def _classify_unlabeled(project_id: str, secret_id: str) -> dict:
+    """For a secret_id NOT in our labeled set, determine why.
+
+    Returns {"kind": "missing"|"unattached"|"conflict", "owner": str|None}.
+    `owner` is set only for `conflict`.
+    """
+    result = subprocess.run(
+        ["gcloud", "secrets", "describe", secret_id,
+         "--project", project_id,
+         "--format", f"value(labels.{GAPP_SOLUTION_LABEL})"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        return {"kind": "missing", "owner": None}
+    owner = result.stdout.strip()
+    if not owner:
+        return {"kind": "unattached", "owner": None}
+    return {"kind": "conflict", "owner": owner}
+
+
+def _hint_unattached(project_id: str, solution_name: str, secret_id: str) -> dict:
+    return {
+        "secret_id": secret_id,
+        "issue": "unattached",
+        "message": (
+            f"Secret '{secret_id}' exists in project '{project_id}' but has no "
+            f"`{GAPP_SOLUTION_LABEL}` label. gapp will not modify it until ownership "
+            f"is established."
+        ),
+        "options": [
+            {
+                "label": f"Adopt for solution '{solution_name}' (gapp manages it going forward)",
+                "command": (
+                    f"gcloud secrets update {secret_id} "
+                    f"--update-labels={GAPP_SOLUTION_LABEL}={solution_name} "
+                    f"--project={project_id}"
+                ),
+            },
+            {
+                "label": "Delete and let gapp recreate it on next deploy or `gapp secrets set`",
+                "command": f"gcloud secrets delete {secret_id} --project={project_id}",
+            },
+        ],
+    }
+
+
+def _hint_conflict(project_id: str, solution_name: str, secret_id: str,
+                   owner: str, secret_short_name: str) -> dict:
+    return {
+        "secret_id": secret_id,
+        "issue": "conflict",
+        "message": (
+            f"Secret '{secret_id}' is labeled for solution '{owner}', not '{solution_name}'. "
+            f"gapp will not modify another solution's secret."
+        ),
+        "options": [
+            {
+                "label": f"Use a different secret name in this solution's gapp.yaml (rename '{secret_short_name}')",
+                "command": "(edit gapp.yaml; gapp constructs the secret_id as <solution>-<name>)",
+            },
+            {
+                "label": f"Re-label for '{solution_name}' if '{owner}' is gone (manual takeover)",
+                "command": (
+                    f"gcloud secrets update {secret_id} "
+                    f"--update-labels={GAPP_SOLUTION_LABEL}={solution_name} "
+                    f"--project={project_id}"
+                ),
+            },
+        ],
+    }
+
+
+def _hint_orphan(project_id: str, solution_name: str, secret_id: str) -> dict:
+    return {
+        "secret_id": secret_id,
+        "issue": "orphan",
+        "message": (
+            f"Secret '{secret_id}' is labeled for solution '{solution_name}' but no "
+            f"matching declaration exists in gapp.yaml. It is not consumed by any "
+            f"deployed env var."
+        ),
+        "options": [
+            {
+                "label": "Delete it (recommended if no longer needed)",
+                "command": f"gcloud secrets delete {secret_id} --project={project_id}",
+            },
+            {
+                "label": "Re-add the declaration to gapp.yaml under env: with a matching name",
+                "command": "(edit gapp.yaml)",
+            },
+        ],
     }
 
 
@@ -199,15 +315,17 @@ def list_secrets_by_label(project_id: str, solution_name: str) -> list[dict]:
 
 
 def validate_declared_secrets(project_id: str, solution_name: str, manifest: dict) -> None:
-    """Fast-fail before deploy if non-generate declared secrets are missing.
+    """Fast-fail before deploy if non-generate declared secrets are not deployable.
 
-    Uses one label-filtered query to get the present set, then diffs against
-    what gapp.yaml declares. Closes #24 using the same label query as
-    `list_secrets`.
+    Uses one label-filtered query to get the present set, then for each
+    yaml-declared secret that is absent, follows up with a single describe
+    call to distinguish missing / unattached / conflict so the error
+    message points at the actual scenario, not the lowest-common-denominator
+    "missing".
     """
     present_ids = {s["id"] for s in list_secrets_by_label(project_id, solution_name)}
 
-    missing = []
+    problems = []
     for entry in get_env_vars(manifest):
         secret_cfg = entry.get("secret")
         if not isinstance(secret_cfg, dict):
@@ -216,17 +334,44 @@ def validate_declared_secrets(project_id: str, solution_name: str, manifest: dic
             continue
         secret_name = secret_cfg["name"]
         secret_id = f"{solution_name}-{secret_name}"
-        if secret_id not in present_ids:
-            missing.append({"name": secret_name, "env_var": entry["name"], "secret_id": secret_id})
+        if secret_id in present_ids:
+            continue
+        classification = _classify_unlabeled(project_id, secret_id)
+        problems.append({
+            "name": secret_name,
+            "env_var": entry["name"],
+            "secret_id": secret_id,
+            "kind": classification["kind"],
+            "owner": classification.get("owner"),
+        })
 
-    if missing:
-        lines = [
-            f"{len(missing)} secret(s) declared in gapp.yaml are missing in GCP:",
-        ]
-        for m in missing:
-            lines.append(f"  {m['env_var']} → {m['secret_id']}")
-            lines.append(f"    Set it: gapp secrets set {m['name']} <value>")
-        raise RuntimeError("\n".join(lines))
+    if not problems:
+        return
+
+    lines = [f"{len(problems)} secret(s) declared in gapp.yaml are not deployable:"]
+    for p in problems:
+        lines.append(f"  {p['env_var']} → {p['secret_id']}")
+        if p["kind"] == "missing":
+            lines.append(f"    Status: missing in GCP")
+            lines.append(f"    Resolve: gapp secrets set {p['name']} <value>")
+        elif p["kind"] == "unattached":
+            lines.append(f"    Status: exists in GCP but has no `{GAPP_SOLUTION_LABEL}` label")
+            lines.append(
+                f"    Resolve (adopt): gcloud secrets update {p['secret_id']} "
+                f"--update-labels={GAPP_SOLUTION_LABEL}={solution_name} --project={project_id}"
+            )
+            lines.append(
+                f"    Resolve (recreate): gcloud secrets delete {p['secret_id']} "
+                f"--project={project_id}  # then `gapp secrets set {p['name']} <value>`"
+            )
+        else:  # conflict
+            lines.append(f"    Status: labeled for solution '{p['owner']}', not '{solution_name}'")
+            lines.append(
+                f"    Resolve: rename in gapp.yaml, or if '{p['owner']}' is gone, "
+                f"re-label: gcloud secrets update {p['secret_id']} "
+                f"--update-labels={GAPP_SOLUTION_LABEL}={solution_name} --project={project_id}"
+            )
+    raise RuntimeError("\n".join(lines))
 
 
 def materialize_generated_secrets(project_id: str, solution_name: str, manifest: dict) -> list[dict]:
