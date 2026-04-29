@@ -693,6 +693,7 @@ class GappSDK:
         env: Optional[str] = None,
         dry_run: bool = False,
         project_id: Optional[str] = None,
+        rebuild: bool = False,
     ) -> dict:
         ctx = self.resolve_solution(solution)
         if not ctx:
@@ -755,16 +756,19 @@ class GappSDK:
         if not self.provider.bucket_exists(target_project, bucket_name):
             raise RuntimeError(f"Foundation missing. Run 'gapp setup'.")
 
+        build_ref = ref or "HEAD"
         if paths := get_paths(load_manifest(repo_path)):
             return {"services": [
                 self._deploy_single_service(
                     s["name"], target_project, repo_path, load_manifest(repo_path / s["path"]),
                     service_path=s["path"], env=project_env, parent_solution=solution_name,
+                    ref=build_ref, rebuild=rebuild,
                 )
                 for s in preview["services"]
             ]}
         return self._deploy_single_service(
             solution_name, target_project, repo_path, load_manifest(repo_path), env=project_env,
+            ref=build_ref, rebuild=rebuild,
         )
 
     def status(self, name: str | None = None, env: Optional[str] = None) -> StatusResult:
@@ -829,14 +833,15 @@ class GappSDK:
     # -- Internal helpers --
 
     def _deploy_single_service(self, name, project_id, repo_path, manifest,
-                               service_path=".", env=None, parent_solution=None):
+                               service_path=".", env=None, parent_solution=None,
+                               ref="HEAD", rebuild=False):
         service_root = repo_path / service_path
         entrypoint, _ = _resolve_entrypoint(manifest, service_root, repo_path)
-        sha = self._resolve_ref(repo_path, "HEAD")
+        sha = self._resolve_ref(repo_path, ref)
         self.provider.ensure_artifact_registry(project_id, "us-central1")
         image = f"us-central1-docker.pkg.dev/{project_id}/gapp/{name}:{sha}"
-        if not self.provider.image_exists(project_id, "us-central1", name, sha):
-            build_dir, build_ep = _prepare_build_dir(repo_path, image, entrypoint)
+        if rebuild or not self.provider.image_exists(project_id, "us-central1", name, sha):
+            build_dir, build_ep = _prepare_build_dir(repo_path, image, entrypoint, ref=ref)
             try:
                 self.provider.submit_build_sync(project_id, Path(build_dir), image, build_ep)
             finally:
@@ -882,11 +887,11 @@ def _resolve_entrypoint(manifest, root, repo):
     return "__mcp_app__", "mcp-app"
 
 
-def _prepare_build_dir(path, image, ep):
+def _prepare_build_dir(path, image, ep, ref="HEAD"):
     d = tempfile.mkdtemp(prefix="gapp-build-")
     subprocess.run(
         ["tar", "xf", "-", "-C", d],
-        stdin=subprocess.Popen(["git", "archive", "--format=tar", "HEAD"], stdout=subprocess.PIPE, cwd=path).stdout,
+        stdin=subprocess.Popen(["git", "archive", "--format=tar", ref], stdout=subprocess.PIPE, cwd=path).stdout,
         check=True,
     )
     t = Path(__file__).resolve().parent.parent.parent / "templates"
