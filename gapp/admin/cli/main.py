@@ -217,16 +217,17 @@ def setup_cmd(sdk: GappSDK, project_id, solution, env, project_arg, force):
 
 
 @main.command()
-@click.option("--ref", default=None, help="Git ref to deploy.")
+@click.option("--ref", default=None, help="Git ref (commit/tag/branch) to build from. Defaults to HEAD.")
 @click.option("--solution", default=None, help="Solution name.")
 @click.option("--env", default=None, help="Verify project's gapp-env matches.")
 @click.option("--project", help="Explicit GCP Project ID override.")
 @click.option("--dry-run", is_flag=True, help="Preview deployment.")
+@click.option("--rebuild", is_flag=True, help="Force docker build even if an image already exists for the resolved SHA.")
 @click.pass_obj
-def deploy(sdk: GappSDK, ref, solution, env, project, dry_run):
+def deploy(sdk: GappSDK, ref, solution, env, project, dry_run, rebuild):
     """Build + terraform apply."""
     try:
-        result = sdk.deploy(ref=ref, solution=solution, env=env, dry_run=dry_run, project_id=project)
+        result = sdk.deploy(ref=ref, solution=solution, env=env, dry_run=dry_run, project_id=project, rebuild=rebuild)
     except (RuntimeError, ValueError) as e:
         click.echo(f"  Error: {e}", err=True)
         raise SystemExit(1)

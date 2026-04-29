@@ -128,23 +128,28 @@ def gapp_deploy(
     env: str | None = None,
     dry_run: bool = False,
     project_id: str | None = None,
+    rebuild: bool = False,
 ) -> dict:
     """Deploy a gapp solution to Cloud Run (build + terraform apply).
 
     Prerequisites: gapp_init and gapp_setup must have been run first.
 
     Args:
-        ref: Git ref to deploy (commit, tag, branch). Defaults to HEAD.
+        ref: Git ref to build from (commit, tag, branch). Defaults to HEAD.
         solution: Solution name. Defaults to current directory's solution.
         env: Optional — disambiguates when multiple projects host this
              solution, and verifies the resolved project's bound env.
              Reserved values like "default" are rejected.
         dry_run: Preview only — do not build or apply.
         project_id: Explicit GCP project ID override. Discovered if omitted.
+        rebuild: Force docker build even if an image already exists in
+                 Artifact Registry for the resolved SHA. Default False —
+                 existing images are reused for speed.
     """
     from gapp.admin.sdk.core import GappSDK
     return GappSDK().deploy(
         ref=ref, solution=solution, env=env, dry_run=dry_run, project_id=project_id,
+        rebuild=rebuild,
     )
 
 

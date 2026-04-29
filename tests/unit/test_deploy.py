@@ -82,3 +82,82 @@ def test_deploy_dry_run_no_setup_pending(tmp_path, monkeypatch, sdk):
     assert res["dry_run"] is True
     assert res["status"] == "pending_setup"
     assert res["project_id"] is None
+
+
+# -- --rebuild flag and --ref threading --
+
+
+def _setup_real_deploy(tmp_path, monkeypatch, sdk, ref_sha="abc123def456"):
+    """Set up a deployable repo + populate provider state for a real apply."""
+    repo = _repo(tmp_path, monkeypatch)
+    sdk.provider.project_labels["proj-123"] = {
+        "gapp__my-app": "v-3",
+    }
+    sdk.provider.buckets["gapp-my-app-proj-123"] = {"project": "proj-123"}
+
+    captured = {}
+
+    def fake_resolve_ref(self, path, ref):
+        captured["resolved_ref"] = ref
+        return ref_sha
+
+    def fake_prepare_build_dir(path, image, ep, ref="HEAD"):
+        captured["build_ref"] = ref
+        return str(tmp_path / "build"), ep
+
+    monkeypatch.setattr(GappSDK, "_resolve_ref", fake_resolve_ref)
+    import gapp.admin.sdk.core as core_mod
+    monkeypatch.setattr(core_mod, "_prepare_build_dir", fake_prepare_build_dir)
+    (tmp_path / "build").mkdir()
+
+    builds_called = {"count": 0}
+    original_submit = sdk.provider.submit_build_sync
+
+    def counting_submit(*args, **kwargs):
+        builds_called["count"] += 1
+        return original_submit(*args, **kwargs)
+
+    sdk.provider.submit_build_sync = counting_submit
+    return repo, captured, builds_called
+
+
+def test_deploy_skips_build_when_image_exists(tmp_path, monkeypatch, sdk):
+    """Default behavior: existing image short-circuits docker build."""
+    _, _, builds_called = _setup_real_deploy(tmp_path, monkeypatch, sdk)
+    sdk.provider.image_exists = lambda *a, **kw: True
+
+    sdk.deploy()
+
+    assert builds_called["count"] == 0
+
+
+def test_deploy_rebuild_forces_build_even_when_image_exists(tmp_path, monkeypatch, sdk):
+    """--rebuild bypasses the image-exists short-circuit."""
+    _, _, builds_called = _setup_real_deploy(tmp_path, monkeypatch, sdk)
+    sdk.provider.image_exists = lambda *a, **kw: True
+
+    sdk.deploy(rebuild=True)
+
+    assert builds_called["count"] == 1
+
+
+def test_deploy_ref_is_threaded_into_build(tmp_path, monkeypatch, sdk):
+    """--ref reaches both _resolve_ref and _prepare_build_dir (no silent HEAD)."""
+    _, captured, _ = _setup_real_deploy(tmp_path, monkeypatch, sdk)
+    sdk.provider.image_exists = lambda *a, **kw: False
+
+    sdk.deploy(ref="v1.2.3")
+
+    assert captured["resolved_ref"] == "v1.2.3"
+    assert captured["build_ref"] == "v1.2.3"
+
+
+def test_deploy_default_ref_is_head(tmp_path, monkeypatch, sdk):
+    """No --ref → resolve and archive HEAD."""
+    _, captured, _ = _setup_real_deploy(tmp_path, monkeypatch, sdk)
+    sdk.provider.image_exists = lambda *a, **kw: False
+
+    sdk.deploy()
+
+    assert captured["resolved_ref"] == "HEAD"
+    assert captured["build_ref"] == "HEAD"
