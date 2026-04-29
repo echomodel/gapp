@@ -2,11 +2,32 @@
 
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Optional, List, Dict
 
 from gapp.admin.sdk.cloud.base import CloudProvider
+
+
+_GAPP_PKG_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+_BUNDLED_TF_DIR = _GAPP_PKG_ROOT / "terraform"
+_BUNDLED_MODULES_DIR = _GAPP_PKG_ROOT / "modules"
+
+
+def _stage_terraform(staging_dir: Path) -> None:
+    """Copy bundled terraform files (main.tf, variables.tf, modules/) into the staging dir.
+
+    Runs on every deploy so the staged copy always matches the installed gapp version.
+    Wipes the staged modules/ first to drop files removed in the current release.
+    """
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    for tf in _BUNDLED_TF_DIR.glob("*.tf"):
+        shutil.copy2(tf, staging_dir / tf.name)
+    staged_modules = staging_dir / "modules"
+    if staged_modules.exists():
+        shutil.rmtree(staged_modules)
+    shutil.copytree(_BUNDLED_MODULES_DIR, staged_modules)
 
 
 class GCPProvider(CloudProvider):
@@ -117,6 +138,7 @@ class GCPProvider(CloudProvider):
         env["GOOGLE_OAUTH_ACCESS_TOKEN"] = token
         if self.account: env["CLOUDSDK_CORE_ACCOUNT"] = self.account
 
+        _stage_terraform(staging_dir)
         (staging_dir / "terraform.tfvars.json").write_text(json.dumps(tfvars, indent=2))
 
         subprocess.run(["terraform", "init", f"-backend-config=bucket={bucket_name}", f"-backend-config=prefix={state_prefix}", "-input=false", "-upgrade"], cwd=staging_dir, env=env, check=True)
@@ -135,6 +157,7 @@ class GCPProvider(CloudProvider):
         env["GOOGLE_OAUTH_ACCESS_TOKEN"] = token
         if self.account: env["CLOUDSDK_CORE_ACCOUNT"] = self.account
 
+        _stage_terraform(staging_dir)
         res = subprocess.run(["terraform", "init", f"-backend-config=bucket={bucket_name}", f"-backend-config=prefix={state_prefix}", "-input=false", "-upgrade"], cwd=staging_dir, env=env, capture_output=True)
         if res.returncode != 0: return None
 

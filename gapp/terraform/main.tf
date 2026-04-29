@@ -9,7 +9,7 @@ terraform {
 }
 
 module "service" {
-  source        = "github.com/echomodel/gapp//modules/cloud-run-service"
+  source        = "./modules/cloud-run-service"
   project_id    = var.project_id
   service_name  = var.service_name
   image         = var.image
