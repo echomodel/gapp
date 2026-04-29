@@ -140,7 +140,7 @@ def test_get_env_vars_new_format():
     manifest = {
         "env": [
             {"name": "LOG_LEVEL", "value": "INFO"},
-            {"name": "SIGNING_KEY", "secret": {"generate": True}},
+            {"name": "APP_KEY", "secret": {"generate": True}},
         ]
     }
     result = get_env_vars(manifest)
@@ -199,9 +199,9 @@ domain: mcp.example.com
 env:
   - name: LOG_LEVEL
     value: INFO
-  - name: SIGNING_KEY
+  - name: APP_KEY
     secret:
-      name: signing-key
+      name: app-key
       generate: true
 service:
   entrypoint: app:main
@@ -211,14 +211,14 @@ prerequisites:
 """)
     result = load_manifest(tmp_path)
     assert result["domain"] == "mcp.example.com"
-    assert result["env"][1]["secret"]["name"] == "signing-key"
+    assert result["env"][1]["secret"]["name"] == "app-key"
 
 
 def test_secret_missing_name_rejected(tmp_path):
     """The exact silent-skip case from issue #26: secret dict without name."""
     _write_yaml(tmp_path, """
 env:
-  - name: SIGNING_KEY
+  - name: APP_KEY
     secret:
       generate: true
 """)

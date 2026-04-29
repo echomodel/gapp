@@ -123,7 +123,7 @@ Key decisions:
 - **`service.entrypoint` is required** — passed as `--build-arg` to the static Dockerfile.
 - **Port 8080 is hardcoded** — not configurable. All Cloud Run services use 8080.
 - **No `prerequisites.apis`** — foundation APIs are hardcoded in `gapp setup`.
-- **Secrets require an explicit `name`** — the `name` field under `secret:` is the short name in Secret Manager. gapp prefixes it with the solution name: `name: signing-key` on solution `my-app` → `my-app-signing-key` in Secret Manager. No auto-derivation from the env var name.
+- **Secrets require an explicit `name`** — the `name` field under `secret:` is the short name in Secret Manager. gapp prefixes it with the solution name: `name: app-key` on solution `my-app` → `my-app-app-key` in Secret Manager. No auto-derivation from the env var name.
 - **Every gapp-managed secret is stamped with `gapp-solution=<name>`** — the label is the machine-readable ownership signal. `gapp secrets list`, the pre-deploy validator, and any future tooling query Secret Manager by `labels.gapp-solution=<solution>` (one call) and diff against gapp.yaml declarations.
 - **gapp never implicitly takes over pre-existing secrets** — if `gapp secrets set` or a deploy-time generate path tries to create `<solution>-<short-name>` and a secret at that ID already exists without a matching `gapp-solution=<solution>` label, the operation fails with an actionable error. Every secret gapp manages is labeled; the absence of a label (or a different owner label) means something outside gapp's lifecycle put it there, and silently adopting it would be a security-sensitive side-effect. The user must investigate manually with `gcloud secrets describe` and either delete the existing secret (so gapp can reclaim the name) or resolve the ownership conflict another way.
 
@@ -313,6 +313,44 @@ Universal tools like Docker are the exception — Docker examples
 serve both practical and illustrative purposes and don't create
 coupling to a specific app framework.
 
+## Avoiding Product Coupling
+
+Code, comments, documentation, skills, unit tests, and test fixtures
+in this repo must not use illustrative examples drawn from co-owned
+frameworks (e.g., `mcp-app`) or co-owned apps that gapp happens to
+deploy (e.g., a specific MCP server). Examples for env var names,
+secret short names, and similar configuration must be generic
+enough that a reader unfamiliar with our other products would not
+infer any of them as a load-bearing concept of gapp itself.
+
+The canonical forbidden example — cited here as the reference for the rule:
+
+| Forbidden example | Reason | Use instead |
+|---|---|---|
+| env var `SIGNING_KEY` / secret short name `signing-key` | Specific to a co-owned framework's session-signing scheme (`mcp-app`). Not a gapp concept. | Generic placeholders: `APP_KEY` / `app-key`, `API_TOKEN` / `api-token`, `DB_PASSWORD` / `db-password`, etc. |
+
+Solution names of specific deployed instances are also out of bounds
+as illustrative examples. Use placeholder names like `my-app`,
+`my-svc`, `parent-app` instead.
+
+The forbidden names above must not appear anywhere in the repo
+*except* this single section, where they are cited as the reference
+for the rule. That includes Python source, code comments, markdown
+documentation, skill files, unit tests, manifest fixtures, and
+CLI/help strings.
+
+The reasoning is the same as the `External Framework Awareness`
+section above, applied one level lower: leaking another product's
+naming into gapp's examples implies gapp knows something about that
+product. It does not. Every example used in this codebase should
+read as if gapp had been written before any of our other products
+existed.
+
+When adding a new example, ask: would this name still make sense
+in a hypothetical fork of gapp deployed inside an unrelated
+organization that has never heard of our other tools? If yes, use
+it. If no, pick something more generic.
+
 ## Design Principles
 
 ### 1. Separate the Tool from the Deployment
@@ -378,6 +416,23 @@ Secret values live in GCP Secret Manager per-project. No central vault, no secre
 ### 14. Don't Hide Reusable Logic in Private Repos
 
 If code is generic and useful, it belongs in a public repo. Private repos should contain only personal data and configuration. The gapp CLI, Terraform modules, and runtime wrapper are all public. Personal infrastructure decisions live in private repos.
+
+### 15. Bounded Queries Over Project-Wide Scans
+
+gapp never enumerates "all secrets in a project" or "all resources of
+type X in a project." Every read is either:
+
+- **Label-filtered**, e.g. `gcloud secrets list --filter labels.gapp-solution=<sol>` — server-side filter, scales with matches not project total, and is gapp's only enumeration shape.
+- **Addressed by ID**, e.g. `gcloud secrets describe <secret_id>` — O(1) per call, no scan.
+
+This is intentional and must be preserved. Reasons:
+
+1. **Cost discipline** — projects can host hundreds or thousands of secrets that have nothing to do with any single solution. Scanning them all on every `gapp secrets list` would be wasteful and slow at the wrong moments (pre-deploy validation, status checks).
+2. **No lateral exposure** — a label-filtered or ID-addressed read returns only what gapp owns or what gapp explicitly asked for. An unfiltered list would surface neighboring solutions' secret IDs in the API response, even if gapp ignored them. Bounded queries minimize that exposure.
+3. **Predictable latency** — call cost scales with the solution's own declared surface, not the project's history.
+4. **Graceful degradation under scale** — if a project ever does grow to a five-figure secret count, gapp's behavior is identical to a fresh project. No latency cliff, no pagination loop, no rewrite needed.
+
+When adding new operations, never reach for an unfiltered list of project-wide resources. Use the existing label or ID-addressed paths, or extend them with a new label. If a future operation genuinely needs a project-wide scan, that needs explicit design discussion — it is not the default shape.
 
 ## MCP Admin Server
 

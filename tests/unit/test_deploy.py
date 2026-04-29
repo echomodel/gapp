@@ -205,9 +205,9 @@ def test_build_tfvars_emits_env_secret_declarations(tmp_path):
     (repo / "gapp.yaml").write_text(
         "name: my-app\n"
         "env:\n"
-        "  - name: SIGNING_KEY\n"
+        "  - name: APP_KEY\n"
         "    secret:\n"
-        "      name: signing-key\n"
+        "      name: app-key\n"
         "      generate: true\n"
         "  - name: API_TOKEN\n"
         "    secret:\n"
@@ -221,9 +221,34 @@ def test_build_tfvars_emits_env_secret_declarations(tmp_path):
     )
 
     assert tfvars["secrets"] == {
-        "SIGNING_KEY": "my-app-signing-key",
+        "APP_KEY": "my-app-app-key",
         "API_TOKEN": "my-app-api-token",
     }
+
+
+def test_build_tfvars_merges_env_secrets_with_prerequisites_secrets(tmp_path):
+    """Env-secret declarations and prerequisites.secrets both reach the secrets tfvar."""
+    from gapp.admin.sdk.core import _build_tfvars
+
+    repo = tmp_path / "app"
+    repo.mkdir()
+    (repo / "gapp.yaml").write_text(
+        "name: my-app\n"
+        "env:\n"
+        "  - name: APP_KEY\n"
+        "    secret: {name: app-key, generate: true}\n"
+    )
+
+    cfg = {"memory": "512Mi", "cpu": "1", "max_instances": 5, "env": {}}
+    prerequisites = {"legacy-secret": {"description": "from old prerequisites block"}}
+    tfvars = _build_tfvars(
+        "my-app", "proj-123", "img:tag", cfg, prerequisites, repo, False, "",
+        solution_name="my-app",
+    )
+
+    assert tfvars["secrets"]["APP_KEY"] == "my-app-app-key"
+    assert "LEGACY_SECRET" in tfvars["secrets"]
+    assert len(tfvars["secrets"]) == 2
 
 
 def test_build_tfvars_uses_solution_name_for_workspace_services(tmp_path):
@@ -235,8 +260,8 @@ def test_build_tfvars_uses_solution_name_for_workspace_services(tmp_path):
     (repo / "gapp.yaml").write_text(
         "name: my-svc\n"
         "env:\n"
-        "  - name: SIGNING_KEY\n"
-        "    secret: {name: signing-key, generate: true}\n"
+        "  - name: APP_KEY\n"
+        "    secret: {name: app-key, generate: true}\n"
     )
 
     cfg = {"memory": "512Mi", "cpu": "1", "max_instances": 5, "env": {}}
@@ -245,7 +270,7 @@ def test_build_tfvars_uses_solution_name_for_workspace_services(tmp_path):
         solution_name="parent-app",
     )
 
-    assert tfvars["secrets"] == {"SIGNING_KEY": "parent-app-signing-key"}
+    assert tfvars["secrets"] == {"APP_KEY": "parent-app-app-key"}
 
 
 def test_deploy_materializes_generated_secrets(tmp_path, monkeypatch, sdk):
@@ -256,8 +281,8 @@ def test_deploy_materializes_generated_secrets(tmp_path, monkeypatch, sdk):
         contents=(
             "name: my-app\n"
             "env:\n"
-            "  - name: SIGNING_KEY\n"
-            "    secret: {name: signing-key, generate: true}\n"
+            "  - name: APP_KEY\n"
+            "    secret: {name: app-key, generate: true}\n"
         ),
     )
     sdk.provider.project_labels["proj-123"] = {"gapp__my-app": "v-3"}
@@ -276,10 +301,10 @@ def test_deploy_materializes_generated_secrets(tmp_path, monkeypatch, sdk):
 
     sdk.deploy()
 
-    assert calls["ensure_secret"] == ["my-app-signing-key"]
+    assert calls["ensure_secret"] == ["my-app-app-key"]
     assert len(calls["add_secret_version"]) == 1
-    assert calls["add_secret_version"][0] == ("my-app-signing-key", 32)
-    assert sdk.provider.last_tfvars["secrets"] == {"SIGNING_KEY": "my-app-signing-key"}
+    assert calls["add_secret_version"][0] == ("my-app-app-key", 32)
+    assert sdk.provider.last_tfvars["secrets"] == {"APP_KEY": "my-app-app-key"}
 
 
 def test_deploy_skips_existing_generated_secret(tmp_path, monkeypatch, sdk):
@@ -289,8 +314,8 @@ def test_deploy_skips_existing_generated_secret(tmp_path, monkeypatch, sdk):
         contents=(
             "name: my-app\n"
             "env:\n"
-            "  - name: SIGNING_KEY\n"
-            "    secret: {name: signing-key, generate: true}\n"
+            "  - name: APP_KEY\n"
+            "    secret: {name: app-key, generate: true}\n"
         ),
     )
     sdk.provider.project_labels["proj-123"] = {"gapp__my-app": "v-3"}
@@ -305,13 +330,13 @@ def test_deploy_skips_existing_generated_secret(tmp_path, monkeypatch, sdk):
     (tmp_path / "build").mkdir()
     sdk.provider.image_exists = lambda *a, **kw: True
 
-    calls = _patch_secret_calls(monkeypatch, present_ids=("my-app-signing-key",))
+    calls = _patch_secret_calls(monkeypatch, present_ids=("my-app-app-key",))
 
     sdk.deploy()
 
     assert calls["ensure_secret"] == []
     assert calls["add_secret_version"] == []
-    assert sdk.provider.last_tfvars["secrets"] == {"SIGNING_KEY": "my-app-signing-key"}
+    assert sdk.provider.last_tfvars["secrets"] == {"APP_KEY": "my-app-app-key"}
 
 
 def test_deploy_fails_fast_on_missing_non_generate_secret(tmp_path, monkeypatch, sdk):
@@ -350,13 +375,13 @@ def test_materialize_generated_secrets_idempotent(monkeypatch):
     manifest = {
         "name": "my-app",
         "env": [
-            {"name": "SIGNING_KEY", "secret": {"name": "signing-key", "generate": True}},
+            {"name": "APP_KEY", "secret": {"name": "app-key", "generate": True}},
         ],
     }
 
-    calls = _patch_secret_calls(monkeypatch, present_ids=("my-app-signing-key",))
+    calls = _patch_secret_calls(monkeypatch, present_ids=("my-app-app-key",))
     results = materialize_generated_secrets("proj-123", "my-app", manifest)
 
-    assert results == [{"name": "signing-key", "secret_id": "my-app-signing-key", "status": "exists"}]
+    assert results == [{"name": "app-key", "secret_id": "my-app-app-key", "status": "exists"}]
     assert calls["ensure_secret"] == []
     assert calls["add_secret_version"] == []

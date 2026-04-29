@@ -27,7 +27,7 @@ def test_label_constant():
 def test_list_secrets_by_label_single_call():
     """One gcloud call, filtered by label, parses secret IDs from stdout."""
     with patch("gapp.admin.sdk.secrets.subprocess.run") as run:
-        run.return_value = _run_mock(stdout="my-app-signing-key\nmy-app-api-token\n")
+        run.return_value = _run_mock(stdout="my-app-app-key\nmy-app-api-token\n")
         result = list_secrets_by_label("proj", "my-app")
 
     assert run.call_count == 1
@@ -35,7 +35,7 @@ def test_list_secrets_by_label_single_call():
     assert "list" in args
     assert "--filter" in args
     assert f"labels.{GAPP_SOLUTION_LABEL}=my-app" in args
-    assert [s["id"] for s in result] == ["my-app-signing-key", "my-app-api-token"]
+    assert [s["id"] for s in result] == ["my-app-app-key", "my-app-api-token"]
 
 
 def test_list_secrets_by_label_api_failure_degrades():
@@ -56,7 +56,7 @@ def test_ensure_secret_stamps_label_on_create():
         return _run_mock(returncode=0)
 
     with patch("gapp.admin.sdk.secrets.subprocess.run", side_effect=fake_run):
-        status = _ensure_secret("proj", "my-app-signing-key", "my-app")
+        status = _ensure_secret("proj", "my-app-app-key", "my-app")
 
     assert status == "created"
     create_call = next(c for c in calls if "create" in c)
@@ -73,7 +73,7 @@ def test_ensure_secret_reuses_when_already_owned():
         return _run_mock(returncode=0, stdout="my-app\n")
 
     with patch("gapp.admin.sdk.secrets.subprocess.run", side_effect=fake_run):
-        status = _ensure_secret("proj", "my-app-signing-key", "my-app")
+        status = _ensure_secret("proj", "my-app-app-key", "my-app")
 
     assert status == "exists"
     assert len(calls) == 1  # describe only — no create, no update
@@ -87,12 +87,12 @@ def test_ensure_secret_refuses_unlabeled_preexisting():
 
     with patch("gapp.admin.sdk.secrets.subprocess.run", side_effect=fake_run):
         with pytest.raises(RuntimeError) as exc:
-            _ensure_secret("proj", "my-app-signing-key", "my-app")
+            _ensure_secret("proj", "my-app-app-key", "my-app")
     msg = str(exc.value)
-    assert "my-app-signing-key" in msg
+    assert "my-app-app-key" in msg
     assert "no gapp-solution label" in msg
-    assert "gcloud secrets describe my-app-signing-key" in msg
-    assert "gcloud secrets delete my-app-signing-key" in msg
+    assert "gcloud secrets describe my-app-app-key" in msg
+    assert "gcloud secrets delete my-app-app-key" in msg
 
 
 def test_ensure_secret_refuses_differently_owned_preexisting():
@@ -102,7 +102,7 @@ def test_ensure_secret_refuses_differently_owned_preexisting():
 
     with patch("gapp.admin.sdk.secrets.subprocess.run", side_effect=fake_run):
         with pytest.raises(RuntimeError) as exc:
-            _ensure_secret("proj", "my-app-signing-key", "my-app")
+            _ensure_secret("proj", "my-app-app-key", "my-app")
     assert "owned by solution 'other-app'" in str(exc.value)
 
 
@@ -135,7 +135,7 @@ def test_validate_declared_secrets_skips_generate():
     """Secrets with generate: true are not checked — gapp creates them on deploy."""
     manifest = {
         "env": [
-            {"name": "SIGNING_KEY", "secret": {"name": "signing-key", "generate": True}},
+            {"name": "APP_KEY", "secret": {"name": "app-key", "generate": True}},
         ]
     }
     with patch("gapp.admin.sdk.secrets.list_secrets_by_label", return_value=[]):
@@ -148,7 +148,7 @@ def test_validate_declared_secrets_reports_all_missing():
         "env": [
             {"name": "API_TOKEN", "secret": {"name": "api-token"}},
             {"name": "DB_URL", "secret": {"name": "db-url"}},
-            {"name": "SIGNING_KEY", "secret": {"name": "signing-key", "generate": True}},
+            {"name": "APP_KEY", "secret": {"name": "app-key", "generate": True}},
         ]
     }
     with patch("gapp.admin.sdk.secrets.list_secrets_by_label", return_value=[]):
@@ -158,7 +158,7 @@ def test_validate_declared_secrets_reports_all_missing():
     assert "my-app-api-token" in msg
     assert "my-app-db-url" in msg
     # generate-true secret is not required pre-deploy
-    assert "my-app-signing-key" not in msg
+    assert "my-app-app-key" not in msg
 
 
 def test_list_secrets_by_label_filter_value_is_solution_name():
@@ -169,10 +169,10 @@ def test_list_secrets_by_label_filter_value_is_solution_name():
         captured.append(args)
         return _run_mock(stdout="")
     with patch("gapp.admin.sdk.secrets.subprocess.run", side_effect=fake_run):
-        list_secrets_by_label("proj", "food-agent")
+        list_secrets_by_label("proj", "my-svc")
     assert len(captured) == 1
     filter_idx = captured[0].index("--filter")
-    assert captured[0][filter_idx + 1] == f"labels.{GAPP_SOLUTION_LABEL}=food-agent"
+    assert captured[0][filter_idx + 1] == f"labels.{GAPP_SOLUTION_LABEL}=my-svc"
 
 
 # -- _classify_unlabeled --
@@ -253,8 +253,8 @@ def test_list_secrets_full_scenario(tmp_path, monkeypatch):
     (repo / "gapp.yaml").write_text(
         "name: my-app\n"
         "env:\n"
-        "  - name: SIGNING_KEY\n"
-        "    secret: {name: signing-key}\n"
+        "  - name: APP_KEY\n"
+        "    secret: {name: app-key}\n"
         "  - name: API_TOKEN\n"
         "    secret: {name: api-token}\n"
         "  - name: WEBHOOK_SECRET\n"
@@ -268,7 +268,7 @@ def test_list_secrets_full_scenario(tmp_path, monkeypatch):
     monkeypatch.setattr(sec_mod, "GappSDK", lambda: sdk_stub)
     monkeypatch.setattr(
         sec_mod, "list_secrets_by_label",
-        lambda pid, sol: [{"id": "my-app-signing-key", "labels": {}},
+        lambda pid, sol: [{"id": "my-app-app-key", "labels": {}},
                           {"id": "my-app-old-key", "labels": {}}],
     )
 
@@ -282,7 +282,7 @@ def test_list_secrets_full_scenario(tmp_path, monkeypatch):
     result = sec_mod.list_secrets()
 
     by_name = {s["name"]: s for s in result["secrets"]}
-    assert by_name["signing-key"]["status"] == "ready"
+    assert by_name["app-key"]["status"] == "ready"
     assert by_name["api-token"]["status"] == "unattached"
     assert by_name["webhook-secret"]["status"] == "missing"
 
@@ -340,8 +340,8 @@ def test_list_secrets_generate_missing_uses_distinct_status(tmp_path, monkeypatc
     (repo / "gapp.yaml").write_text(
         "name: my-app\n"
         "env:\n"
-        "  - name: SIGNING_KEY\n"
-        "    secret: {name: signing-key, generate: true}\n"
+        "  - name: APP_KEY\n"
+        "    secret: {name: app-key, generate: true}\n"
     )
 
     sdk_stub = MagicMock()
@@ -359,3 +359,203 @@ def test_list_secrets_generate_missing_uses_distinct_status(tmp_path, monkeypatc
 
     assert result["secrets"][0]["status"] == "missing-generate"
     assert result["hints"] == []  # no remediation needed for auto-generated
+
+
+def test_list_secrets_no_project_status(tmp_path, monkeypatch):
+    """When no GCP project is attached, every declared secret reports `no-project`."""
+    from gapp.admin.sdk import secrets as sec_mod
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "gapp.yaml").write_text(
+        "name: my-app\n"
+        "env:\n"
+        "  - name: API_TOKEN\n"
+        "    secret: {name: api-token}\n"
+    )
+
+    sdk_stub = MagicMock()
+    sdk_stub.resolve_solution.return_value = {
+        "name": "my-app", "project_id": None, "repo_path": str(repo),
+    }
+    monkeypatch.setattr(sec_mod, "GappSDK", lambda: sdk_stub)
+
+    result = sec_mod.list_secrets()
+
+    assert result["project_id"] is None
+    assert result["secrets"][0]["status"] == "no-project"
+    assert result["hints"] == []
+
+
+def test_list_secrets_all_ready_hints_empty(tmp_path, monkeypatch):
+    """When every declared secret is ready and no orphans exist, hints is empty."""
+    from gapp.admin.sdk import secrets as sec_mod
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "gapp.yaml").write_text(
+        "name: my-app\n"
+        "env:\n"
+        "  - name: API_TOKEN\n"
+        "    secret: {name: api-token}\n"
+        "  - name: APP_KEY\n"
+        "    secret: {name: app-key}\n"
+    )
+
+    sdk_stub = MagicMock()
+    sdk_stub.resolve_solution.return_value = {
+        "name": "my-app", "project_id": "proj-x", "repo_path": str(repo),
+    }
+    monkeypatch.setattr(sec_mod, "GappSDK", lambda: sdk_stub)
+    monkeypatch.setattr(
+        sec_mod, "list_secrets_by_label",
+        lambda pid, sol: [{"id": "my-app-api-token"}, {"id": "my-app-app-key"}],
+    )
+
+    result = sec_mod.list_secrets()
+
+    assert all(s["status"] == "ready" for s in result["secrets"])
+    assert result["orphans"] == []
+    assert result["hints"] == []
+
+
+def test_list_secrets_conflict_hint_full_structure(tmp_path, monkeypatch):
+    """Conflict hint carries secret_id, issue, message, and two concrete options."""
+    from gapp.admin.sdk import secrets as sec_mod
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "gapp.yaml").write_text(
+        "name: my-app\n"
+        "env:\n"
+        "  - name: API_TOKEN\n"
+        "    secret: {name: api-token}\n"
+    )
+    sdk_stub = MagicMock()
+    sdk_stub.resolve_solution.return_value = {
+        "name": "my-app", "project_id": "my-project", "repo_path": str(repo),
+    }
+    monkeypatch.setattr(sec_mod, "GappSDK", lambda: sdk_stub)
+    monkeypatch.setattr(sec_mod, "list_secrets_by_label", lambda pid, sol: [])
+    monkeypatch.setattr(
+        sec_mod, "_classify_unlabeled",
+        lambda pid, sid: {"kind": "conflict", "owner": "another-app"},
+    )
+
+    hint = sec_mod.list_secrets()["hints"][0]
+    assert hint["secret_id"] == "my-app-api-token"
+    assert hint["issue"] == "conflict"
+    assert "another-app" in hint["message"]
+    assert len(hint["options"]) == 2
+    rename_opt, relabel_opt = hint["options"]
+    assert "rename" in rename_opt["label"].lower()
+    assert "edit gapp.yaml" in rename_opt["command"]
+    assert "Re-label" in relabel_opt["label"]
+    assert "gcloud secrets update my-app-api-token" in relabel_opt["command"]
+    assert "--update-labels=gapp-solution=my-app" in relabel_opt["command"]
+    assert "--project=my-project" in relabel_opt["command"]
+
+
+def test_list_secrets_orphan_hint_full_structure(tmp_path, monkeypatch):
+    """Orphan hint carries delete + re-declare options with correct project/id."""
+    from gapp.admin.sdk import secrets as sec_mod
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "gapp.yaml").write_text("name: my-app\n")  # no env declarations
+    sdk_stub = MagicMock()
+    sdk_stub.resolve_solution.return_value = {
+        "name": "my-app", "project_id": "my-project", "repo_path": str(repo),
+    }
+    monkeypatch.setattr(sec_mod, "GappSDK", lambda: sdk_stub)
+    monkeypatch.setattr(
+        sec_mod, "list_secrets_by_label",
+        lambda pid, sol: [{"id": "my-app-stale-key"}],
+    )
+
+    result = sec_mod.list_secrets()
+    assert result["orphans"] == ["my-app-stale-key"]
+    hint = result["hints"][0]
+    assert hint["issue"] == "orphan"
+    assert hint["secret_id"] == "my-app-stale-key"
+    assert len(hint["options"]) == 2
+    delete_opt = hint["options"][0]
+    assert "Delete" in delete_opt["label"]
+    assert "gcloud secrets delete my-app-stale-key" in delete_opt["command"]
+    assert "--project=my-project" in delete_opt["command"]
+
+
+# -- CLI rendering --
+
+
+def test_cli_secrets_list_renders_table_orphans_and_footnotes(tmp_path, monkeypatch):
+    """`gapp secrets list` text output: status table + orphans block + footnoted hints."""
+    from click.testing import CliRunner
+    from gapp.admin.cli.main import main as cli_main
+    from gapp.admin.sdk import secrets as sec_mod
+
+    fixed = {
+        "solution": "my-app",
+        "project_id": "my-project",
+        "secrets": [
+            {"name": "api-token", "env_var": "API_TOKEN",
+             "secret_id": "my-app-api-token", "generate": False, "status": "unattached"},
+            {"name": "app-key", "env_var": "APP_KEY",
+             "secret_id": "my-app-app-key", "generate": False, "status": "ready"},
+        ],
+        "orphans": ["my-app-stale-key"],
+        "hints": [
+            {
+                "secret_id": "my-app-api-token", "issue": "unattached",
+                "message": "Secret 'my-app-api-token' exists but has no label.",
+                "options": [
+                    {"label": "Adopt", "command": "gcloud secrets update my-app-api-token ..."},
+                    {"label": "Delete", "command": "gcloud secrets delete my-app-api-token ..."},
+                ],
+            },
+            {
+                "secret_id": "my-app-stale-key", "issue": "orphan",
+                "message": "Secret 'my-app-stale-key' is labeled but not declared.",
+                "options": [
+                    {"label": "Delete", "command": "gcloud secrets delete my-app-stale-key ..."},
+                ],
+            },
+        ],
+    }
+    monkeypatch.setattr(sec_mod, "list_secrets", lambda solution=None: fixed)
+
+    result = CliRunner().invoke(cli_main, ["secrets", "list"])
+    assert result.exit_code == 0
+    out = result.output
+
+    assert "App:     my-app" in out
+    assert "Project: my-project" in out
+    assert "api-token" in out and "API_TOKEN" in out and "unattached" in out
+    assert "app-key" in out and "ready" in out
+    assert "Orphans" in out and "my-app-stale-key" in out
+    assert "Resolution options" in out
+    assert "[1] my-app-api-token — unattached" in out
+    assert "gcloud secrets update my-app-api-token" in out
+    assert "[2] my-app-stale-key — orphan" in out
+    assert "gcloud secrets delete my-app-stale-key" in out
+
+
+def test_cli_secrets_list_no_hints_when_clean(tmp_path, monkeypatch):
+    """All-ready solution: no Resolution options block, no Orphans block."""
+    from click.testing import CliRunner
+    from gapp.admin.cli.main import main as cli_main
+    from gapp.admin.sdk import secrets as sec_mod
+
+    fixed = {
+        "solution": "my-app",
+        "project_id": "my-project",
+        "secrets": [
+            {"name": "api-token", "env_var": "API_TOKEN",
+             "secret_id": "my-app-api-token", "generate": False, "status": "ready"},
+        ],
+        "orphans": [],
+        "hints": [],
+    }
+    monkeypatch.setattr(sec_mod, "list_secrets", lambda solution=None: fixed)
+
+    result = CliRunner().invoke(cli_main, ["secrets", "list"])
+    assert result.exit_code == 0
+    assert "Resolution options" not in result.output
+    assert "Orphans" not in result.output
+    assert "ready" in result.output

@@ -848,7 +848,7 @@ class GappSDK:
                 shutil.rmtree(build_dir, ignore_errors=True)
         # Secret materialization runs unconditionally before tfvars are built.
         # Skipping it on "already deployed" runs would leave the secrets tfvar
-        # empty for legacy state still owning random_password.signing_key etc.,
+        # empty for legacy state that still owns per-secret module resources,
         # and terraform would destroy those resources as drift.
         from gapp.admin.sdk.secrets import (
             validate_declared_secrets,

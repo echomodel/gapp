@@ -162,7 +162,7 @@ def gapp_secret_get(name: str, plaintext: bool = False, solution: str | None = N
     deploy, or any other secret declared in gapp.yaml.
 
     Pass the secret's short name as declared in gapp.yaml's secret.name
-    field (e.g. "signing-key"). gapp prefixes this with the solution name
+    field (e.g. "app-key"). gapp prefixes this with the solution name
     to produce the full Secret Manager ID automatically.
 
     By default returns a SHA-256 hash prefix and length — enough to confirm
@@ -170,15 +170,15 @@ def gapp_secret_get(name: str, plaintext: bool = False, solution: str | None = N
     plaintext=True to get the actual value (e.g. when you need to pass it
     to an admin CLI for user management).
 
-    Default response:  {"name": "signing-key", "secret_id": "my-app-signing-key", "hash": "a1b2...", "length": 43}
-    With plaintext:    {"name": "signing-key", "secret_id": "my-app-signing-key", "value": "the-actual-value"}
+    Default response:  {"name": "app-key", "secret_id": "my-app-app-key", "hash": "a1b2...", "length": 43}
+    With plaintext:    {"name": "app-key", "secret_id": "my-app-app-key", "value": "the-actual-value"}
 
     IMPORTANT: Before deploying, use gapp_secret_list to confirm all
     non-generated secrets have values. Deploying with missing secrets
     will fail.
 
     Args:
-        name: The secret's short name from gapp.yaml (e.g. "signing-key").
+        name: The secret's short name from gapp.yaml (e.g. "app-key").
         plaintext: If True, return the actual secret value. Default False.
         solution: Solution name. Defaults to current directory's solution.
     """

@@ -295,6 +295,14 @@ def list_secrets_by_label(project_id: str, solution_name: str) -> list[dict]:
     Returns [{"id": "<secret-id>", "labels": {...}}]. On API failure,
     returns [] and logs a warning — the caller decides whether that's
     load-bearing.
+
+    DESIGN INTENT — preserve the label-filtered query shape. This is
+    gapp's only secret-enumeration call, and the `--filter labels.X=Y`
+    is server-side: API returns only matches, not the full project
+    inventory. See CONTRIBUTING.md "Bounded Queries Over Project-Wide
+    Scans" for reasoning. Do not change to an unfiltered list and
+    classify in-memory; that defeats the cost / exposure / scale
+    properties this query was built for.
     """
     filter_expr = f"labels.{GAPP_SOLUTION_LABEL}={solution_name}"
     result = subprocess.run(

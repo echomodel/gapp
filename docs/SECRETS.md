@@ -20,9 +20,9 @@ label, or carry a label for a different solution, are not gapp-managed.
 ```yaml
 name: my-app
 env:
-  - name: SIGNING_KEY
+  - name: APP_KEY
     secret:
-      name: signing-key
+      name: app-key
       generate: true             # gapp creates + sets a 32-char value on deploy
 
   - name: API_TOKEN
@@ -64,6 +64,111 @@ identical regardless of surface.
 
 Plus a separate `orphans` list: secrets in GCP labeled for this solution
 that have no matching declaration in `gapp.yaml`.
+
+## Worked example: declared vs. labeled in GCP
+
+A combined walkthrough that exercises every status in one shot. The
+solution `my-app` declares three secrets in `gapp.yaml`. The same GCP
+project hosts three secrets, two of them labeled for this solution.
+
+### Manifest
+
+```yaml
+name: my-app
+env:
+  - name: APP_KEY
+    secret: { name: app-key }
+  - name: API_TOKEN
+    secret: { name: api-token }
+  - name: DB_PASSWORD
+    secret: { name: db-password }
+```
+
+### State of GCP Secret Manager
+
+| Secret ID | `gapp-solution` label |
+|---|---|
+| `my-app-app-key` | `my-app` |
+| `my-app-api-token` | _(none)_ |
+| `my-app-stale-key` | `my-app` |
+
+So: 3 declared in yaml, 3 in GCP. Of the GCP set, 2 carry the gapp
+label. One labeled secret matches a yaml entry (`app-key`); the
+other labeled secret has no yaml counterpart (`stale-key`). The
+unlabeled GCP secret happens to share the conventional ID for the
+yaml entry `api-token`. The third yaml entry (`db-password`) has no
+GCP counterpart at all.
+
+### What `gapp secrets list` produces
+
+```
+App:     my-app
+Project: my-project
+
+  Secret               Env Var                   Status             Generate
+  ----------------------------------------------------------------------
+  app-key              APP_KEY                   ready              no
+  api-token            API_TOKEN                 unattached         no
+  db-password          DB_PASSWORD               missing            no
+
+  Orphans (labeled in GCP but not declared in gapp.yaml):
+    - my-app-stale-key
+
+========================================================================
+Resolution options
+========================================================================
+
+[1] my-app-api-token — unattached
+    Secret 'my-app-api-token' exists in project 'my-project' but has
+    no `gapp-solution` label. gapp will not modify it until ownership
+    is established.
+
+    Option: Adopt for solution 'my-app' (gapp manages it going forward)
+      $ gcloud secrets update my-app-api-token \
+          --update-labels=gapp-solution=my-app --project=my-project
+
+    Option: Delete and let gapp recreate it on next deploy or `gapp secrets set`
+      $ gcloud secrets delete my-app-api-token --project=my-project
+
+[2] my-app-stale-key — orphan
+    Secret 'my-app-stale-key' is labeled for solution 'my-app' but no
+    matching declaration exists in gapp.yaml. It is not consumed by
+    any deployed env var.
+
+    Option: Delete it (recommended if no longer needed)
+      $ gcloud secrets delete my-app-stale-key --project=my-project
+
+    Option: Re-add the declaration to gapp.yaml under env: with a matching name
+      $ (edit gapp.yaml)
+```
+
+### Reading the output
+
+| What `secrets list` saw | What it printed |
+|---|---|
+| `app-key` declared, labeled match in GCP | row in `secrets[]`, `status: ready` |
+| `api-token` declared, unlabeled GCP secret at the conventional ID | row in `secrets[]`, `status: unattached`, plus a hint with adopt-or-delete options |
+| `db-password` declared, no GCP secret at all | row in `secrets[]`, `status: missing`, no hint (the resolution is `gapp secrets set`) |
+| `my-app-stale-key` labeled for solution but not in yaml | listed in `orphans[]`, plus a hint with delete-or-re-declare options |
+
+The unlabeled `my-app-api-token` is **not** listed as its own line in
+`orphans[]` — by design, it is considered untracked by gapp. It only
+surfaces because the manifest happens to declare a secret whose
+conventional ID matches it.
+
+The integrated case shows two important properties:
+
+1. **`secrets[]` is yaml-driven; `orphans[]` is GCP-driven.** Each
+   row in `secrets[]` corresponds 1:1 to a yaml declaration. Each
+   ID in `orphans[]` corresponds to a labeled secret with no yaml
+   match. The two compartments never duplicate.
+2. **Hints fire only for non-trivial states.** `ready` and `missing`
+   produce no hints (the action is obvious or the action is a single
+   `gapp secrets set`). `unattached`, `conflict`, and `orphan` each
+   emit one hint with concrete `gcloud` commands.
+
+The per-state recovery sections below walk each scenario in
+isolation, with the exact commands to resolve it.
 
 ## Exception Scenario Recovery and Conflict Resolution
 

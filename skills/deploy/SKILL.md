@@ -140,7 +140,7 @@ it's backed by durable GCS storage.
 
 ```yaml
 env:
-  - name: SIGNING_KEY
+  - name: APP_KEY
     secret:
       generate: true
   - name: APP_USERS_PATH
@@ -173,9 +173,9 @@ domain: mcp.example.com
 
 # Optional — env vars and secrets:
 env:
-  - name: SIGNING_KEY
+  - name: APP_KEY
     secret:
-      name: signing-key
+      name: app-key
       generate: true
   - name: APP_USERS_PATH
     value: "{{SOLUTION_DATA_PATH}}/users"

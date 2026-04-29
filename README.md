@@ -137,5 +137,15 @@ gapp deploy --project <project-id>
 
 ### **Development**
 *   `gapp status`: Check infrastructure health and service URLs.
-*   `gapp secrets set <name> <value>`: Store secrets in GCP Secret Manager.
+*   `gapp secrets list`: Show declared secrets, deploy-readiness, and remediation hints. See [Secrets, ownership, and recovery scenarios](docs/SECRETS.md) for the full label model and conflict-resolution guide.
+*   `gapp secrets get <name>`: Fetch a secret value or its hash + length.
+*   `gapp secrets set <name> [<value>]`: Store secrets in GCP Secret Manager.
 *   `gapp manifest schema`: Print the live JSON Schema for `gapp.yaml`.
+
+---
+
+## Further reading
+
+*   [Secrets, ownership, and recovery scenarios](docs/SECRETS.md) — how gapp manages Secret Manager, the label model, and what to do when statuses go sideways (`unattached`, `conflict`, `orphan`).
+*   [CI/CD setup](docs/CI.md) — wiring GitHub Actions deployments via Workload Identity Federation.
+*   [Contributing](CONTRIBUTING.md) — architecture, design principles, conventions for code, comments, and examples.
