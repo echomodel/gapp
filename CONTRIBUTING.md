@@ -498,29 +498,115 @@ Anything that changes the *contract* between deployed projects and the gapp buil
 
 If a project deployed by an older gapp would become unmanageable by the newer gapp without manual intervention, that's a major.
 
+### Where the version actually lives
+
+`gapp/__init__.py` is the single source of truth for the version
+string. Two derived locations track it:
+
+| File | Mechanism |
+|---|---|
+| `gapp/__init__.py` | **Source.** `__version__ = "X.Y.Z"`. |
+| `pyproject.toml` | **Auto-derived.** Declares `dynamic = ["version"]` and reads `gapp.__version__` via `[tool.setuptools.dynamic]`. Never edit the version directly here — there isn't one to edit. |
+| `.claude-plugin/plugin.json` | **Synced.** Has its own `"version"` field because the JSON schema requires a literal string. The release script keeps it in lockstep with `__init__.py`. |
+
 ### Release workflow
 
+A release is one local prep command plus three publish steps. The
+local prep is automated via `scripts/release.py` so version files
+can never drift, the test suite is never skipped, and the marketplace
+ref bump is done in lockstep with the gapp tag.
+
+#### 1. Local prep (one command)
+
 ```bash
-# 1. Update __version__ in gapp/__init__.py
-# 2. Update version in pyproject.toml to match
-# 3. Commit
-git add gapp/__init__.py pyproject.toml
-git commit -m "chore: bump version to X.Y.Z"
-
-# 4. Tag
-git tag vX.Y.Z
-
-# 5. Push (with tags)
-git push && git push --tags
+scripts/release.py X.Y.Z
 ```
+
+This script:
+- validates that `X.Y.Z` is strictly greater than the current
+  `__version__`,
+- requires a clean working tree,
+- updates `gapp/__init__.py` and `.claude-plugin/plugin.json`
+  (`pyproject.toml` auto-tracks via dynamic version),
+- runs `python3 -m pytest tests/unit/` and aborts on red,
+- commits the two file edits with `chore: bump version to X.Y.Z`
+  (the precommit privacy hook still runs),
+- tags `vX.Y.Z` at the new commit,
+- bumps the gapp ref in the sibling marketplace repo
+  (`../echomodel-claude-plugins/.claude-plugin/marketplace.json`) and
+  commits that change in the marketplace repo,
+- prints the three remaining publish steps below.
+
+If anything fails, the script aborts before tagging. Re-run after
+fixing. The marketplace step is skipped (with a warning) if the
+sibling repo isn't checked out.
+
+#### 2. Push gapp + marketplace
+
+```bash
+git push origin main && git push origin vX.Y.Z
+cd ../echomodel-claude-plugins && git push origin main
+```
+
+#### 3. Refresh the local plugin install
+
+```bash
+claude plugin marketplace update echomodel && claude plugin update gapp@echomodel
+```
+
+The plugin update changes `.claude-plugin/plugin.json` in the
+plugin install dir, but the actual MCP server site-packages still
+runs the old code until the SessionStart hook reinstalls — restart
+Claude Code after step 4 to pick it up.
+
+#### 4. Upgrade the pipx CLI on PATH
+
+```bash
+cd ~ && pipx upgrade gapp
+```
+
+Run from `$HOME`, not from inside the gapp repo. From the repo
+directory, pipx parses the bare `gapp` argument as a relative path
+(because `./gapp/` exists) and errors out. Running from `~` avoids
+the collision.
+
+After this, `gapp --version` reports the new version.
+
+#### 5. Restart Claude Code
+
+The plugin's MCP server (`gapp-mcp`) starts during a SessionStart
+hook that reinstalls the plugin's site-packages whenever the
+plugin's cached version differs from `__init__.py`. The reinstall
+only happens at session start, so until you restart, the server is
+still running the old code regardless of what `claude plugin update`
+did. Quit and re-open Claude Code to load the new MCP surface.
+
+### Why this many steps exist
+
+The two-install setup is intentional: `pipx` is the user's terminal
+CLI, while the plugin is a Claude-Code-internal install in
+`${CLAUDE_PLUGIN_DATA}/site-packages`. Each has a separate upgrade
+trigger (`pipx upgrade` vs the SessionStart hook). The release
+script can't combine them — one is system-level, the other is
+Claude-Code-internal. What it can do is make the bump itself
+mechanical and document the publish steps so nothing gets missed.
 
 ### Why version bumps matter
 
-- `pip install --upgrade` only installs if the version number is higher. Same version = pip thinks nothing changed.
-- The label sentinel `v-N` derives from `__version__` major. Forgetting to bump major on a contract-breaking change means the new code stamps the same `v-N` as the old code — silently incompatible deployments. Always bump major when the contract changes.
-- Editable installs (`pip install -e .`) always use live code regardless of version, so day-to-day development isn't gated by version bumps.
+- `pip install --upgrade` only installs if the version number is
+  higher. Same version = pip thinks nothing changed and silently
+  keeps the old code.
+- The label sentinel `v-N` derives from `__version__` major.
+  Forgetting to bump major on a contract-breaking change means the
+  new code stamps the same `v-N` as the old code — silently
+  incompatible deployments. Always bump major when the contract
+  changes.
+- Editable installs (`pip install -e .`) always use live code
+  regardless of version, so day-to-day development isn't gated by
+  version bumps.
 
 For development, use editable install to avoid version concerns:
+
 ```bash
 pipx install -e .   # or: pip install -e .
 ```

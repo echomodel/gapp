@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gapp"
-version = "3.0.7"
+dynamic = ["version"]
 description = "GCP App Deployer — CLI tool for deploying Cloud Run services with Terraform"
 requires-python = ">=3.10"
 dependencies = [
@@ -13,6 +13,9 @@ dependencies = [
     "pydantic>=2.0",
     "pyyaml>=6.0",
 ]
+
+[tool.setuptools.dynamic]
+version = {attr = "gapp.__version__"}
 
 [project.urls]
 Repository = "https://github.com/owner-arowe/gapp"
