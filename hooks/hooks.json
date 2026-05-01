@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "gapp_version=$(grep __version__ \"${CLAUDE_PLUGIN_ROOT}/gapp/__init__.py\" | cut -d'\"' -f2); cached_version=$(cat \"${CLAUDE_PLUGIN_DATA}/installed_version\" 2>/dev/null); if [ \"$gapp_version\" != \"$cached_version\" ]; then cd \"${CLAUDE_PLUGIN_ROOT}\" && python3 -m pip install -t \"${CLAUDE_PLUGIN_DATA}/site-packages\" -r requirements.txt && echo \"$gapp_version\" > \"${CLAUDE_PLUGIN_DATA}/installed_version\"; fi"
+            "command": "diff -q \"${CLAUDE_PLUGIN_ROOT}/requirements.txt\" \"${CLAUDE_PLUGIN_DATA}/requirements.txt\" >/dev/null 2>&1 || (cd \"${CLAUDE_PLUGIN_DATA}\" && rm -rf site-packages/gapp site-packages/gapp-*.dist-info installed_version && cp \"${CLAUDE_PLUGIN_ROOT}/requirements.txt\" . && python3 -m pip install -t \"${CLAUDE_PLUGIN_DATA}/site-packages\" -r requirements.txt) || rm -f \"${CLAUDE_PLUGIN_DATA}/requirements.txt\""
           }
         ]
       }
