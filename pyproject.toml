@@ -18,7 +18,7 @@ dependencies = [
 version = {attr = "gapp.__version__"}
 
 [project.urls]
-Repository = "https://github.com/owner-arowe/gapp"
+Repository = "https://github.com/echomodel/gapp"
 
 [project.optional-dependencies]
 dev = [
