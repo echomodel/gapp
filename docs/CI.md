@@ -95,9 +95,9 @@ This three-layer separation is standard:
 
 gapp uses GCP authentication in two ways:
 
-1. **Ambient gcloud CLI auth** — the vast majority of operations. Every `subprocess.run(["gcloud", ...])` call relies on whatever `gcloud auth login` session is active. Used by: `setup.py` (enable APIs, create buckets, label projects), `deploy.py` (Artifact Registry, Cloud Build), `secrets.py` (Secret Manager CRUD), `tokens.py` (signing key access), `users.py` (GCS operations), `status.py`.
+1. **Ambient gcloud CLI auth** — the vast majority of operations. Every `subprocess.run(["gcloud", ...])` call relies on whatever `gcloud auth login` session is active. Used by: `core.py` (setup, deploy, status, project labels, Artifact Registry, Cloud Build, GCS) and `secrets.py` (Secret Manager CRUD).
 
-2. **Explicit OAuth token for Terraform** — `deploy.py:_get_access_token()` calls `gcloud auth print-access-token` once, then passes the result to Terraform via `GOOGLE_OAUTH_ACCESS_TOKEN` env var. This is the only place gapp extracts a token explicitly.
+2. **Explicit OAuth token for Terraform** — gapp calls `gcloud auth print-access-token` once during deploy and passes the result to Terraform via the `GOOGLE_OAUTH_ACCESS_TOKEN` env var. This is the only place gapp extracts a token explicitly.
 
 ### Three GCP identities in the full lifecycle
 
@@ -341,7 +341,7 @@ On a CI runner, there's no `solutions.yaml`. The reusable workflow handles this 
 2. Running `gapp setup` (no project ID arg — discovers the project via GCP label query, populates `solutions.yaml` on the runner, all steps are idempotent no-ops if already done)
 3. Running `gapp deploy` (reads `solutions.yaml` populated by step 2, works as-is)
 
-No `--project` flag needed. `gapp setup` already has GCP label discovery (`_discover_project_from_label` in `setup.py`). Running it first on the runner bootstraps the local cache that all other commands depend on. This is the same thing you'd do on a new workstation. If `gapp setup` has never been run for a project at all, `gapp deploy` errors with a clear message telling the operator to run setup first — that's existing behavior and it's fine.
+No `--project` flag needed. `gapp setup` already does GCP label discovery via `GappSDK.resolve_project_for_solution` in `core.py`. Running it first on the runner bootstraps the local cache that all other commands depend on. This is the same thing you'd do on a new workstation. If `gapp setup` has never been run for a project at all, `gapp deploy` errors with a clear message telling the operator to run setup first — that's existing behavior and it's fine.
 
 ### The `--solution` flag
 

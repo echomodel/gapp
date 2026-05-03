@@ -36,7 +36,7 @@ GAPP REPO (this repo — defines HOW to deploy)
   terraform/main.tf                     ← static HCL, references shared module
   terraform/variables.tf                ← variable declarations
   modules/cloud-run-service/            ← reusable TF module
-  gapp/sdk/deploy.py                    ← orchestrates build + TF apply
+  gapp/admin/sdk/core.py                ← orchestrates build + TF apply
 
 SOLUTION REPO (what gets deployed)
   gapp.yaml                             ← solution metadata, prerequisites

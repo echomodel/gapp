@@ -118,7 +118,7 @@ should declare its runtime requirements — required env vars,
 secrets, persistent storage paths, etc. Map each requirement to
 the appropriate gapp.yaml pattern:
 
-- **Secrets** (signing keys, API tokens, credentials) →
+- **Secrets** (keys, API tokens, credentials) →
   `secret: true` or `secret: { generate: true }`. gapp stores
   the value in GCP Secret Manager and injects it as an env var
   at runtime. The value never appears in the repo.
@@ -129,7 +129,7 @@ the appropriate gapp.yaml pattern:
   configuration.
 
 If the app requires a secret, decide with the user: should gapp
-generate it (`generate: true` — good for signing keys that just
+generate it (`generate: true` — good for keys that just
 need to be strong and random), or does the user need to provide
 it (`secret: true` — for API keys, upstream credentials)?
 
@@ -472,7 +472,7 @@ After deployment, verify the service is running and set up access:
 1. **Check health** — `gapp_status` confirms the service is up
    and returns the service URL
 2. **Admin access** — if the solution requires admin credentials
-   (e.g., a JWT signing key or shared secret), the user needs to
+   (e.g., an API key or shared secret), the user needs to
    provide or locate them. They may have the value in a local
    keychain, password vault, or other personal secret store from
    when they originally created it. If the secret was auto-

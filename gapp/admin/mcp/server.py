@@ -158,8 +158,8 @@ def gapp_secret_get(name: str, plaintext: bool = False, solution: str | None = N
     """Get a secret from GCP Secret Manager.
 
     Use this to retrieve secrets that gapp manages for a deployed solution —
-    for example, the signing key needed to configure an admin client after
-    deploy, or any other secret declared in gapp.yaml.
+    any secret declared in gapp.yaml's env section, including auto-generated
+    ones (`generate: true`) whose values you may need post-deploy.
 
     Pass the secret's short name as declared in gapp.yaml's secret.name
     field (e.g. "app-key"). gapp prefixes this with the solution name
