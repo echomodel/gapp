@@ -5,6 +5,14 @@ Every secret gapp creates or updates is stamped with the label
 Listing and pre-deploy validation use a single label-filtered
 `gcloud secrets list` call instead of N per-secret describes.
 See issue #27 for the full design rationale.
+
+Project resolution: every entry point that needs the GCP project for a
+solution MUST go through `GappSDK.resolve_solution_with_project(...)`,
+not `resolve_solution(...)` alone. `resolve_solution` returns shape only
+and always sets `project_id=None`; calling it without the chained
+discovery step is the trap that produced issue #39, where every secrets
+command saw `project_id=None` even when `gapp status` and `gapp deploy`
+resolved the same project correctly.
 """
 
 import subprocess
@@ -18,7 +26,7 @@ GAPP_SOLUTION_LABEL = "gapp-solution"
 
 def add_secret(secret_name: str, description: str, value: str | None = None, solution: str | None = None) -> dict:
     """Add a secret declaration to gapp.yaml and optionally set its value."""
-    ctx = GappSDK().resolve_solution(solution)
+    ctx = GappSDK().resolve_solution_with_project(solution)
     if not ctx:
         raise RuntimeError(
             "Not inside a gapp solution. Run 'gapp init' first, or cd into a solution repo."
@@ -60,7 +68,7 @@ def add_secret(secret_name: str, description: str, value: str | None = None, sol
 
 def remove_secret(secret_name: str, solution: str | None = None) -> dict:
     """Remove a secret declaration from gapp.yaml. Does NOT delete from Secret Manager."""
-    ctx = GappSDK().resolve_solution(solution)
+    ctx = GappSDK().resolve_solution_with_project(solution)
     if not ctx:
         raise RuntimeError(
             "Not inside a gapp solution. Run 'gapp init' first, or cd into a solution repo."
@@ -128,7 +136,7 @@ def list_secrets(solution: str | None = None) -> dict:
     in the top-level `hints` array; CLI renderers can emit them as
     footnotes after the table.
     """
-    ctx = GappSDK().resolve_solution(solution)
+    ctx = GappSDK().resolve_solution_with_project(solution)
     if not ctx:
         raise RuntimeError(
             "Not inside a gapp solution. Run 'gapp init' first, or cd into a solution repo."
@@ -418,7 +426,7 @@ def materialize_generated_secrets(project_id: str, solution_name: str, manifest:
 
 def _find_secret(name: str, solution: str | None = None) -> dict:
     """Look up a secret by its short name as declared in gapp.yaml."""
-    ctx = GappSDK().resolve_solution(solution)
+    ctx = GappSDK().resolve_solution_with_project(solution)
     if not ctx:
         raise RuntimeError(
             "Not inside a gapp solution. Run 'gapp init' first, or cd into a solution repo."

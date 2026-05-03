@@ -239,7 +239,7 @@ def test_validate_conflict_secret_names_other_owner():
 def _stub_resolve(name, project_id="proj-x"):
     """Build a fake GappSDK that resolves a fixed solution context."""
     sdk = MagicMock()
-    sdk.resolve_solution.return_value = {
+    sdk.resolve_solution_with_project.return_value = {
         "name": name, "project_id": project_id, "repo_path": "/tmp/fake",
     }
     return sdk
@@ -262,7 +262,7 @@ def test_list_secrets_full_scenario(tmp_path, monkeypatch):
     )
 
     sdk_stub = MagicMock()
-    sdk_stub.resolve_solution.return_value = {
+    sdk_stub.resolve_solution_with_project.return_value = {
         "name": "my-app", "project_id": "proj-x", "repo_path": str(repo),
     }
     monkeypatch.setattr(sec_mod, "GappSDK", lambda: sdk_stub)
@@ -312,7 +312,7 @@ def test_list_secrets_conflict_hint_names_owner(tmp_path, monkeypatch):
     )
 
     sdk_stub = MagicMock()
-    sdk_stub.resolve_solution.return_value = {
+    sdk_stub.resolve_solution_with_project.return_value = {
         "name": "my-app", "project_id": "proj-x", "repo_path": str(repo),
     }
     monkeypatch.setattr(sec_mod, "GappSDK", lambda: sdk_stub)
@@ -345,7 +345,7 @@ def test_list_secrets_generate_missing_uses_distinct_status(tmp_path, monkeypatc
     )
 
     sdk_stub = MagicMock()
-    sdk_stub.resolve_solution.return_value = {
+    sdk_stub.resolve_solution_with_project.return_value = {
         "name": "my-app", "project_id": "proj-x", "repo_path": str(repo),
     }
     monkeypatch.setattr(sec_mod, "GappSDK", lambda: sdk_stub)
@@ -374,7 +374,7 @@ def test_list_secrets_no_project_status(tmp_path, monkeypatch):
     )
 
     sdk_stub = MagicMock()
-    sdk_stub.resolve_solution.return_value = {
+    sdk_stub.resolve_solution_with_project.return_value = {
         "name": "my-app", "project_id": None, "repo_path": str(repo),
     }
     monkeypatch.setattr(sec_mod, "GappSDK", lambda: sdk_stub)
@@ -401,7 +401,7 @@ def test_list_secrets_all_ready_hints_empty(tmp_path, monkeypatch):
     )
 
     sdk_stub = MagicMock()
-    sdk_stub.resolve_solution.return_value = {
+    sdk_stub.resolve_solution_with_project.return_value = {
         "name": "my-app", "project_id": "proj-x", "repo_path": str(repo),
     }
     monkeypatch.setattr(sec_mod, "GappSDK", lambda: sdk_stub)
@@ -429,7 +429,7 @@ def test_list_secrets_conflict_hint_full_structure(tmp_path, monkeypatch):
         "    secret: {name: api-token}\n"
     )
     sdk_stub = MagicMock()
-    sdk_stub.resolve_solution.return_value = {
+    sdk_stub.resolve_solution_with_project.return_value = {
         "name": "my-app", "project_id": "my-project", "repo_path": str(repo),
     }
     monkeypatch.setattr(sec_mod, "GappSDK", lambda: sdk_stub)
@@ -460,7 +460,7 @@ def test_list_secrets_orphan_hint_full_structure(tmp_path, monkeypatch):
     repo.mkdir()
     (repo / "gapp.yaml").write_text("name: my-app\n")  # no env declarations
     sdk_stub = MagicMock()
-    sdk_stub.resolve_solution.return_value = {
+    sdk_stub.resolve_solution_with_project.return_value = {
         "name": "my-app", "project_id": "my-project", "repo_path": str(repo),
     }
     monkeypatch.setattr(sec_mod, "GappSDK", lambda: sdk_stub)
@@ -559,3 +559,243 @@ def test_cli_secrets_list_no_hints_when_clean(tmp_path, monkeypatch):
     assert "Resolution options" not in result.output
     assert "Orphans" not in result.output
     assert "ready" in result.output
+
+
+# -- project resolution chain (issue #39) --
+#
+# The bug: every entry point in this module called `GappSDK.resolve_solution()`
+# alone, which always returns project_id=None. Result: `gapp secrets list`
+# reported every declared secret as `no-project` and `gapp secrets get/set`
+# raised "No GCP project attached" — even when the same shell could run
+# `gapp deploy` against a fully-resolved project. The fix routes every call
+# site through `resolve_solution_with_project(...)` so the chained
+# `resolve_project_for_solution` discovery actually runs.
+
+
+def _solution_repo(tmp_path, monkeypatch, contents="name: my-app\n"):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "gapp.yaml").write_text(contents)
+    monkeypatch.chdir(repo)
+    return repo
+
+
+def test_resolve_solution_with_project_populates_project_id_via_label_discovery(
+    tmp_path, monkeypatch
+):
+    """Chained resolver finds the project by solution label."""
+    from gapp.admin.sdk.core import GappSDK
+    from gapp.admin.sdk.cloud.dummy import DummyCloudProvider
+
+    _solution_repo(tmp_path, monkeypatch)
+    sdk = GappSDK(provider=DummyCloudProvider())
+    sdk.provider.project_labels["proj-found"] = {"gapp__my-app": "v-3"}
+
+    ctx = sdk.resolve_solution_with_project()
+
+    assert ctx is not None
+    assert ctx["name"] == "my-app"
+    assert ctx["project_id"] == "proj-found"
+
+
+def test_resolve_solution_with_project_returns_none_project_when_undeployed(
+    tmp_path, monkeypatch
+):
+    """Solution exists locally but no project hosts it → project_id=None,
+    no exception. Lets list_secrets degrade gracefully to `no-project`."""
+    from gapp.admin.sdk.core import GappSDK
+    from gapp.admin.sdk.cloud.dummy import DummyCloudProvider
+
+    _solution_repo(tmp_path, monkeypatch)
+    sdk = GappSDK(provider=DummyCloudProvider())  # no projects at all
+
+    ctx = sdk.resolve_solution_with_project()
+
+    assert ctx is not None
+    assert ctx["name"] == "my-app"
+    assert ctx["project_id"] is None
+
+
+def test_resolve_solution_with_project_returns_none_outside_solution(
+    tmp_path, monkeypatch
+):
+    """Not in a solution repo → returns None entirely (caller raises)."""
+    from gapp.admin.sdk.core import GappSDK
+    from gapp.admin.sdk.cloud.dummy import DummyCloudProvider
+
+    monkeypatch.chdir(tmp_path)  # no gapp.yaml here
+    sdk = GappSDK(provider=DummyCloudProvider())
+
+    assert sdk.resolve_solution_with_project() is None
+
+
+def test_list_secrets_resolves_project_via_chain(tmp_path, monkeypatch):
+    """End-to-end: list_secrets reports the discovered project_id and `ready`
+    statuses for label-discoverable secrets — the no-project regression is gone."""
+    from gapp.admin.sdk.core import GappSDK
+    from gapp.admin.sdk.cloud.dummy import DummyCloudProvider
+    from gapp.admin.sdk import secrets as sec_mod
+
+    _solution_repo(
+        tmp_path, monkeypatch,
+        contents=(
+            "name: my-app\n"
+            "env:\n"
+            "  - name: API_TOKEN\n"
+            "    secret: {name: api-token}\n"
+        ),
+    )
+    sdk = GappSDK(provider=DummyCloudProvider())
+    sdk.provider.project_labels["proj-found"] = {"gapp__my-app": "v-3"}
+    monkeypatch.setattr(sec_mod, "GappSDK", lambda: sdk)
+    monkeypatch.setattr(
+        sec_mod, "list_secrets_by_label",
+        lambda pid, sol: [{"id": "my-app-api-token"}],
+    )
+
+    result = sec_mod.list_secrets()
+
+    assert result["project_id"] == "proj-found"
+    assert result["secrets"][0]["status"] == "ready"
+
+
+def test_get_secret_resolves_project_via_chain(tmp_path, monkeypatch):
+    """get_secret no longer raises 'No GCP project attached' when the project
+    is label-discoverable but the local context didn't carry it."""
+    from gapp.admin.sdk.core import GappSDK
+    from gapp.admin.sdk.cloud.dummy import DummyCloudProvider
+    from gapp.admin.sdk import secrets as sec_mod
+
+    _solution_repo(
+        tmp_path, monkeypatch,
+        contents=(
+            "name: my-app\n"
+            "env:\n"
+            "  - name: API_TOKEN\n"
+            "    secret: {name: api-token}\n"
+        ),
+    )
+    sdk = GappSDK(provider=DummyCloudProvider())
+    sdk.provider.project_labels["proj-found"] = {"gapp__my-app": "v-3"}
+    monkeypatch.setattr(sec_mod, "GappSDK", lambda: sdk)
+    monkeypatch.setattr(
+        sec_mod, "_read_secret_version",
+        lambda project_id, secret_id: "the-value" if project_id == "proj-found" else None,
+    )
+
+    out = sec_mod.get_secret("api-token", plaintext=True)
+
+    assert out["secret_id"] == "my-app-api-token"
+    assert out["value"] == "the-value"
+
+
+def test_set_secret_resolves_project_via_chain(tmp_path, monkeypatch):
+    """set_secret discovers the project the same way deploy does and writes there."""
+    from gapp.admin.sdk.core import GappSDK
+    from gapp.admin.sdk.cloud.dummy import DummyCloudProvider
+    from gapp.admin.sdk import secrets as sec_mod
+
+    _solution_repo(
+        tmp_path, monkeypatch,
+        contents=(
+            "name: my-app\n"
+            "env:\n"
+            "  - name: API_TOKEN\n"
+            "    secret: {name: api-token}\n"
+        ),
+    )
+    sdk = GappSDK(provider=DummyCloudProvider())
+    sdk.provider.project_labels["proj-found"] = {"gapp__my-app": "v-3"}
+    monkeypatch.setattr(sec_mod, "GappSDK", lambda: sdk)
+
+    ensured = []
+    versions = []
+    monkeypatch.setattr(
+        sec_mod, "_ensure_secret",
+        lambda project_id, secret_id, solution_name: ensured.append(
+            (project_id, secret_id, solution_name)
+        ) or "created",
+    )
+    monkeypatch.setattr(
+        sec_mod, "_add_secret_version",
+        lambda project_id, secret_id, value: versions.append(
+            (project_id, secret_id, len(value))
+        ),
+    )
+
+    out = sec_mod.set_secret("api-token", "shhh")
+
+    assert out["project_id"] == "proj-found"
+    assert out["secret_id"] == "my-app-api-token"
+    assert ensured == [("proj-found", "my-app-api-token", "my-app")]
+    assert versions == [("proj-found", "my-app-api-token", 4)]
+
+
+def test_get_secret_still_raises_when_truly_no_project(tmp_path, monkeypatch):
+    """No project hosts the solution → get_secret keeps its hard error.
+    The chain doesn't paper over the genuine 'not deployed' case."""
+    from gapp.admin.sdk.core import GappSDK
+    from gapp.admin.sdk.cloud.dummy import DummyCloudProvider
+    from gapp.admin.sdk import secrets as sec_mod
+
+    _solution_repo(
+        tmp_path, monkeypatch,
+        contents=(
+            "name: my-app\n"
+            "env:\n"
+            "  - name: API_TOKEN\n"
+            "    secret: {name: api-token}\n"
+        ),
+    )
+    sdk = GappSDK(provider=DummyCloudProvider())  # no projects
+    monkeypatch.setattr(sec_mod, "GappSDK", lambda: sdk)
+
+    with pytest.raises(RuntimeError, match="No GCP project attached"):
+        sec_mod.get_secret("api-token", plaintext=True)
+
+
+def test_list_secrets_still_no_project_when_undeployed(tmp_path, monkeypatch):
+    """No project hosts the solution → list_secrets still shows `no-project`
+    statuses for declared secrets (graceful degradation preserved)."""
+    from gapp.admin.sdk.core import GappSDK
+    from gapp.admin.sdk.cloud.dummy import DummyCloudProvider
+    from gapp.admin.sdk import secrets as sec_mod
+
+    _solution_repo(
+        tmp_path, monkeypatch,
+        contents=(
+            "name: my-app\n"
+            "env:\n"
+            "  - name: API_TOKEN\n"
+            "    secret: {name: api-token}\n"
+        ),
+    )
+    sdk = GappSDK(provider=DummyCloudProvider())
+    monkeypatch.setattr(sec_mod, "GappSDK", lambda: sdk)
+
+    result = sec_mod.list_secrets()
+
+    assert result["project_id"] is None
+    assert result["secrets"][0]["status"] == "no-project"
+
+
+def test_list_secrets_status_does_not_call_resolve_solution_alone(monkeypatch):
+    """Defense in depth: confirm `secrets.list_secrets` does NOT use the
+    bare `resolve_solution` shape. Anyone refactoring this code path back to
+    the broken pattern hits this test rather than a silent prod regression."""
+    import inspect
+    from gapp.admin.sdk import secrets as sec_mod
+
+    src = inspect.getsource(sec_mod)
+    # Allow `resolve_solution_with_project` and the docstring; flag any bare
+    # `.resolve_solution(` call that isn't the with_project variant.
+    bare_calls = [
+        line for line in src.splitlines()
+        if ".resolve_solution(" in line
+        and ".resolve_solution_with_project(" not in line
+    ]
+    assert not bare_calls, (
+        "secrets.py reintroduced bare .resolve_solution() — that returns "
+        f"project_id=None. See issue #39. Offending lines:\n  "
+        + "\n  ".join(bare_calls)
+    )

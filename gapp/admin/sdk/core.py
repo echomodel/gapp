@@ -257,6 +257,14 @@ class GappSDK:
         strict controls whether the manifest is schema-validated; pass
         strict=False from read-only commands so a stale gapp.yaml does
         not block cloud reads.
+
+        NOTE: project_id in the returned dict is ALWAYS None. This method
+        intentionally returns shape only — it does not perform GCP-side
+        project discovery. Callers that need the resolved GCP project must
+        chain `resolve_project_for_solution(...)` (see `status()`) or use
+        the `resolve_solution_with_project(...)` helper which does both
+        in one call. See issue #39 for the trap this contract created
+        when callers assumed `project_id` would be populated.
         """
         if name:
             return {"name": name, "project_id": None, "repo_path": None}
@@ -266,6 +274,39 @@ class GappSDK:
             solution_name = get_solution_name(manifest, git_root)
             return {"name": solution_name, "project_id": None, "repo_path": str(git_root)}
         return None
+
+    def resolve_solution_with_project(
+        self,
+        name: str | None = None,
+        env: Optional[str] = None,
+        project: Optional[str] = None,
+        strict: bool = True,
+    ) -> dict | None:
+        """Resolve a solution AND best-effort attach its GCP project_id.
+
+        Returns the same dict as `resolve_solution(name, strict=strict)`
+        with `project_id` populated when discoverable, or left as None
+        when no project currently hosts the solution. Callers that
+        require a project must check `project_id` and raise their own
+        error; this method never raises for "no project found" so that
+        list-style callers can degrade gracefully.
+
+        This is the canonical pattern for SDK consumers that need both
+        the local manifest context and the deployed GCP project. See
+        issue #39 — `resolve_solution` alone always returns
+        project_id=None, which trapped every caller in `secrets.py`.
+        """
+        ctx = self.resolve_solution(name, strict=strict)
+        if not ctx:
+            return None
+        try:
+            res = self.resolve_project_for_solution(
+                ctx["name"], env=env, project=project,
+            )
+            ctx["project_id"] = res["project_id"]
+        except RuntimeError:
+            ctx["project_id"] = None
+        return ctx
 
     def discover_projects_for_solution(self, solution_name: str) -> List[Dict]:
         """Find all projects hosting the given solution under the active owner.
@@ -775,19 +816,12 @@ class GappSDK:
         # Lenient: status is read-only and must work even if the local
         # gapp.yaml predates the current schema or is missing fields the
         # build pipeline would require.
-        ctx = self.resolve_solution(name, strict=False)
+        ctx = self.resolve_solution_with_project(name, env=env, strict=False)
         if not ctx:
             return StatusResult(initialized=False, next_step=NextStep(action="init"))
         solution_name = ctx["name"]
         repo_path = ctx.get("repo_path")
-
-        # Resolve project (best-effort — status tolerates pending state).
-        project_id = None
-        try:
-            res = self.resolve_project_for_solution(solution_name, env=env)
-            project_id = res["project_id"]
-        except RuntimeError:
-            project_id = None
+        project_id = ctx.get("project_id")
 
         result = StatusResult(
             initialized=True,
