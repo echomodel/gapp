@@ -863,6 +863,7 @@ class GappSDK:
             name, project_id, image, get_service_config(manifest),
             get_prerequisite_secrets(manifest), Path(repo_path) / service_path,
             get_public(manifest), get_domain(manifest),
+            bucket_name,
             solution_name=parent_solution or name,
         )
         outputs = self.provider.apply_infrastructure(
@@ -913,7 +914,15 @@ def _prepare_build_dir(path, image, ep, ref="HEAD"):
     return d, ep
 
 
-def _build_tfvars(name, pid, img, cfg, secrets, repo_path, public, domain, solution_name=None):
+def _build_tfvars(name, pid, img, cfg, secrets, repo_path, public, domain,
+                  bucket_name, solution_name=None):
+    # Every key returned here corresponds to a structurally-required tfvar in
+    # modules/cloud-run-service/variables.tf. None of them have defaults, so
+    # dropping a key fails terraform plan instead of silently mis-deploying.
+    # See issue #35: an earlier refactor lost `data_bucket` here, and the
+    # module's old `default = ""` + conditional opt-out turned that into a
+    # silent volume strip. Don't reintroduce optional-empty tfvars for things
+    # the module structurally needs.
     from gapp.admin.sdk.manifest import resolve_env_vars, get_env_vars, load_manifest
     env = dict(cfg.get("env", {}))
     manifest = load_manifest(repo_path)
@@ -933,6 +942,7 @@ def _build_tfvars(name, pid, img, cfg, secrets, repo_path, public, domain, solut
         "env": env,
         "secrets": secrets_map,
         "public": bool(public), "custom_domain": custom_domain,
+        "data_bucket": bucket_name,
     }
 
 
