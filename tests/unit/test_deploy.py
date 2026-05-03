@@ -217,6 +217,7 @@ def test_build_tfvars_emits_env_secret_declarations(tmp_path):
     cfg = {"memory": "512Mi", "cpu": "1", "max_instances": 5, "env": {}}
     tfvars = _build_tfvars(
         "my-app", "proj-123", "img:tag", cfg, {}, repo, False, "",
+        "gapp-my-app-proj-123",
         solution_name="my-app",
     )
 
@@ -243,6 +244,7 @@ def test_build_tfvars_merges_env_secrets_with_prerequisites_secrets(tmp_path):
     prerequisites = {"legacy-secret": {"description": "from old prerequisites block"}}
     tfvars = _build_tfvars(
         "my-app", "proj-123", "img:tag", cfg, prerequisites, repo, False, "",
+        "gapp-my-app-proj-123",
         solution_name="my-app",
     )
 
@@ -267,10 +269,152 @@ def test_build_tfvars_uses_solution_name_for_workspace_services(tmp_path):
     cfg = {"memory": "512Mi", "cpu": "1", "max_instances": 5, "env": {}}
     tfvars = _build_tfvars(
         "my-svc", "proj-123", "img:tag", cfg, {}, repo, False, "",
+        "gapp-parent-app-proj-123",
         solution_name="parent-app",
     )
 
     assert tfvars["secrets"] == {"APP_KEY": "parent-app-app-key"}
+
+
+# -- data_bucket wiring (issue #35) --
+
+
+def test_build_tfvars_emits_data_bucket(tmp_path):
+    """data_bucket reaches the tfvars dict verbatim from the caller."""
+    from gapp.admin.sdk.core import _build_tfvars
+
+    repo = tmp_path / "app"
+    repo.mkdir()
+    (repo / "gapp.yaml").write_text("name: my-app\n")
+
+    cfg = {"memory": "512Mi", "cpu": "1", "max_instances": 1, "env": {}}
+    tfvars = _build_tfvars(
+        "my-app", "proj-123", "img:tag", cfg, {}, repo, False, "",
+        "gapp-my-app-proj-123",
+        solution_name="my-app",
+    )
+
+    assert tfvars["data_bucket"] == "gapp-my-app-proj-123"
+
+
+def test_build_tfvars_data_bucket_matches_get_bucket_name_convention(tmp_path):
+    """The data_bucket emitted matches whatever GappSDK.get_bucket_name returns
+    for the same (solution, project) — same naming convention end to end."""
+    from gapp.admin.sdk.core import _build_tfvars, GappSDK
+    from gapp.admin.sdk.cloud.dummy import DummyCloudProvider
+
+    sdk = GappSDK(provider=DummyCloudProvider())
+    expected = sdk.get_bucket_name("my-app", "proj-123")
+
+    repo = tmp_path / "app"
+    repo.mkdir()
+    (repo / "gapp.yaml").write_text("name: my-app\n")
+    cfg = {"memory": "512Mi", "cpu": "1", "max_instances": 1, "env": {}}
+    tfvars = _build_tfvars(
+        "my-app", "proj-123", "img:tag", cfg, {}, repo, False, "",
+        expected,
+        solution_name="my-app",
+    )
+
+    assert tfvars["data_bucket"] == expected
+
+
+REQUIRED_TFVAR_KEYS = (
+    "project_id",
+    "service_name",
+    "image",
+    "memory",
+    "cpu",
+    "max_instances",
+    "env",
+    "secrets",
+    "public",
+    "custom_domain",
+    "data_bucket",
+)
+
+
+@pytest.mark.parametrize("key", REQUIRED_TFVAR_KEYS)
+def test_build_tfvars_emits_every_required_key(tmp_path, key):
+    """Every key the cloud-run-service module declares as a required tfvar must
+    be present in the dict _build_tfvars returns. The next refactor that drops
+    one fails this test instead of silently breaking a live deploy.
+
+    See issue #35: a prior consolidation lost `data_bucket` from this dict and
+    the conditional in main.tf turned that into a silent volume strip across
+    every gapp-deployed solution that uses {{SOLUTION_DATA_PATH}}.
+    """
+    from gapp.admin.sdk.core import _build_tfvars
+
+    repo = tmp_path / "app"
+    repo.mkdir()
+    (repo / "gapp.yaml").write_text("name: my-app\n")
+
+    cfg = {"memory": "512Mi", "cpu": "1", "max_instances": 1, "env": {}}
+    tfvars = _build_tfvars(
+        "my-app", "proj-123", "img:tag", cfg, {}, repo, False, "",
+        "gapp-my-app-proj-123",
+        solution_name="my-app",
+    )
+
+    assert key in tfvars, f"_build_tfvars dropped required tfvar '{key}'"
+
+
+def test_deploy_threads_data_bucket_into_apply_tfvars(tmp_path, monkeypatch, sdk):
+    """End-to-end: deploy() reaches apply_infrastructure with the right data_bucket.
+
+    Catches regressions where bucket_name is computed but not threaded into the
+    tfvars call — the exact shape of issue #35.
+    """
+    _repo(tmp_path, monkeypatch)
+    sdk.provider.project_labels["proj-123"] = {"gapp__my-app": "v-3"}
+    sdk.provider.buckets["gapp-my-app-proj-123"] = {"project": "proj-123"}
+
+    monkeypatch.setattr(GappSDK, "_resolve_ref", lambda self, p, r: "abc123")
+    import gapp.admin.sdk.core as core_mod
+    monkeypatch.setattr(
+        core_mod, "_prepare_build_dir",
+        lambda path, image, ep, ref="HEAD": (str(tmp_path / "build"), ep),
+    )
+    (tmp_path / "build").mkdir()
+    sdk.provider.image_exists = lambda *a, **kw: True
+    _patch_secret_calls(monkeypatch, present_ids=())
+
+    sdk.deploy()
+
+    assert sdk.provider.last_tfvars["data_bucket"] == "gapp-my-app-proj-123"
+
+
+def test_deploy_workspace_threads_parent_data_bucket_into_each_service(
+    tmp_path, monkeypatch, sdk
+):
+    """Workspace services share the parent solution's data bucket, not their own."""
+    repo = tmp_path / "app"
+    repo.mkdir()
+    (repo / ".git").mkdir()
+    (repo / "gapp.yaml").write_text("paths: [services/api]")
+    api_dir = repo / "services/api"
+    api_dir.mkdir(parents=True)
+    (api_dir / "gapp.yaml").write_text("name: my-api\n")
+    monkeypatch.chdir(repo)
+
+    sdk.provider.project_labels["proj-ws"] = {"gapp__app": "v-3"}
+    sdk.provider.buckets["gapp-app-proj-ws"] = {"project": "proj-ws"}
+
+    monkeypatch.setattr(GappSDK, "_resolve_ref", lambda self, p, r: "abc123")
+    import gapp.admin.sdk.core as core_mod
+    monkeypatch.setattr(
+        core_mod, "_prepare_build_dir",
+        lambda path, image, ep, ref="HEAD": (str(tmp_path / "build"), ep),
+    )
+    (tmp_path / "build").mkdir()
+    sdk.provider.image_exists = lambda *a, **kw: True
+    _patch_secret_calls(monkeypatch, present_ids=())
+
+    sdk.deploy()
+
+    # Service was deployed under the parent solution's bucket, not "gapp-my-api-…".
+    assert sdk.provider.last_tfvars["data_bucket"] == "gapp-app-proj-ws"
 
 
 def test_deploy_materializes_generated_secrets(tmp_path, monkeypatch, sdk):

@@ -55,9 +55,15 @@ variable "public" {
   default     = false
 }
 
+# Required: the per-solution data bucket. No default and no empty-string
+# opt-out. See issue #35 — making this optional once turned a missing-key bug
+# in `_build_tfvars` into a silent volume strip on every redeploy. With the
+# variable required, terraform plan fails loudly if gapp ever stops emitting
+# it instead of silently shipping a Cloud Run service with no persistent
+# storage. tfvars wired through `_build_tfvars` for structurally-required
+# infrastructure must follow this same shape.
 variable "data_bucket" {
   description = "GCS bucket for solution data (FUSE mounted at /mnt/data, scoped to data/ prefix)"
   type        = string
-  default     = ""
 }
 

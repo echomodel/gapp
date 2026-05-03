@@ -29,15 +29,12 @@ resource "google_cloud_run_v2_service" "service" {
     }
 
     # GCS FUSE volume — always mounted, scoped to data/ prefix
-    dynamic "volumes" {
-      for_each = var.data_bucket != "" ? [1] : []
-      content {
-        name = "solution-data"
-        gcs {
-          bucket        = var.data_bucket
-          read_only     = false
-          mount_options = ["only-dir=data"]
-        }
+    volumes {
+      name = "solution-data"
+      gcs {
+        bucket        = var.data_bucket
+        read_only     = false
+        mount_options = ["only-dir=data"]
       }
     }
 
@@ -56,12 +53,9 @@ resource "google_cloud_run_v2_service" "service" {
       }
 
       # Data volume mount
-      dynamic "volume_mounts" {
-        for_each = var.data_bucket != "" ? [1] : []
-        content {
-          name       = "solution-data"
-          mount_path = "/mnt/data"
-        }
+      volume_mounts {
+        name       = "solution-data"
+        mount_path = "/mnt/data"
       }
 
       # Plain env vars
@@ -99,9 +93,9 @@ resource "google_secret_manager_secret_iam_member" "declared_secret" {
   member    = "serviceAccount:${google_service_account.service.email}"
 }
 
-# Grant service account access to data bucket (always when bucket provided)
+# Grant service account access to the data bucket (always present —
+# `data_bucket` is a required variable; see variables.tf)
 resource "google_storage_bucket_iam_member" "data_bucket" {
-  count  = var.data_bucket != "" ? 1 : 0
   bucket = var.data_bucket
   role   = "roles/storage.objectUser"
   member = "serviceAccount:${google_service_account.service.email}"
