@@ -16,10 +16,14 @@
 #     deploy:
 #       uses: <gapp-owner>/gapp/.github/workflows/deploy.yml@<pinned-sha>
 #       with:
-#         solution-repo: <owner>/monarch-access
+#         solution-repo: <owner>/example-app
 #         ref: ${{ inputs.ref }}
 #         workload-identity-provider: projects/<number>/locations/global/workloadIdentityPools/github/providers/github
 #         service-account: gapp-deploy@<project-id>.iam.gserviceaccount.com
+#         # Optional scalar overlays (currently: domain). Keeps deployment-
+#         # specific values out of the solution repo's gapp.yaml — useful
+#         # when the solution repo is public:
+#         domain: example.subdomain.example.com
 
 name: Deploy gapp solution
 
@@ -55,6 +59,18 @@ on:
         description: 'Solution name (as registered in gapp)'
         required: true
         type: string
+      domain:
+        description: >-
+          Optional scalar overlay for gapp.yaml `domain:` field. When
+          non-empty, patches gapp.yaml in-place after checkout, before
+          gapp setup/deploy. When empty (default), no patching — the
+          solution-repo's committed gapp.yaml is used as-is. Lets the
+          operator keep deployment-specific domains out of the
+          solution repo (especially relevant when the solution repo is
+          public).
+        required: false
+        default: ''
+        type: string
 
 jobs:
   deploy:
@@ -69,6 +85,15 @@ jobs:
         with:
           repository: ${{ inputs.solution-repo }}
           ref: ${{ inputs.ref }}
+
+      - name: Apply caller scalar overlays to gapp.yaml
+        if: inputs.domain != ''
+        env:
+          DOMAIN: ${{ inputs.domain }}
+        run: |
+          # yq is pre-installed on ubuntu-latest (Mike Farah's Go yq).
+          # strenv() reads the value from the env to avoid shell quoting issues.
+          yq -i '.domain = strenv(DOMAIN)' gapp.yaml
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
