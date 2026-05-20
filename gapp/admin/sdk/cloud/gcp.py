@@ -47,7 +47,34 @@ class GCPProvider(CloudProvider):
     # -- GCP Foundation --
 
     def enable_api(self, project_id: str, api: str) -> None:
-        self._run_gcloud(["services", "enable", api, "--project", project_id], capture_output=True, check=True)
+        """Enable a GCP API on the project. Idempotent.
+
+        Tolerant of PERMISSION_DENIED: CI deploy SAs intentionally
+        do not have `serviceusage.serviceUsageAdmin` (broad, would
+        let CI enable arbitrary APIs across the project). The
+        operator's local `gapp setup` runs as project owner and
+        enables the foundation APIs once; subsequent CI deploys
+        re-call `gapp setup` (idempotent) and need to no-op on the
+        API-enable step rather than fail. If the API was never
+        enabled locally, the subsequent terraform apply will fail
+        loudly with a more actionable message.
+
+        This tolerance existed in pre-v3 `setup._enable_api` and
+        was dropped during the v3 GappSDK/cloud-provider
+        consolidation. Restored here for the same reason: CI deploys
+        depend on it.
+        """
+        result = self._run_gcloud(
+            ["services", "enable", api, "--project", project_id],
+            capture_output=True, text=True,
+        )
+        if result.returncode == 0:
+            return
+        stderr = (result.stderr or "").strip()
+        if "PERMISSION_DENIED" in stderr or "permission" in stderr.lower():
+            # CI deploy SAs lack serviceusage.serviceUsageAdmin by design.
+            return
+        raise RuntimeError(f"Failed to enable API {api}: {stderr}")
 
     def bucket_exists(self, project_id: str, bucket_name: str) -> bool:
         res = self._run_gcloud(["storage", "buckets", "describe", f"gs://{bucket_name}", "--project", project_id], capture_output=True)
