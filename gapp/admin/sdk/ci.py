@@ -616,11 +616,14 @@ def setup_ci(solution: str | None = None) -> dict:
             f"  Run 'gapp setup --project <project-id>' first."
         )
 
-    full_solution_repo = sol_ctx.get("github_repo")
+    full_solution_repo = sdk.discover_github_repo(sol_ctx)
     if not full_solution_repo:
         raise RuntimeError(
-            f"Could not determine GitHub repo for '{solution_name}'.\n"
-            f"  Ensure the solution repo exists on GitHub with the gapp-solution topic."
+            f"Cannot determine GitHub repo for '{solution_name}' from the\n"
+            f"  local checkout. Run `gapp ci setup` from inside the solution\n"
+            f"  repo's working tree (with an `origin` remote pointing at\n"
+            f"  GitHub) — `gapp ci setup` reads the repo identity from\n"
+            f"  `git remote get-url origin`."
         )
 
     gapp_repo = _get_gapp_repo()
