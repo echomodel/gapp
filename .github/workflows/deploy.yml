@@ -112,5 +112,14 @@ jobs:
 
       - name: Setup and deploy
         run: |
-          gapp setup --solution ${{ inputs.solution-name }}
-          gapp deploy --solution ${{ inputs.solution-name }} --ref ${{ inputs.ref }}
+          # No --solution flag — gapp infers the solution name from
+          # gapp.yaml at the checkout cwd. Passing --solution exercises
+          # gapp's explicit-name code path which (as of v-3) drops
+          # repo_path on the returned context, breaking `gapp deploy`
+          # which needs to load the manifest. Until that v-3 regression
+          # is fixed, the workflow uses cwd inference exclusively. The
+          # `solution-name` input remains on the workflow signature so
+          # existing callers don't break and the value is still
+          # available for future use (logging, multi-solution paths).
+          gapp setup
+          gapp deploy --ref ${{ inputs.ref }}
