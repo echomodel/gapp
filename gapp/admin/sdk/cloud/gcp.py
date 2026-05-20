@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from typing import Optional, List, Dict
 
@@ -158,12 +159,60 @@ class GCPProvider(CloudProvider):
         )
         return tag in res.stdout
 
+    # Terminal Cloud Build statuses. The build will not transition out of
+    # any of these states — polling can stop once one is observed.
+    _BUILD_TERMINAL = frozenset({
+        "SUCCESS", "FAILURE", "INTERNAL_ERROR",
+        "TIMEOUT", "CANCELLED", "EXPIRED",
+    })
+
     def submit_build_sync(self, project_id: str, build_dir: Path, image: str, build_entrypoint: str, ref: str = "HEAD") -> None:
-        self._run_gcloud([
-            "builds", "submit", "--config", f"{build_dir}/cloudbuild.yaml",
-            "--substitutions", f"_ENTRYPOINT={build_entrypoint},_IMAGE={image}",
-            "--project", project_id, str(build_dir)
-        ], capture_output=False, check=True)
+        """Submit a Cloud Build job and block until terminal status.
+
+        Internally uses async-submit + poll rather than gcloud's default
+        block-and-stream mode. The streaming mode requires the deploy SA
+        to have read access to the cloudbuild logs bucket — a permission
+        gapp's REQUIRED_ROLES intentionally does not grant. Without
+        that permission, `gcloud builds submit` exits non-zero on the
+        streaming attempt even when the underlying build succeeds in
+        the background, producing the confusing "workflow failed but
+        image is in AR" state that gapp consumers hit on every new SHA.
+
+        Async + poll uses only `cloudbuild.builds.get` (covered by the
+        deploy SA's existing `cloudbuild.builds.editor` role), removes
+        the streaming dependency entirely, and reports the same
+        success/failure outcome the operator needs to act on.
+
+        Logs are not streamed live; on failure the build's log URL is
+        included in the error so the operator can click through. (See
+        the polling loop's print statements for periodic status output
+        during long builds.)
+
+        See echomodel/gapp#43 for the original bug and rationale.
+        """
+        build_id = self.submit_build_async(
+            project_id, build_dir, image, build_entrypoint, ref=ref,
+        )
+        last_status: str | None = None
+        info: Dict = {}
+        while True:
+            info = self.check_build(project_id, build_id)
+            status = info.get("status") or "QUEUED"
+            if status != last_status:
+                # Only emit on transitions so a 10-minute build doesn't
+                # produce 600 lines of "WORKING".
+                print(f"Cloud Build {build_id}: {status}")
+                last_status = status
+            if status in self._BUILD_TERMINAL:
+                break
+            time.sleep(5)
+
+        if status != "SUCCESS":
+            log_url = info.get("logUrl", "")
+            raise RuntimeError(
+                f"Cloud Build {build_id} ended with status {status}."
+                + (f" Logs: {log_url}" if log_url else "")
+            )
 
     def submit_build_async(self, project_id: str, build_dir: Path, image: str, build_entrypoint: str, ref: str = "HEAD") -> str:
         res = self._run_gcloud([
