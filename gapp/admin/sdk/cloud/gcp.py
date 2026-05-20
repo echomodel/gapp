@@ -133,8 +133,29 @@ class GCPProvider(CloudProvider):
             self._run_gcloud(["artifacts", "repositories", "create", "gapp", "--repository-format", "docker", "--location", region, "--project", project_id], capture_output=True, check=True)
 
     def image_exists(self, project_id: str, region: str, solution_name: str, tag: str) -> bool:
+        """Check whether an image with the given tag is in Artifact Registry.
+
+        `gcloud artifacts docker images list` does NOT fetch tags by
+        default — it returns one row per image manifest with the tags
+        field empty. The `--filter tags:X` then matches nothing even
+        when the image exists with tag X, and `image_exists` wrongly
+        returns False. `--include-tags` makes gcloud populate the tags
+        field so the filter can apply.
+
+        Without this flag, gapp's deploy path rebuilds the image on
+        every run because the existence check always fails — wasted
+        Cloud Build minutes plus exposure to the build-submit log-
+        streaming permission issue on first deploys.
+        """
         image_name = f"{region}-docker.pkg.dev/{project_id}/gapp/{solution_name}"
-        res = self._run_gcloud(["artifacts", "docker", "images", "list", image_name, "--filter", f"tags:{tag}", "--format", "value(tags)", "--project", project_id], capture_output=True, text=True)
+        res = self._run_gcloud(
+            ["artifacts", "docker", "images", "list", image_name,
+             "--include-tags",
+             "--filter", f"tags:{tag}",
+             "--format", "value(tags)",
+             "--project", project_id],
+            capture_output=True, text=True,
+        )
         return tag in res.stdout
 
     def submit_build_sync(self, project_id: str, build_dir: Path, image: str, build_entrypoint: str, ref: str = "HEAD") -> None:
