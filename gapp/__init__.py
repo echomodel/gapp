@@ -1,4 +1,4 @@
-__version__ = "3.1.0"
+__version__ = "3.2.0"
 
 # Oldest contract major this build can manage. Setup/deploy on projects
 # stamped below this floor are refused; list/status still report them.
