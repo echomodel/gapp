@@ -1,8 +1,8 @@
 # Reusable workflow for deploying gapp solutions via GitHub Actions + WIF.
 #
 # This workflow is called from an operator's private CI repo, not from
-# the solution repo itself. The operator's workflow passes solution repo,
-# ref, and WIF credentials as inputs.
+# the solution repo itself. The operator's workflow passes the solution
+# repo, ref, and GCP project identity as inputs.
 #
 # Example caller workflow (in operator's CI repo):
 #
@@ -18,8 +18,8 @@
 #       with:
 #         solution-repo: <owner>/example-app
 #         ref: ${{ inputs.ref }}
-#         workload-identity-provider: projects/<number>/locations/global/workloadIdentityPools/github/providers/github
-#         service-account: gapp-deploy@<project-id>.iam.gserviceaccount.com
+#         project-id: my-gcp-project
+#         project-number: '123456789012'
 #         # Optional scalar overlays (currently: domain). Keeps deployment-
 #         # specific values out of the solution repo's gapp.yaml — useful
 #         # when the solution repo is public:
@@ -39,13 +39,63 @@ on:
         required: false
         default: 'main'
         type: string
-      workload-identity-provider:
-        description: 'Full WIF provider resource name'
-        required: true
+      project-id:
+        description: >-
+          GCP project ID to deploy to. When set, gapp setup/deploy is
+          invoked with `--project <id>` so no project discovery is
+          performed at deploy time (no IAM dependency on
+          resourcemanager.projects.list, no ambiguity from label
+          lookups). Also used to derive `service-account` when that
+          input is not supplied. Required unless `service-account` is
+          supplied AND the GitHub Actions service account has
+          permission to list projects to perform label-based discovery.
+        required: false
+        default: ''
         type: string
+      project-number:
+        description: >-
+          GCP project number — the numeric ID GCP assigns, not the
+          project-id string. Used to derive `workload-identity-provider`
+          when that input is not supplied. Get it with
+          `gcloud projects describe <project-id> --format='value(projectNumber)'`.
+          Required unless `workload-identity-provider` is supplied.
+        required: false
+        default: ''
+        type: string
+      # DEPRECATED — `workload-identity-provider` is retained for
+      # backward compatibility with v3.x callers that pinned before
+      # `project-number` was introduced, and for operators with non-
+      # standard WIF pool/provider naming. Plan to remove this input
+      # in v4 of the gapp framework — once v4 ships, callers must use
+      # `project-number` (or a future explicit-WIF input with a clearer
+      # name). When both are supplied, `workload-identity-provider`
+      # wins.
+      workload-identity-provider:
+        description: >-
+          DEPRECATED — prefer `project-number`. Full WIF provider
+          resource name
+          (e.g. `projects/N/locations/global/workloadIdentityPools/POOL/providers/PROVIDER`).
+          When set, used as-is; otherwise derived from `project-number`
+          using gapp's convention (`github` pool, `github` provider).
+        required: false
+        default: ''
+        type: string
+      # DEPRECATED — `service-account` is retained for backward
+      # compatibility with v3.x callers that pinned before `project-id`
+      # was introduced, and for operators with non-standard service
+      # account naming. Plan to remove this input in v4 of the gapp
+      # framework — once v4 ships, callers must use `project-id` (which
+      # also enables the `--project` flag for gapp, eliminating the
+      # discovery dependency). When both are supplied, `service-account`
+      # wins.
       service-account:
-        description: 'GCP service account email for deployment'
-        required: true
+        description: >-
+          DEPRECATED — prefer `project-id`. GCP service account email
+          for deployment. When set, used as-is; otherwise derived from
+          `project-id` using gapp's convention
+          (`gapp-deploy@<project-id>.iam.gserviceaccount.com`).
+        required: false
+        default: ''
         type: string
       gapp-repo:
         description: 'gapp repo (owner/name) for CLI installation'
@@ -110,8 +160,14 @@ jobs:
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: ${{ inputs.workload-identity-provider }}
-          service_account: ${{ inputs.service-account }}
+          # Prefer the explicit DEPRECATED input when supplied (v3 back-
+          # compat path); otherwise derive from `project-number` using
+          # gapp's convention. v4 will remove the explicit fallback.
+          workload_identity_provider: ${{ inputs.workload-identity-provider || format('projects/{0}/locations/global/workloadIdentityPools/github/providers/github', inputs.project-number) }}
+          # Prefer the explicit DEPRECATED input when supplied (v3 back-
+          # compat path); otherwise derive from `project-id` using
+          # gapp's convention. v4 will remove the explicit fallback.
+          service_account: ${{ inputs.service-account || format('gapp-deploy@{0}.iam.gserviceaccount.com', inputs.project-id) }}
 
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v2
@@ -124,6 +180,14 @@ jobs:
 
       - name: Setup and deploy
         working-directory: ${{ inputs.solution-name }}
+        env:
+          # When `project-id` is provided, pass `--project <id>` to
+          # gapp so it skips its project-discovery query (which needs
+          # resourcemanager.projects.list on the runner's SA). When
+          # omitted, gapp falls back to discovery — only works if the
+          # SA has list permission. Plan to make `project-id` required
+          # in v4.
+          PROJECT_FLAG: ${{ inputs.project-id != '' && format('--project {0}', inputs.project-id) || '' }}
         run: |
           # No --solution flag — gapp infers the solution name from
           # gapp.yaml at the checkout cwd. Passing --solution exercises
@@ -133,5 +197,5 @@ jobs:
           # is fixed, the workflow uses cwd inference exclusively. The
           # checkout above places the solution at `./${solution-name}/`
           # so the basename inference resolves to the solution name.
-          gapp setup
-          gapp deploy --ref ${{ inputs.ref }}
+          gapp setup $PROJECT_FLAG
+          gapp deploy --ref ${{ inputs.ref }} $PROJECT_FLAG
