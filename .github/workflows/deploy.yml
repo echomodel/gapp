@@ -85,9 +85,21 @@ jobs:
         with:
           repository: ${{ inputs.solution-repo }}
           ref: ${{ inputs.ref }}
+          # Check out into a subdirectory named after the solution so
+          # gapp's folder-name fallback (used when gapp.yaml omits a
+          # top-level `name:`) resolves to the right solution. Without
+          # this, the default checkout path is the CALLER repo's
+          # workspace (`/home/runner/work/<caller>/<caller>/`), and
+          # `git rev-parse --show-toplevel`'s basename would be the
+          # caller repo's name rather than the solution name — leading
+          # to gapp resolving the wrong solution. Solutions that DO
+          # declare an explicit `name:` in gapp.yaml are unaffected
+          # either way.
+          path: ${{ inputs.solution-name }}
 
       - name: Apply caller scalar overlays to gapp.yaml
         if: inputs.domain != ''
+        working-directory: ${{ inputs.solution-name }}
         env:
           DOMAIN: ${{ inputs.domain }}
         run: |
@@ -111,6 +123,7 @@ jobs:
         run: pip install "gapp @ git+https://github.com/${{ inputs.gapp-repo }}.git@${{ inputs.gapp-ref }}"
 
       - name: Setup and deploy
+        working-directory: ${{ inputs.solution-name }}
         run: |
           # No --solution flag — gapp infers the solution name from
           # gapp.yaml at the checkout cwd. Passing --solution exercises
@@ -118,8 +131,7 @@ jobs:
           # repo_path on the returned context, breaking `gapp deploy`
           # which needs to load the manifest. Until that v-3 regression
           # is fixed, the workflow uses cwd inference exclusively. The
-          # `solution-name` input remains on the workflow signature so
-          # existing callers don't break and the value is still
-          # available for future use (logging, multi-solution paths).
+          # checkout above places the solution at `./${solution-name}/`
+          # so the basename inference resolves to the solution name.
           gapp setup
           gapp deploy --ref ${{ inputs.ref }}
