@@ -719,6 +719,14 @@ class GappSDK:
         for api in [
             "run.googleapis.com", "secretmanager.googleapis.com",
             "artifactregistry.googleapis.com", "cloudbuild.googleapis.com",
+            # cloudresourcemanager backs `gcloud projects describe` /
+            # `cloudresourcemanager.googleapis.com/v3/projects/...` — used
+            # by ensure_build_permissions, set_project_labels,
+            # get_project_labels, and ci.setup's _get_project_number.
+            # Without it enabled, the very next step in this function
+            # (ensure_build_permissions) fails on any project that
+            # doesn't happen to already have the API turned on.
+            "cloudresourcemanager.googleapis.com",
         ] + get_required_apis(manifest):
             self.provider.enable_api(target_project, api)
             apis_enabled.append(api)
