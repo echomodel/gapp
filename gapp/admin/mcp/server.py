@@ -290,7 +290,7 @@ def gapp_ci_init(repo: str, local_only: bool = False) -> dict:
 
 
 @_tool()
-def gapp_ci_setup(solution: str | None = None) -> dict:
+def gapp_ci_setup(solution: str | None = None, solution_repo: str | None = None) -> dict:
     """Wire a solution for CI/CD deployment.
 
     Creates Workload Identity Federation, service account, IAM bindings,
@@ -302,10 +302,16 @@ def gapp_ci_setup(solution: str | None = None) -> dict:
     gapp_ci_status.
 
     Args:
-        solution: Solution name. Defaults to current directory's solution.
+        solution: Solution name. Defaults to the current directory's solution.
+        solution_repo: The GitHub repo the pipeline deploys, as
+            ``owner/name``, a bare name, or a github.com URL. Pass this
+            (together with ``solution``) to set up CI deterministically
+            from anywhere — no local checkout required. Omit it only when
+            running from inside the solution repo, where it is read from
+            the ``origin`` remote.
     """
     from gapp.admin.sdk.ci import setup_ci
-    return setup_ci(solution=solution)
+    return setup_ci(solution=solution, solution_repo=solution_repo)
 
 
 @_tool()

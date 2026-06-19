@@ -1,6 +1,7 @@
 """gapp ci — CI/CD automation for gapp solutions."""
 
 import json
+import re
 import subprocess
 
 from gapp.admin.sdk.config import get_config_dir
@@ -44,6 +45,25 @@ def _resolve_repo(repo: str) -> str:
         )
     owner = result.stdout.strip()
     return f"{owner}/{repo}"
+
+
+def _resolve_solution_repo(value: str) -> str:
+    """Resolve an explicit solution-repo arg to ``owner/name``.
+
+    Accepts ``owner/name``, a bare ``name`` (owner defaults to the
+    authenticated gh user), or a full GitHub URL (HTTPS or SSH). gapp CI
+    is GitHub-only, so any non-GitHub URL is rejected.
+    """
+    v = value.strip()
+    m = re.search(r'github\.com[:/]([^/]+)/([^/]+?)(?:\.git)?/?$', v)
+    if m:
+        return f"{m.group(1)}/{m.group(2)}"
+    if "://" in v or "@" in v:
+        raise RuntimeError(
+            f"Unsupported repo '{value}'. gapp CI is GitHub-only — pass "
+            f"owner/name, a bare name, or a github.com URL."
+        )
+    return _resolve_repo(v)
 
 
 def _find_ci_repo_by_topic() -> str | None:
@@ -582,11 +602,18 @@ def _push_workflow_to_ci_repo(ci_repo: str, solution_name: str,
         return "pushed"
 
 
-def setup_ci(solution: str | None = None) -> dict:
+def setup_ci(solution: str | None = None, solution_repo: str | None = None) -> dict:
     """Wire a solution for CI/CD deployment.
 
-    No local clone of the solution repo is required. Resolves everything
-    from local config, GCP labels, and GitHub.
+    No local clone of the solution repo is required when ``solution`` and
+    ``solution_repo`` are both given — CI setup is then fully deterministic
+    and works from anywhere (Claude Desktop, a remote/MCP caller, etc.).
+
+    ``solution_repo`` (``owner/name``, a bare name, or a github.com URL) is
+    the GitHub repo the standing pipeline deploys. When omitted, it falls
+    back to discovering the repo from the current checkout's ``origin``
+    remote — convenient for a human running this from inside the repo, but
+    cwd-dependent. Prefer the explicit form for standing pipelines.
     """
     from gapp.admin.sdk.core import GappSDK
 
@@ -616,14 +643,19 @@ def setup_ci(solution: str | None = None) -> dict:
             f"  Run 'gapp setup --project <project-id>' first."
         )
 
-    full_solution_repo = sdk.discover_github_repo(sol_ctx)
+    # Explicit solution-repo wins (deterministic, no checkout needed);
+    # otherwise discover it from the current checkout's origin remote.
+    if solution_repo:
+        full_solution_repo = _resolve_solution_repo(solution_repo)
+    else:
+        full_solution_repo = sdk.discover_github_repo(sol_ctx)
     if not full_solution_repo:
         raise RuntimeError(
-            f"Cannot determine GitHub repo for '{solution_name}' from the\n"
-            f"  local checkout. Run `gapp ci setup` from inside the solution\n"
-            f"  repo's working tree (with an `origin` remote pointing at\n"
-            f"  GitHub) — `gapp ci setup` reads the repo identity from\n"
-            f"  `git remote get-url origin`."
+            f"Cannot determine the GitHub repo for '{solution_name}'.\n"
+            f"  Pass it explicitly: solution_repo='owner/name' (or a\n"
+            f"  github.com URL) — this is the deterministic path and needs\n"
+            f"  no local checkout. Or run from inside the solution repo's\n"
+            f"  working tree so it can be read from `git remote get-url origin`."
         )
 
     gapp_repo = _get_gapp_repo()
