@@ -497,6 +497,33 @@ def _ensure_wif_binding(project_id: str, ci_repo: str) -> str:
     return "set"
 
 
+def _resolve_gapp_ref(gapp_repo: str) -> str:
+    """Pin the reusable workflow to the installed gapp version's release tag.
+
+    gapp tags every release ``vX.Y.Z`` (see CONTRIBUTING), so the generated
+    CI workflow references ``deploy.yml@vX.Y.Z`` — readable and tied to the
+    gapp the operator actually has installed. Falls back to the current
+    ``main`` HEAD only when that tag isn't published yet (e.g. an unreleased
+    dev build), so `ci setup` from a contributor checkout still works.
+    """
+    import importlib.metadata
+
+    tag = f"v{importlib.metadata.version('gapp')}"
+    exists = subprocess.run(
+        ["gh", "api", f"repos/{gapp_repo}/git/ref/tags/{tag}"],
+        capture_output=True, text=True,
+    )
+    if exists.returncode == 0:
+        return tag
+    head = subprocess.run(
+        ["gh", "api", f"repos/{gapp_repo}/commits/HEAD", "--jq", ".sha"],
+        capture_output=True, text=True,
+    )
+    fallback = head.stdout.strip() if head.returncode == 0 else "main"
+    print(f"  ⚠ gapp tag {tag} not published on {gapp_repo}; pinning CI to {fallback}.")
+    return fallback
+
+
 def _generate_workflow(solution_name: str, solution_repo: str,
                        project_id: str, gapp_repo: str) -> str:
     """Generate the caller workflow YAML for the operator's CI repo."""
@@ -508,13 +535,8 @@ def _generate_workflow(solution_name: str, solution_repo: str,
         f"providers/{_WIF_PROVIDER_ID}"
     )
 
-    # Get current gapp commit for pinning
-    gapp_sha = subprocess.run(
-        ["gh", "api", f"repos/{gapp_repo}/commits/HEAD", "--jq", ".sha"],
-        capture_output=True,
-        text=True,
-    )
-    gapp_ref = gapp_sha.stdout.strip() if gapp_sha.returncode == 0 else "main"
+    # Pin the reusable workflow to the installed gapp version's release tag.
+    gapp_ref = _resolve_gapp_ref(gapp_repo)
 
     workflow = {
         "name": f"Deploy {solution_name}",
