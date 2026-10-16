@@ -92,6 +92,14 @@ No terraform or gcloud on the deploying machine.
    it needs `gh` logged in. Any GitHub tool that can dispatch a
    workflow and read the run does the same job.
 
+When you explain this to the user, say explicitly which parts are
+per operator, per project, and per solution, because it decides how
+much work a second solution is: `ci init` is once per operator; the
+pool, provider, and `gapp-deploy` service account are per project and
+shared by every solution on it; only the workflow file is per
+solution. A second solution on an already-wired project costs one
+`ci setup`, which finds the shared pieces and adds one workflow.
+
 The two setup commands need a project-admin identity and write
 access to the CI repo, so they usually happen on the workstation
 once.
