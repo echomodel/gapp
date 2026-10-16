@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 
 class _StrictModel(BaseModel):
@@ -33,16 +33,27 @@ class EnvEntry(_StrictModel):
     """A single environment variable declaration."""
     name: str = Field(description="Environment variable name as seen by the service.")
     value: str | None = Field(default=None, description="Plain string value. Mutually exclusive with 'secret'.")
-    secret: SecretSpec | bool | None = Field(
+    secret: SecretSpec | None = Field(
         default=None,
-        description="Secret-backed value. Prefer a dict with 'name' (and optional 'generate').",
+        description="Secret-backed value: a mapping with 'name' (and optional 'generate').",
     )
+
+    @field_validator("secret", mode="before")
+    @classmethod
+    def _secret_must_be_mapping(cls, v):
+        # A bare `secret: true` used to validate but was ignored by deploy
+        # and by `gapp secrets list`, so a user could ship a service with
+        # no secret and no error. Refuse it with the shape to use instead.
+        if isinstance(v, bool):
+            raise ValueError(
+                "secret must be a mapping, e.g. secret: {name: <short-name>} "
+                "(add generate: true to auto-create the value); bare true/false is not supported"
+            )
+        return v
 
     @model_validator(mode="after")
     def _value_xor_secret(self) -> "EnvEntry":
-        has_value = self.value is not None
-        has_secret = self.secret is not None and self.secret is not False
-        if has_value and has_secret:
+        if self.value is not None and self.secret is not None:
             raise ValueError("env entry cannot set both 'value' and 'secret'")
         return self
 
