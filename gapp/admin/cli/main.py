@@ -342,6 +342,97 @@ def list_cmd(sdk: GappSDK, all_owners, project_limit):
 
 # -- gapp secrets --
 
+# -- gapp ci --
+
+@main.group("ci")
+def ci_group():
+    """Wire and drive GitHub Actions deployments (Workload Identity Federation)."""
+
+
+@ci_group.command("status")
+@click.option("--solution", "-s", default=None, help="Solution name. Defaults to current directory.")
+def ci_status_cmd(solution):
+    """Show the CI repo and whether this solution has a deploy workflow."""
+    from gapp.admin.sdk.ci import get_ci_status
+    try:
+        result = get_ci_status(solution=solution)
+    except RuntimeError as e:
+        click.echo(f"  Error: {e}", err=True)
+        raise SystemExit(1)
+    click.echo(f"CI repo:   {result['repo'] or '(none — run gapp ci init <repo>)'}")
+    click.echo(f"Workflow:  {'present' if result['workflow'] else 'missing'}")
+    if not result["repo"]:
+        click.echo("\nNext Step: ci init")
+    elif not result["workflow"]:
+        click.echo("\nNext Step: ci setup")
+    else:
+        click.echo("\nReady: gapp ci trigger")
+
+
+@ci_group.command("init")
+@click.argument("repo")
+@click.option("--local-only", is_flag=True, help="Write local config only; skip the GitHub topic.")
+def ci_init_cmd(repo, local_only):
+    """Designate the private CI repo that holds deploy workflows (once)."""
+    from gapp.admin.sdk.ci import init_ci
+    try:
+        result = init_ci(repo, local_only=local_only)
+    except RuntimeError as e:
+        click.echo(f"  Error: {e}", err=True)
+        raise SystemExit(1)
+    click.echo(f"\n  CI repo: {result['repo']}")
+    click.echo(f"    config {result['config_status']} ✓")
+    if result.get("repo_created"):
+        click.echo("    repo created (private) ✓")
+    click.echo(f"    topic {result['topic_status']} ✓")
+    click.echo("\nNext Step: gapp ci setup\n")
+
+
+@ci_group.command("setup")
+@click.option("--solution", "-s", default=None, help="Solution name. Defaults to current directory.")
+@click.option(
+    "--solution-repo", default=None,
+    help="GitHub repo the pipeline deploys (owner/name or URL). Defaults to this checkout's origin.",
+)
+def ci_setup_cmd(solution, solution_repo):
+    """Create WIF, the deploy service account, and the solution's workflow."""
+    from gapp.admin.sdk.ci import setup_ci
+    try:
+        result = setup_ci(solution=solution, solution_repo=solution_repo)
+    except (RuntimeError, ValueError) as e:
+        click.echo(f"  Error: {e}", err=True)
+        raise SystemExit(1)
+    click.echo()
+    click.echo(f"  {result['solution']} ({result['solution_repo']}) → {result['project_id']} via {result['ci_repo']}")
+    click.echo()
+    click.echo(f"    WIF pool {result['wif_pool']} ✓")
+    click.echo(f"    WIF provider {result['wif_provider']} ✓")
+    click.echo(f"    Service account {result['service_account']} ✓")
+    click.echo(f"    Binding {result['binding']} ✓")
+    click.echo(f"    Workflow {result['workflow']} ✓")
+    click.echo("\nNext Step: gapp ci trigger\n")
+
+
+@ci_group.command("trigger")
+@click.option("--solution", "-s", default=None, help="Solution name. Defaults to current directory.")
+@click.option("--ref", default="main", show_default=True, help="Git ref to deploy.")
+@click.option("--no-watch", is_flag=True, help="Return after dispatch instead of streaming the run.")
+def ci_trigger_cmd(solution, ref, no_watch):
+    """Dispatch the solution's deploy workflow in the CI repo."""
+    from gapp.admin.sdk.ci import trigger_ci
+    try:
+        result = trigger_ci(solution=solution, ref=ref, watch=not no_watch)
+    except RuntimeError as e:
+        click.echo(f"  Error: {e}", err=True)
+        raise SystemExit(1)
+    click.echo(f"\n  Dispatched {result['workflow']} in {result['ci_repo']} (ref {result['ref']})")
+    if result["run_url"]:
+        click.echo(f"    Run: {result['run_url']}")
+    if result["watched"]:
+        click.echo(f"    Conclusion: {result['conclusion'] or 'unknown'}")
+    click.echo()
+
+
 # -- gapp manifest --
 
 @main.group("manifest")

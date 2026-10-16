@@ -15,10 +15,10 @@ noted.
 | List solutions | `gapp list [--all]` | `gapp_list(all_owners=)` | `--all` crosses owner namespaces |
 | Secrets | `gapp secrets list`, `gapp secrets get <name> [--plaintext]`, `gapp secrets set <name> [value]` | `gapp_secret_list`, `gapp_secret_get(name, plaintext=)`, `gapp_secret_set(name, value)` | `get` returns a hash and length unless plaintext is requested |
 | Project env binding | `gapp projects set-env <id> <env> [--force]`, `gapp projects clear-env <id>`, `gapp projects list` | `gapp_projects_set_env`, `gapp_projects_clear_env`, `gapp_projects_list` | setup never writes `gapp-env`; only these do |
-| CI: designate CI repo | none | `gapp_ci_init(repo="owner/ci-repo")` | MCP only today |
-| CI: wire a solution | none | `gapp_ci_setup(solution=, solution_repo=)` | MCP only today; creates WIF, service account, workflow |
-| CI: deploy | none | `gapp_ci_trigger(solution=, ref=)` | MCP only today; any GitHub tool that dispatches the workflow is equivalent |
-| CI: readiness | none | `gapp_ci_status(solution=)` | MCP only today |
+| CI: designate CI repo | `gapp ci init <repo> [--local-only]` | `gapp_ci_init(repo=, local_only=)` | once per operator |
+| CI: wire a solution | `gapp ci setup [--solution s] [--solution-repo owner/name]` | `gapp_ci_setup(solution=, solution_repo=)` | creates WIF, service account, workflow; needs project admin and CI repo write |
+| CI: deploy | `gapp ci trigger [--solution s] [--ref r] [--no-watch]` | `gapp_ci_trigger(solution=, ref=, watch=)` | needs `gh` logged in; any GitHub tool that dispatches the workflow is equivalent |
+| CI: readiness | `gapp ci status [--solution s]` | `gapp_ci_status(solution=)` | |
 
 When neither surface is present, say so and go to
 `references/environment.md`. Do not invent commands.

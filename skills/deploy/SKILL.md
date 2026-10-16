@@ -50,10 +50,13 @@ result, because both call the same SDK:
 - the gapp plugin's MCP tools, named `gapp_*`, available when the
   plugin is loaded
 
-Use whichever is present. One gap today: CI wiring (`gapp_ci_init`,
-`gapp_ci_setup`, `gapp_ci_trigger`, `gapp_ci_status`) exists only as
-MCP tools, so a machine with just the CLI cannot wire CI. Say that
-plainly instead of inventing a `gapp ci` command.
+When both are loaded, prefer the MCP tools: they return structured
+results instead of text to parse. Hand off only commands that exist:
+the CLI and MCP columns in `references/tools.md` are the complete
+list. Triggering a CI deploy is the one operation with a third
+route: any GitHub tool that can dispatch a workflow and read the run
+does the same job as `gapp ci trigger`, which matters in sessions
+where `gh` is not logged in but GitHub tools are.
 
 ## Step 0: probe before you plan
 
@@ -73,7 +76,7 @@ already know.
 | GitHub write access | `gh auth status`; or GitHub tools in this agent that can read repos and dispatch workflows | CI wiring, CI deploys |
 | Interactive login possible | a hint, not a verdict: `CLAUDE_CODE_REMOTE`, `CI`, or `CODESPACES` set usually means no browser; when unsure, ask the user | preparing this machine versus handing off |
 | Solution state | `gapp.yaml` exists; then `gapp status` when an identity exists, else read the file | which phase is next |
-| CI wired | `gapp_ci_status`, or the solution's workflow file present in the CI repo | whether deploys can go through Actions |
+| CI wired | `gapp ci status`, or the solution's workflow file present in the CI repo | whether deploys can go through Actions |
 
 Then match what the next step needs against what you found. The
 needs table and the three outcomes (proceed, prepare this machine
