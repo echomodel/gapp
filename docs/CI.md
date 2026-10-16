@@ -18,6 +18,10 @@ This mirrors how `gapp setup` already works for GCP foundation — you run it on
 
 Once CI is configured, tools like Claude.ai, Claude mobile app, Claude Code on the web, or GitHub's web editor can make code changes to a solution repo, push them, and trigger deployment to GCP — all without access to GCP credentials or a local development environment. The code change and the deployment are fully decoupled from the operator's machine. The operator's role shifts from "person who deploys" to "person who configured the deployment pipeline once."
 
+### Why bootstrap stays on the workstation
+
+It would be possible to remove the one-time workstation step too: a hub project with a Workload Identity pool trusted by the operator's CI repo, a bootstrap service account granted admin roles at the folder level, and a workflow that runs `gapp setup` and `gapp ci setup` on a runner for any new project. That is deliberately not done. It replaces a per-project, deploy-only identity with one cross-project admin identity reachable from a GitHub repo, which contradicts goal 7 below (the deploy identity cannot set up new projects, access other projects, or escalate), and it saves only a few minutes per new solution. The per-solution `gapp setup` and `gapp ci setup` on a logged-in workstation are the intended cost of keeping each project's blast radius to itself. Revisit only if the bootstrap step itself can be scoped to one project at a time.
+
 ## Goals
 
 1. **Untether deployment from the local machine.** After one-time setup, an operator should never need their laptop to deploy. GitHub UI, `gh` CLI, Claude Code on the web, mobile — any trigger point should work.
