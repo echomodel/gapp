@@ -1,0 +1,9 @@
+service:
+  entrypoint: sample_app.server:app
+public: true
+env:
+  - name: SAMPLE_API_KEY
+    secret:
+      name: sample-api-key
+  - name: SAMPLE_DATA_DIR
+    value: "{{SOLUTION_DATA_PATH}}/notes"

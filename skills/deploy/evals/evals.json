@@ -1,0 +1,52 @@
+{
+  "skill_name": "deploy",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "deploy this to cloud run. the app is a fastapi thing, see the README. i want it live.",
+      "expected_output": "Assesses candidacy, writes a minimal gapp.yaml (entrypoint sample_app.server:app, SAMPLE_API_KEY as a user-supplied secret, SAMPLE_DATA_DIR under the data volume path), probes the machine for gapp tools, a GCP identity, and terraform, finds none and no browser login, and produces an ordered handoff for the workstation instead of attempting gcloud login or faking a deploy.",
+      "files": [
+        "evals/files/sample-app"
+      ],
+      "expectations": [
+        "A gapp.yaml is written with service.entrypoint set to sample_app.server:app",
+        "SAMPLE_API_KEY is declared as a secret in gapp.yaml, not with a literal value",
+        "SAMPLE_DATA_DIR is mapped under {{SOLUTION_DATA_PATH}}",
+        "The agent checks whether gapp admin tools, a GCP identity, and terraform are available before trying to deploy",
+        "The agent does not run gcloud auth login and does not ask the user to paste a credential into chat",
+        "The agent does not claim the service was deployed",
+        "The final message contains an ordered handoff listing gapp setup with the project id placeholder and the CI wiring steps for the other machine"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "ok i committed my changes, deploy my latest changes to prod",
+      "expected_output": "Finds gapp.yaml already present, probes capabilities, discovers no GCP identity and no CI wiring here, and either dispatches CI if it exists or explains precisely which one-time step is missing and hands it off, without inventing a gapp ci command.",
+      "files": [
+        "evals/files/sample-app-initialized"
+      ],
+      "expectations": [
+        "The agent checks for a GCP identity and the gapp tools before attempting a deploy",
+        "The agent checks whether the solution is wired for CI before concluding deploy is impossible here",
+        "The agent does not invent a CLI command such as gapp ci setup or gapp ci trigger",
+        "The agent does not claim a deploy happened",
+        "The agent tells the user which exact step is missing and where to run it"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "i want to be able to deploy this from my phone or from a cloud session later without touching my laptop every time. what do i need to set up and where do i run it?",
+      "expected_output": "Explains the CI path: a private CI repo, one-time ci init and ci setup that need a project-admin identity (shared WIF pool and service account per project, one workflow per solution), after which deploys happen from anywhere by dispatching the workflow. Probes this machine, finds no GCP identity, and says the one-time wiring runs on the machine where gcloud is logged in, naming the MCP tools because the CLI lacks ci commands.",
+      "files": [
+        "evals/files/sample-app-initialized"
+      ],
+      "expectations": [
+        "The answer describes CI deploys through GitHub Actions with Workload Identity Federation as the way to deploy without the laptop",
+        "The answer says CI wiring is a one-time step that needs a project-admin identity",
+        "The answer references the gapp_ci_init and gapp_ci_setup MCP tools rather than a gapp ci CLI command",
+        "The answer distinguishes what is per project (pool, service account) from what is per solution (workflow file)",
+        "The agent checks this machine for a GCP identity and gapp tools, and tells the user to run the one-time wiring on the machine that has them"
+      ]
+    }
+  ]
+}
