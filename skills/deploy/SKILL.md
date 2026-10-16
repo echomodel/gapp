@@ -36,7 +36,7 @@ These hold in every phase, so keep them in mind before reading on.
 
 | When you need | Read |
 |---|---|
-| To decide whether this machine can do the step, prepare it with consent, or hand off | `references/environment.md` |
+| To decide whether this machine can do the step, install what is missing, or hand off a login | `references/environment.md` |
 | To write or change `gapp.yaml`, judge candidacy, make an MCP server cloud-ready | `references/manifest.md` |
 | The phases in detail: init, GCP foundation, secrets, deploy, verify, custom domain, ongoing ops | `references/lifecycle.md` |
 | The CLI command and MCP tool for each operation | `references/tools.md` |
@@ -70,7 +70,7 @@ already know.
 
 | Capability | How to find out (examples) | Needed by |
 |---|---|---|
-| gapp admin tools | MCP tools named `gapp_*` are present; or the `gapp` command is on PATH (`gapp --version`, `which gapp`, `pipx list`) | every phase after init |
+| gapp admin tools | MCP tools named `gapp_*` are present; or the `gapp` command is on PATH (`gapp --version`, `which gapp`, `pipx list`). Missing: install it, pinned to the release, without asking | every phase after init |
 | GCP identity | an active account in `gcloud auth list`; or application default credentials, for example `GOOGLE_APPLICATION_CREDENTIALS` set or `gcloud auth application-default print-access-token` succeeding | setup, secrets, status, local deploy |
 | terraform | `terraform version` or `which terraform` | local deploy only |
 | GitHub write access | `gh auth status`; or GitHub tools in this agent that can read repos and dispatch workflows | CI wiring, CI deploys |
@@ -79,9 +79,10 @@ already know.
 | CI wired | `gapp ci status`, or the solution's workflow file present in the CI repo | whether deploys can go through Actions |
 
 Then match what the next step needs against what you found. The
-needs table and the three outcomes (proceed, prepare this machine
-with the user's consent, or route elsewhere) are in
-`references/environment.md`. Read it whenever anything is missing.
+needs table and the three outcomes (proceed; install missing tooling
+and configure, on any machine, without asking; or route an identity
+step elsewhere) are in `references/environment.md`. Read it whenever
+anything is missing. Only a login ever needs the user; tools never do.
 
 ## Lifecycle router
 
