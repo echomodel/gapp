@@ -21,14 +21,14 @@
     {
       "id": 2,
       "prompt": "ok i committed my changes, deploy my latest changes to prod",
-      "expected_output": "Finds gapp.yaml already present, probes capabilities, discovers no GCP identity and no CI wiring here, and either dispatches CI if it exists or explains precisely which one-time step is missing and hands it off, without inventing a gapp ci command.",
+      "expected_output": "Finds gapp.yaml already present, probes capabilities, discovers no GCP identity and no CI wiring here, and either dispatches CI if it exists or explains precisely which one-time step is missing and hands it off, using only commands that exist.",
       "files": [
         "evals/files/sample-app-initialized"
       ],
       "expectations": [
         "The agent checks for a GCP identity and the gapp tools before attempting a deploy",
         "The agent checks whether the solution is wired for CI before concluding deploy is impossible here",
-        "The agent does not invent a CLI command such as gapp ci setup or gapp ci trigger",
+        "Every gapp command or tool the agent names exists: gapp ci init/setup/trigger/status or the gapp_ci_* MCP tools, with no invented flags",
         "The agent does not claim a deploy happened",
         "The agent tells the user which exact step is missing and where to run it"
       ]
@@ -36,14 +36,14 @@
     {
       "id": 3,
       "prompt": "i want to be able to deploy this from my phone or from a cloud session later without touching my laptop every time. what do i need to set up and where do i run it?",
-      "expected_output": "Explains the CI path: a private CI repo, one-time ci init and ci setup that need a project-admin identity (shared WIF pool and service account per project, one workflow per solution), after which deploys happen from anywhere by dispatching the workflow. Probes this machine, finds no GCP identity, and says the one-time wiring runs on the machine where gcloud is logged in, naming the MCP tools because the CLI lacks ci commands.",
+      "expected_output": "Explains the CI path: a private CI repo, one-time ci init and ci setup that need a project-admin identity (shared WIF pool and service account per project, one workflow per solution), after which deploys happen from anywhere by dispatching the workflow. Probes this machine, finds no GCP identity, and says the one-time wiring runs on the machine where gcloud is logged in, naming the gapp ci commands or their MCP equivalents.",
       "files": [
         "evals/files/sample-app-initialized"
       ],
       "expectations": [
         "The answer describes CI deploys through GitHub Actions with Workload Identity Federation as the way to deploy without the laptop",
         "The answer says CI wiring is a one-time step that needs a project-admin identity",
-        "The answer references the gapp_ci_init and gapp_ci_setup MCP tools rather than a gapp ci CLI command",
+        "The answer names the real CI wiring commands (gapp ci init and gapp ci setup, or their gapp_ci_* MCP equivalents) and does not invent others",
         "The answer distinguishes what is per project (pool, service account) from what is per solution (workflow file)",
         "The agent checks this machine for a GCP identity and gapp tools, and tells the user to run the one-time wiring on the machine that has them"
       ]

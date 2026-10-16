@@ -81,18 +81,20 @@ for the current commit already exists.
 anywhere with GitHub access: the GitHub UI, a phone, a cloud agent.
 No terraform or gcloud on the deploying machine.
 
-1. `gapp_ci_init(repo="owner/ci-repo")` designates a private CI
-   repo (an address book of solution to project, not a product).
-2. `gapp_ci_setup(solution="name")` creates the Workload Identity
-   pool and provider and the `gapp-deploy` service account in the
-   project (shared by every solution there), binds the pool to the
-   CI repo, and pushes a per-solution workflow into the CI repo.
-3. `gapp_ci_trigger(solution="name")` dispatches that workflow; any
-   GitHub tool that can dispatch a workflow and read the run does
-   the same job.
+1. `gapp ci init owner/ci-repo` designates a private CI repo (an
+   address book of solution to project, not a product). Once per
+   operator.
+2. `gapp ci setup` creates the Workload Identity pool and provider
+   and the `gapp-deploy` service account in the project (once per
+   project, shared by every solution there), binds the pool to the
+   CI repo, and pushes one workflow per solution into the CI repo.
+3. `gapp ci trigger` dispatches that workflow and streams the run;
+   it needs `gh` logged in. Any GitHub tool that can dispatch a
+   workflow and read the run does the same job.
 
-The two setup calls need a project-admin identity and write access
-to the CI repo, so they usually happen on the workstation once.
+The two setup commands need a project-admin identity and write
+access to the CI repo, so they usually happen on the workstation
+once.
 Everything after is credential-free for the operator.
 
 Recommend CI whenever the user deploys from more than one machine,

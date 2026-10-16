@@ -13,7 +13,7 @@ something only their other machine can do.
 | init (write `gapp.yaml`) | optional | no | no | optional | `gapp init` adds a repo topic when `gh` is logged in; otherwise it just writes the file. Writing `gapp.yaml` by hand from the schema is fine too. |
 | projects set-env / clear-env | yes | project admin | no | no | one label write |
 | setup | yes | project admin: enable services, create bucket, edit IAM, write labels | no | no | once per solution per project, idempotent |
-| ci init / ci setup | MCP tools only | project admin: WIF pool, service account, IAM | no | yes, to the private CI repo | once per solution; pool and SA are shared per project |
+| ci init / ci setup | yes | project admin: WIF pool, service account, IAM | no | yes, to the private CI repo | once per solution; pool and SA are shared per project |
 | secrets list / get / set | yes | Secret Manager | no | no | |
 | status / list | yes | read-only | no | no | |
 | deploy, local | yes | deploy roles | yes | no | clean tree |
@@ -84,17 +84,16 @@ Why: no <GCP identity with project admin rights / gapp admin tools / terraform> 
 On your workstation (where gapp and gcloud are logged in), in the <solution> repo on branch <branch>:
 
 1. git pull
-2. gapp setup <project-id>            # or the MCP call gapp_setup(project_id="<project-id>")
-3. gapp_ci_init(repo="<owner>/<ci-repo>")   # MCP tools only; once per workstation
-4. gapp_ci_setup(solution="<solution>")      # creates WIF, service account, workflow
+2. gapp setup <project-id>              # or the MCP call gapp_setup(project_id="<project-id>")
+3. gapp ci init <owner>/<ci-repo>       # once per operator; or gapp_ci_init(repo=...)
+4. gapp ci setup --solution <solution>  # creates WIF, service account, workflow; or gapp_ci_setup(...)
 
 Then tell me "setup done" and I will trigger the deploy from here.
 ```
 
-Keep the handoff literal and ordered. Include the MCP form for CI
-steps because the CLI does not expose them. Omit steps the user has
-already done; `gapp status` output or the CI repo contents tell you
-which.
+Keep the handoff literal and ordered, and use only commands that
+exist (`references/tools.md`). Omit steps the user has already done;
+`gapp status` output or the CI repo contents tell you which.
 
 After the user reports back, re-probe rather than trusting the
 report: `gapp status` or the workflow file's presence confirms it.
