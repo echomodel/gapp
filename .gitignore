@@ -31,8 +31,6 @@ dist/
 # Logs
 *.log
 
-# Claude plugin data (installed at runtime)
-site-packages/
 
 # skill-creator eval workspaces (local only)
 skills/*-workspace/
