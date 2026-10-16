@@ -1,8 +1,6 @@
 ---
 name: secrets
 description: Manage secrets for gapp-deployed solutions. Use when asked to check, get, set, or troubleshoot secrets in Secret Manager — "what secrets does this need", "get the db password", "set the API key", "are my secrets ready for deploy", "check secret status", etc.
-disable-model-invocation: false
-user-invocable: true
 ---
 
 # Secrets Skill
