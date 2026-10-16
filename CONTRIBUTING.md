@@ -512,10 +512,9 @@ string. Two derived locations track it:
 
 ### Release workflow
 
-A release is one local prep command plus three publish steps. The
-local prep is automated via `scripts/release.py` so version files
-can never drift, the test suite is never skipped, and the marketplace
-ref bump is done in lockstep with the gapp tag.
+A release is one local prep command plus two publish steps. The local
+prep is automated via `scripts/release.py` so the version files can
+never drift and the test suite is never skipped.
 
 #### 1. Local prep (one command)
 
@@ -533,64 +532,40 @@ This script:
 - commits the two file edits with `chore: bump version to X.Y.Z`
   (the precommit privacy hook still runs),
 - tags `vX.Y.Z` at the new commit,
-- bumps the gapp ref in the sibling marketplace repo
-  (`../echomodel-claude-plugins/.claude-plugin/marketplace.json`) and
-  commits that change in the marketplace repo,
-- prints the three remaining publish steps below.
+- prints the two remaining publish steps below.
 
 If anything fails, the script aborts before tagging. Re-run after
-fixing. The marketplace step is skipped (with a warning) if the
-sibling repo isn't checked out.
+fixing.
 
-#### 2. Push gapp + marketplace
+#### 2. Push the commit and the tag
 
 ```bash
 git push origin main && git push origin vX.Y.Z
-cd ../echomodel-claude-plugins && git push origin main
 ```
 
-#### 3. Refresh the local plugin install
+Every released version gets a tag; untagged versions break pinned
+installs.
+
+#### 3. Reinstall the CLI at the tag
+
+On each machine that uses gapp:
 
 ```bash
-claude plugin marketplace update echomodel && claude plugin update gapp@echomodel
-```
-
-The plugin update changes `.claude-plugin/plugin.json` in the
-plugin install dir, but the actual MCP server site-packages still
-runs the old code until the SessionStart hook reinstalls — restart
-Claude Code after step 4 to pick it up.
-
-#### 4. Upgrade the pipx CLI on PATH
-
-```bash
-cd ~ && pipx upgrade gapp
+cd ~ && pipx install --force "gapp @ git+https://github.com/echomodel/gapp.git@vX.Y.Z"
 ```
 
 Run from `$HOME`, not from inside the gapp repo. From the repo
-directory, pipx parses the bare `gapp` argument as a relative path
-(because `./gapp/` exists) and errors out. Running from `~` avoids
-the collision.
+directory, pipx parses a bare `gapp` argument as the `./gapp/`
+directory and errors out. After this, `gapp --version` reports the
+new version, and `gapp-mcp` on that machine serves the new code.
 
-After this, `gapp --version` reports the new version.
-
-#### 5. Restart Claude Code
-
-The plugin's MCP server (`gapp-mcp`) starts during a SessionStart
-hook that reinstalls the plugin's site-packages whenever the
-plugin's cached version differs from `__init__.py`. The reinstall
-only happens at session start, so until you restart, the server is
-still running the old code regardless of what `claude plugin update`
-did. Quit and re-open Claude Code to load the new MCP surface.
-
-### Why this many steps exist
-
-The two-install setup is intentional: `pipx` is the user's terminal
-CLI, while the plugin is a Claude-Code-internal install in
-`${CLAUDE_PLUGIN_DATA}/site-packages`. Each has a separate upgrade
-trigger (`pipx upgrade` vs the SessionStart hook). The release
-script can't combine them — one is system-level, the other is
-Claude-Code-internal. What it can do is make the bump itself
-mechanical and document the publish steps so nothing gets missed.
+The `deploy` and `secrets` skills under `skills/` are not part of the
+pip package. When they change, republish them wherever they are
+distributed: re-save them as skills, or bump the ref in any plugin
+listing that carries gapp. The plugin manifest in `.claude-plugin/`
+is kept in lockstep by the release script for anyone who installs gapp
+as a plugin, but a plugin install is optional: the CLI and the skills
+carry every operation on their own.
 
 ### Why version bumps matter
 

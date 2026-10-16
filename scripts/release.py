@@ -7,27 +7,20 @@ Usage:
 What it does:
     1. Validates the new version is strictly greater than the current one.
     2. Updates `__version__` in gapp/__init__.py.
-    3. Updates `version` in .claude-plugin/plugin.json.
-       (pyproject.toml is dynamic — sources its version from gapp.__version__,
-       so it does not need a separate edit.)
+    3. Updates `version` in .claude-plugin/plugin.json so the optional
+       plugin manifest stays in lockstep. (pyproject.toml is dynamic — it
+       sources its version from gapp.__version__.)
     4. Runs the unit-test suite (`python3 -m pytest tests/unit/`). Fails the
        release if anything is red.
     5. Stages and commits the version-file changes with a templated message.
     6. Tags `vX.Y.Z` at the new commit.
-    7. If the marketplace repo is checked out as a sibling
-       (`echomodel-claude-plugins`), edits its marketplace.json to pin the
-       gapp plugin at the new tag and commits that change in the marketplace
-       repo. No push.
-    8. Prints the remaining publish steps the user must run themselves
-       (push gapp, push marketplace, plugin update, pipx upgrade,
-       Claude Code restart).
+    7. Prints the publish steps the user runs themselves: push the commit
+       and the tag, then reinstall the CLI at the tag wherever it is used.
 
-The pre-commit privacy hook still runs on every commit step. The script
-does not push, and does not invoke any `claude plugin` commands. Those
-steps cross machine and remote-repo boundaries; the user controls them.
+The pre-commit privacy hook still runs on the commit. The script does not
+push; that crosses the remote boundary and the user controls it.
 
-See CONTRIBUTING.md "Release workflow" for the full procedure including
-the post-tag steps.
+See CONTRIBUTING.md "Release workflow" for the full procedure.
 """
 
 from __future__ import annotations
@@ -43,8 +36,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 INIT_PY = REPO_ROOT / "gapp" / "__init__.py"
 PLUGIN_JSON = REPO_ROOT / ".claude-plugin" / "plugin.json"
 PYPROJECT_TOML = REPO_ROOT / "pyproject.toml"
-MARKETPLACE_REPO = REPO_ROOT.parent / "echomodel-claude-plugins"
-MARKETPLACE_JSON = MARKETPLACE_REPO / ".claude-plugin" / "marketplace.json"
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 
 
@@ -138,73 +129,22 @@ def tag(new_version: str) -> None:
     )
 
 
-def bump_marketplace(new_version: str) -> bool:
-    """Update gapp's ref pin in the sibling marketplace repo and commit.
-
-    Returns True if the bump succeeded, False if the marketplace repo is
-    not checked out as a sibling (in which case the user must do it
-    manually).
-    """
-    if not MARKETPLACE_JSON.exists():
-        return False
-
-    data = json.loads(MARKETPLACE_JSON.read_text())
-    plugins = data.get("plugins", [])
-    gapp_entry = next((p for p in plugins if p.get("name") == "gapp"), None)
-    if gapp_entry is None:
-        fatal(
-            f"No 'gapp' plugin entry in {MARKETPLACE_JSON}. "
-            "Marketplace structure has changed; update this script."
-        )
-
-    new_ref = f"v{new_version}"
-    if gapp_entry["source"].get("ref") == new_ref:
-        print(f"  Marketplace already pinned to {new_ref}; skipping.")
-        return True
-
-    gapp_entry["source"]["ref"] = new_ref
-    MARKETPLACE_JSON.write_text(
-        json.dumps(data, indent=2, ensure_ascii=False) + "\n"
-    )
-
-    # Commit the change inside the marketplace repo.
-    subprocess.run(
-        ["git", "add", str(MARKETPLACE_JSON)],
-        cwd=MARKETPLACE_REPO, check=True,
-    )
-    subprocess.run(
-        ["git", "commit", "-m", f"Bump gapp to v{new_version}"],
-        cwd=MARKETPLACE_REPO, check=True,
-    )
-    return True
-
-
-def print_followup(new_version: str, marketplace_done: bool) -> None:
+def print_followup(new_version: str) -> None:
     print()
     print(f"  Local prep done. v{new_version} committed and tagged.")
     print()
     print("  Remaining publish steps (run from your shell):")
     print()
-    print(f"  # 1. Push gapp")
+    print("  # 1. Push the commit and the tag")
     print(f"  git push origin main && git push origin v{new_version}")
     print()
-    if marketplace_done:
-        print(f"  # 2. Push marketplace bump")
-        print(f"  cd ../echomodel-claude-plugins && git push origin main")
-    else:
-        print(f"  # 2. Marketplace repo not found at sibling path.")
-        print(f"  #     Bump and push it manually before continuing.")
+    print("  # 2. Reinstall the CLI at the tag on each machine that uses it")
+    print("  #    (run from $HOME: from inside the repo, pipx parses the bare")
+    print("  #    package name as the ./gapp directory)")
+    print(f'  cd ~ && pipx install --force "gapp @ git+https://github.com/echomodel/gapp.git@v{new_version}"')
     print()
-    print(f"  # 3. Refresh plugin from marketplace")
-    print(f"  claude plugin marketplace update echomodel && "
-          f"claude plugin update gapp@echomodel")
-    print()
-    print(f"  # 4. Upgrade the pipx CLI on PATH (run from $HOME to dodge")
-    print(f"  #     pipx's path-parse gotcha when CWD is the gapp repo)")
-    print(f"  cd ~ && pipx upgrade gapp")
-    print()
-    print("  # 5. Restart Claude Code so the SessionStart hook reinstalls")
-    print("  #     the plugin's site-packages with the new version.")
+    print("  # 3. If skills/ changed, republish them wherever they are")
+    print("  #    distributed (a saved skill, a plugin listing).")
     print()
 
 
@@ -232,8 +172,7 @@ def main() -> int:
     run_tests()
     stage_and_commit(new_version)
     tag(new_version)
-    marketplace_done = bump_marketplace(new_version)
-    print_followup(new_version, marketplace_done)
+    print_followup(new_version)
     return 0
 
 
