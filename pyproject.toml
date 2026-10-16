@@ -9,7 +9,7 @@ description = "GCP App Deployer — CLI tool for deploying Cloud Run services wi
 requires-python = ">=3.10"
 dependencies = [
     "click>=8.0",
-    "mcp[cli]>=1.0",
+    "mcp[cli]>=1.0,<2",
     "pydantic>=2.0",
     "pyyaml>=6.0",
 ]
