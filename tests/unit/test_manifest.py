@@ -341,3 +341,18 @@ def test_json_schema_generation():
     schema = Manifest.model_json_schema()
     assert "properties" in schema
     assert "env" in schema["properties"]
+
+
+def test_cli_manifest_schema_prints_live_json_schema():
+    """`gapp manifest schema` prints the same schema the MCP tool returns."""
+    import json
+    from click.testing import CliRunner
+    from gapp.admin.cli.main import main as cli_main
+    from gapp.admin.sdk.schema import get_schema
+
+    result = CliRunner().invoke(cli_main, ["manifest", "schema"])
+
+    assert result.exit_code == 0, result.output
+    printed = json.loads(result.output)
+    assert "properties" in printed
+    assert printed == get_schema()
