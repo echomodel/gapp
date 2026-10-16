@@ -56,6 +56,8 @@ Setup needs a project-admin identity. When this machine lacks one,
 
 ## Phase 3: Secrets
 
+Full detail in `references/secrets.md`; the short version:
+
 `gapp secrets list` shows declared secrets and their state. For each
 missing one, ask the user for the value and run
 `gapp secrets set <name>` (prefer stdin or the tool argument over

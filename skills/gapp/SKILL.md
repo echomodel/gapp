@@ -1,10 +1,10 @@
 ---
-name: deploy
-description: Deploy, redeploy, set up, and operate Python web servers and MCP servers on Google Cloud Run with gapp, from any machine - a workstation, a CI runner, or a cloud agent session. Use when asked to deploy, host, ship, publish, or redeploy a Python service, get something running on GCP or Cloud Run, push changes to production, set up CI/CD or GitHub Actions deploys, create or configure gapp.yaml, bind projects to environments, check deployment status or a service URL, add a custom domain, or when the current machine lacks the gapp CLI, a Google Cloud login, or terraform and the user needs to know what to run where. Also use for any question about hosting a Python service on Google Cloud, even if gapp is not named.
+name: gapp
+description: Deploy, redeploy, set up, and operate Python web servers and MCP servers on Google Cloud Run with gapp, from any machine - a workstation, a CI runner, or a cloud agent session. Use when asked to deploy, host, ship, publish, or redeploy a Python service, get something running on GCP or Cloud Run, push changes to production, set up CI/CD or GitHub Actions deploys, create or configure gapp.yaml, bind projects to environments, check deployment status or a service URL, add a custom domain, manage a deployed service's secrets in Secret Manager (list, check readiness, set, get), or when the current machine lacks the gapp CLI, a Google Cloud login, or terraform and the user needs to know what to run where. Also use for any question about hosting a Python service on Google Cloud, even if gapp is not named.
 compatibility: Needs the gapp admin tools (the gapp CLI, or the gapp plugin's MCP tools) plus gcloud for most steps; terraform for local deploys; GitHub access for CI deploys. The skill detects what is missing and routes around it.
 ---
 
-# Deploy with gapp
+# gapp
 
 gapp deploys containerized Python services to Cloud Run with
 Terraform. The solution stays cloud-agnostic: no GCP imports, no
@@ -39,6 +39,7 @@ These hold in every phase, so keep them in mind before reading on.
 | To decide whether this machine can do the step, install what is missing, or hand off a login | `references/environment.md` |
 | To write or change `gapp.yaml`, judge candidacy, make an MCP server cloud-ready | `references/manifest.md` |
 | The phases in detail: init, GCP foundation, secrets, deploy, verify, custom domain, ongoing ops | `references/lifecycle.md` |
+| Secrets: declaring them, readiness before a deploy, setting and reading values | `references/secrets.md` |
 | The CLI command and MCP tool for each operation | `references/tools.md` |
 
 ## Two tool surfaces, one SDK
@@ -104,8 +105,9 @@ Phases, each detailed in `references/lifecycle.md`:
    cloud identity, so it is always doable here.
 2. **GCP foundation**: pick or reuse a project, optionally bind it
    to an env, run setup. Needs a project-admin identity.
-3. **Secrets**: list declared secrets, set the missing ones. Needs
-   an identity with Secret Manager access.
+3. **Secrets**: list declared secrets, set the missing ones
+   (`references/secrets.md`). Needs an identity with Secret Manager
+   access.
 4. **Deploy**: locally (gapp, identity, terraform, clean tree) or
    through GitHub Actions once CI is wired (GitHub access only).
    Recommend CI for anyone who wants to deploy from more than one

@@ -298,7 +298,7 @@ the solution uses — mcp-app, FastMCP, FastAPI, or anything else.
 external app framework. No references in `pyproject.toml`,
 `requirements*.txt`, or Python code.
 
-**Skills and documentation:** the deploy skill and README may
+**Skills and documentation:** the gapp skill and README may
 mention an external framework parenthetically as an example
 (e.g., "solutions handling their own auth, such as mcp-app")
 but must never contain framework-specific configuration,
@@ -308,6 +308,12 @@ and service config. It relies on the agent to carry the app's
 runtime requirements from the app's own skill or documentation
 and map them to gapp's primitives. Neither skill needs to be
 intimately aware of the other's details.
+
+The skill lives in `skills/gapp/` with its references one level
+down. Its eval prompts and assertions are in `skills/gapp/evals/evals.json`,
+with fixture repos under `evals/files/`. After changing the skill, rerun
+them with the skill-creator loop (each prompt against the new and the
+old skill, graded against the assertions) before releasing.
 
 Universal tools like Docker are the exception — Docker examples
 serve both practical and illustrative purposes and don't create
