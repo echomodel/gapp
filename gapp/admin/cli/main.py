@@ -172,7 +172,11 @@ def projects_list(sdk: GappSDK):
 @main.command()
 @click.pass_obj
 def init(sdk: GappSDK):
-    """Initialize current repo for gapp (local only)."""
+    """Write gapp.yaml for this repo and register the solution locally.
+
+    Needs no cloud login. Idempotent: re-run after editing gapp.yaml to
+    validate it. Next: `gapp setup <project-id>`.
+    """
     from gapp.admin.sdk.init import init_solution
     try:
         result = init_solution()
@@ -196,7 +200,14 @@ def init(sdk: GappSDK):
 @click.option("--force", is_flag=True, help="Override Layer-1 cross-owner check.")
 @click.pass_obj
 def setup_cmd(sdk: GappSDK, project_id, solution, env, project_arg, force):
-    """GCP foundation: enable APIs, create solution bucket, label project."""
+    """GCP foundation: enable APIs, create the solution bucket, label the project.
+
+    Once per solution per project, idempotent. Needs a gcloud login with
+    project-admin rights (enable services, create buckets, edit IAM). The
+    project id is required the first time; later runs discover it from
+    the project label. Next: `gapp secrets set` for any declared secrets,
+    then `gapp deploy` or `gapp ci setup`.
+    """
     pid = project_arg or project_id
     try:
         result = sdk.setup(pid, solution=solution, env=env, force=force)
@@ -225,7 +236,14 @@ def setup_cmd(sdk: GappSDK, project_id, solution, env, project_arg, force):
 @click.option("--rebuild", is_flag=True, help="Force docker build even if an image already exists for the resolved SHA.")
 @click.pass_obj
 def deploy(sdk: GappSDK, ref, solution, env, project, dry_run, rebuild):
-    """Build + terraform apply."""
+    """Build the image with Cloud Build and apply Terraform; prints the service URL.
+
+    Needs a gcloud login, terraform on PATH, and a clean git tree: the
+    build ships `git archive HEAD`, so uncommitted changes never deploy.
+    An image already built for this commit is reused. To deploy without
+    gcloud or terraform on this machine, wire CI once (`gapp ci setup`)
+    and use `gapp ci trigger` or GitHub's "Run workflow" button.
+    """
     try:
         result = sdk.deploy(ref=ref, solution=solution, env=env, dry_run=dry_run, project_id=project, rebuild=rebuild)
     except (RuntimeError, ValueError) as e:
@@ -346,13 +364,34 @@ def list_cmd(sdk: GappSDK, all_owners, project_limit):
 
 @main.group("ci")
 def ci_group():
-    """Wire and drive GitHub Actions deployments (Workload Identity Federation)."""
+    """Deploy through GitHub Actions instead of this machine.
+
+    One-time wiring, then deploys from anywhere with GitHub access (the
+    GitHub UI, a phone, a CI runner, an agent session):
+
+    \b
+      gapp ci init <owner/repo>   once per operator: the private repo for workflows
+      gapp ci setup               once per solution: WIF pool, service account, workflow
+      gapp ci trigger             any time: dispatch the workflow at a ref
+      gapp ci status              where you are in the above
+
+    Scope: the WIF pool, provider, and gapp-deploy service account are per
+    project and shared by every solution on it; the workflow file is per
+    solution. The runner authenticates with Workload Identity Federation,
+    so no key is stored anywhere. `ci init` and `ci setup` need a gcloud
+    login with project-admin rights and `gh` write access to the CI repo;
+    `ci trigger` needs only `gh`.
+    """
 
 
 @ci_group.command("status")
 @click.option("--solution", "-s", default=None, help="Solution name. Defaults to current directory.")
 def ci_status_cmd(solution):
-    """Show the CI repo and whether this solution has a deploy workflow."""
+    """Show the CI repo and whether this solution has a deploy workflow.
+
+    Both must be present before `gapp ci trigger` works; the output names
+    the next step.
+    """
     from gapp.admin.sdk.ci import get_ci_status
     try:
         result = get_ci_status(solution=solution)
@@ -373,7 +412,12 @@ def ci_status_cmd(solution):
 @click.argument("repo")
 @click.option("--local-only", is_flag=True, help="Write local config only; skip the GitHub topic.")
 def ci_init_cmd(repo, local_only):
-    """Designate the private CI repo that holds deploy workflows (once)."""
+    """Designate the private CI repo that holds deploy workflows (once per operator).
+
+    REPO is owner/name or a bare name under your GitHub account; it is
+    created private if missing and tagged so other machines can find it.
+    This is not the solution repo.
+    """
     from gapp.admin.sdk.ci import init_ci
     try:
         result = init_ci(repo, local_only=local_only)
@@ -395,7 +439,14 @@ def ci_init_cmd(repo, local_only):
     help="GitHub repo the pipeline deploys (owner/name or URL). Defaults to this checkout's origin.",
 )
 def ci_setup_cmd(solution, solution_repo):
-    """Create WIF, the deploy service account, and the solution's workflow."""
+    """Wire one solution for CI deploys (once per solution, idempotent).
+
+    Creates the project's Workload Identity pool and provider and the
+    gapp-deploy service account if missing (shared by every solution on
+    the project), binds the pool to the CI repo, and pushes this
+    solution's workflow file into the CI repo. Requires `gapp ci init`
+    and `gapp setup` first.
+    """
     from gapp.admin.sdk.ci import setup_ci
     try:
         result = setup_ci(solution=solution, solution_repo=solution_repo)
@@ -418,7 +469,12 @@ def ci_setup_cmd(solution, solution_repo):
 @click.option("--ref", default="main", show_default=True, help="Git ref to deploy.")
 @click.option("--no-watch", is_flag=True, help="Return after dispatch instead of streaming the run.")
 def ci_trigger_cmd(solution, ref, no_watch):
-    """Dispatch the solution's deploy workflow in the CI repo."""
+    """Dispatch the solution's deploy workflow in the CI repo.
+
+    Equivalent to pressing "Run workflow" on the CI repo's Actions tab.
+    Streams the run until it finishes unless --no-watch is given. Needs
+    only `gh` logged in; no gcloud or terraform on this machine.
+    """
     from gapp.admin.sdk.ci import trigger_ci
     try:
         result = trigger_ci(solution=solution, ref=ref, watch=not no_watch)
