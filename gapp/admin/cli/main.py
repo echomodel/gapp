@@ -342,6 +342,24 @@ def list_cmd(sdk: GappSDK, all_owners, project_limit):
 
 # -- gapp secrets --
 
+# -- gapp manifest --
+
+@main.group("manifest")
+def manifest_group():
+    """Inspect the gapp.yaml manifest contract."""
+
+
+@manifest_group.command("schema")
+def manifest_schema_cmd():
+    """Print the live JSON Schema for gapp.yaml.
+
+    Generated from the Pydantic model on every call; nothing is read from
+    disk, so this is always the schema this build validates against.
+    """
+    from gapp.admin.sdk.schema import get_schema
+    click.echo(json_mod.dumps(get_schema(), indent=2))
+
+
 @main.group("secrets")
 def secrets_group():
     """List, get, and set secret values for the current solution."""
