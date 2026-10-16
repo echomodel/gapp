@@ -49,12 +49,41 @@ def get_name(manifest: dict) -> str | None:
 
 
 def get_solution_name(manifest: dict, repo_path: Path) -> str:
-    """Derive solution name from manifest or repo directory name."""
-    # Check top-level name: first
+    """Derive the solution name: manifest `name`, else the origin repo name,
+    else the checkout directory name.
+
+    The origin remote is preferred over the directory because a checkout
+    can live in any folder (a CI runner's workspace, a scratch clone) while
+    the repo name is what the solution is known by everywhere else.
+    """
     name = get_name(manifest)
     if name:
         return name
+    origin = _origin_repo_name(repo_path)
+    if origin:
+        return origin
     return repo_path.name
+
+
+def _origin_repo_name(repo_path: Path) -> str | None:
+    """Return the repository name from the `origin` remote, or None."""
+    import subprocess
+    try:
+        res = subprocess.run(
+            ["git", "-C", str(repo_path), "remote", "get-url", "origin"],
+            capture_output=True, text=True, timeout=5,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if res.returncode != 0:
+        return None
+    url = res.stdout.strip().rstrip("/")
+    if not url:
+        return None
+    tail = url.rsplit("/", 1)[-1].rsplit(":", 1)[-1]
+    if tail.endswith(".git"):
+        tail = tail[:-4]
+    return tail or None
 
 
 def get_prerequisite_secrets(manifest: dict) -> dict:

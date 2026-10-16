@@ -374,3 +374,34 @@ def test_env_secret_mapping_form_is_accepted():
     m = Manifest.model_validate({"env": [{"name": "API_KEY", "secret": {"name": "api-key"}}]})
     assert m.env[0].secret.name == "api-key"
     assert m.env[0].secret.generate is False
+
+
+def _git_repo(path, origin=None):
+    import subprocess
+    subprocess.run(["git", "init", "-q", str(path)], check=True)
+    if origin:
+        subprocess.run(["git", "-C", str(path), "remote", "add", "origin", origin], check=True)
+
+
+def test_solution_name_prefers_origin_repo_name_over_directory(tmp_path):
+    repo = tmp_path / "repo"
+    _git_repo(repo, "https://github.com/acme/my-solution.git")
+    assert get_solution_name({}, repo) == "my-solution"
+
+
+def test_solution_name_handles_ssh_origin(tmp_path):
+    repo = tmp_path / "checkout"
+    _git_repo(repo, "git@github.com:acme/other-solution.git")
+    assert get_solution_name({}, repo) == "other-solution"
+
+
+def test_solution_name_falls_back_to_directory_without_origin(tmp_path):
+    repo = tmp_path / "local-only"
+    _git_repo(repo)
+    assert get_solution_name({}, repo) == "local-only"
+
+
+def test_manifest_name_wins_over_origin(tmp_path):
+    repo = tmp_path / "repo"
+    _git_repo(repo, "https://github.com/acme/ignored.git")
+    assert get_solution_name({"name": "explicit"}, repo) == "explicit"
