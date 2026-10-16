@@ -514,7 +514,6 @@ string. Two derived locations track it:
 |---|---|
 | `gapp/__init__.py` | **Source.** `__version__ = "X.Y.Z"`. |
 | `pyproject.toml` | **Auto-derived.** Declares `dynamic = ["version"]` and reads `gapp.__version__` via `[tool.setuptools.dynamic]`. Never edit the version directly here — there isn't one to edit. |
-| `.claude-plugin/plugin.json` | **Synced.** Has its own `"version"` field because the JSON schema requires a literal string. The release script keeps it in lockstep with `__init__.py`. |
 
 ### Release workflow
 
@@ -532,10 +531,10 @@ This script:
 - validates that `X.Y.Z` is strictly greater than the current
   `__version__`,
 - requires a clean working tree,
-- updates `gapp/__init__.py` and `.claude-plugin/plugin.json`
-  (`pyproject.toml` auto-tracks via dynamic version),
+- updates `gapp/__init__.py` (`pyproject.toml` auto-tracks via dynamic
+  version),
 - runs `python3 -m pytest tests/unit/` and aborts on red,
-- commits the two file edits with `chore: bump version to X.Y.Z`
+- commits that edit with `chore: bump version to X.Y.Z`
   (the precommit privacy hook still runs),
 - tags `vX.Y.Z` at the new commit,
 - prints the two remaining publish steps below.
@@ -565,13 +564,11 @@ directory, pipx parses a bare `gapp` argument as the `./gapp/`
 directory and errors out. After this, `gapp --version` reports the
 new version, and `gapp-mcp` on that machine serves the new code.
 
-The `deploy` and `secrets` skills under `skills/` are not part of the
-pip package. When they change, republish them wherever they are
-distributed: re-save them as skills, or bump the ref in any plugin
-listing that carries gapp. The plugin manifest in `.claude-plugin/`
-is kept in lockstep by the release script for anyone who installs gapp
-as a plugin, but a plugin install is optional: the CLI and the skills
-carry every operation on their own.
+The gapp skill under `skills/` is not part of the pip package. When it
+changes, re-save it wherever it is distributed. There is no plugin
+packaging: the CLI and the skill carry every operation, and anyone who
+wants the typed MCP tools on a workstation registers `gapp-mcp` with
+their client as shown under "MCP Admin Server".
 
 ### Why version bumps matter
 

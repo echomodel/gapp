@@ -7,9 +7,8 @@ Usage:
 What it does:
     1. Validates the new version is strictly greater than the current one.
     2. Updates `__version__` in gapp/__init__.py.
-    3. Updates `version` in .claude-plugin/plugin.json so the optional
-       plugin manifest stays in lockstep. (pyproject.toml is dynamic — it
-       sources its version from gapp.__version__.)
+    3. (pyproject.toml is dynamic — it sources its version from
+       gapp.__version__ — so no further edit is needed.)
     4. Runs the unit-test suite (`python3 -m pytest tests/unit/`). Fails the
        release if anything is red.
     5. Stages and commits the version-file changes with a templated message.
@@ -34,7 +33,6 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 INIT_PY = REPO_ROOT / "gapp" / "__init__.py"
-PLUGIN_JSON = REPO_ROOT / ".claude-plugin" / "plugin.json"
 PYPROJECT_TOML = REPO_ROOT / "pyproject.toml"
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 
@@ -68,14 +66,6 @@ def update_init_py(new_version: str) -> None:
         flags=re.M,
     )
     INIT_PY.write_text(new)
-
-
-def update_plugin_json(new_version: str) -> None:
-    data = json.loads(PLUGIN_JSON.read_text())
-    data["version"] = new_version
-    PLUGIN_JSON.write_text(
-        json.dumps(data, indent=2, ensure_ascii=False) + "\n"
-    )
 
 
 def assert_pyproject_is_dynamic() -> None:
@@ -112,7 +102,7 @@ def run_tests() -> None:
 
 def stage_and_commit(new_version: str) -> None:
     subprocess.run(
-        ["git", "add", str(INIT_PY), str(PLUGIN_JSON)],
+        ["git", "add", str(INIT_PY)],
         cwd=REPO_ROOT, check=True,
     )
     msg = f"chore: bump version to {new_version}"
@@ -143,8 +133,8 @@ def print_followup(new_version: str) -> None:
     print("  #    package name as the ./gapp directory)")
     print(f'  cd ~ && pipx install --force "gapp @ git+https://github.com/echomodel/gapp.git@v{new_version}"')
     print()
-    print("  # 3. If skills/ changed, republish them wherever they are")
-    print("  #    distributed (a saved skill, a plugin listing).")
+    print("  # 3. If skills/ changed, re-save the gapp skill wherever it is")
+    print("  #    distributed.")
     print()
 
 
@@ -168,7 +158,6 @@ def main() -> int:
 
     print(f"  Bumping {current} -> {new_version}")
     update_init_py(new_version)
-    update_plugin_json(new_version)
     run_tests()
     stage_and_commit(new_version)
     tag(new_version)
