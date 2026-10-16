@@ -356,3 +356,21 @@ def test_cli_manifest_schema_prints_live_json_schema():
     printed = json.loads(result.output)
     assert "properties" in printed
     assert printed == get_schema()
+
+
+def test_env_secret_bare_bool_is_rejected_with_hint():
+    """`secret: true` was silently ignored at deploy; it must now fail validation."""
+    import pytest
+    from pydantic import ValidationError
+    from gapp.admin.sdk.schema import Manifest
+
+    with pytest.raises(ValidationError, match=r"secret: \{name: <short-name>\}"):
+        Manifest.model_validate({"env": [{"name": "API_KEY", "secret": True}]})
+
+
+def test_env_secret_mapping_form_is_accepted():
+    from gapp.admin.sdk.schema import Manifest
+
+    m = Manifest.model_validate({"env": [{"name": "API_KEY", "secret": {"name": "api-key"}}]})
+    assert m.env[0].secret.name == "api-key"
+    assert m.env[0].secret.generate is False
