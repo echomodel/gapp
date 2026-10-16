@@ -38,36 +38,55 @@ service account when setup needs admin), the gcloud error will say
 permission denied; report which role is missing rather than
 retrying.
 
-### 2. Something is missing and this machine can get it: prepare it, with consent
+### 2. Tooling is missing: install it, on any machine, without asking
 
-Applies when the machine is one the user keeps, and interactive
-login is possible. Tell the user exactly what is missing and for
-which step, then ask once whether they want this machine prepared.
-On yes, run each item with its own approval, because each changes
-the machine:
+A missing tool is never a reason to hand off. Install what is missing,
+pinned to the current gapp release, and move on:
 
-- gapp CLI: `pipx install "gapp @ git+https://github.com/<gapp-repo>.git@<tag>"`, or the user's packaging convention. Pin a tag; the same version should be on every machine that touches a project.
-- GCP identity: `gcloud auth login` (opens a browser the user completes), then `gcloud config set account <email>` or `gapp config account <email>` so gapp pins the account.
-- terraform: the platform's package manager (`brew install terraform`, `apt`, or the HashiCorp installer).
-- GitHub: `gh auth login`.
+- gapp CLI, on a machine the user keeps: `pipx install "gapp @ git+https://github.com/<gapp-repo>.git@<tag>"`
+  (or `pip install --user`). On an ephemeral or shared machine, a
+  temporary prefix instead: `pip install --target <tmp> "gapp @ git+...@<tag>"`
+  with that prefix on `PYTHONPATH` and `PATH`. Either way it changes
+  nothing the user cares about and unlocks every read-only command,
+  `gapp init`, and `gapp manifest schema` immediately.
+- terraform, when a local deploy is the chosen path: the platform's
+  package manager (`brew install terraform`, `apt install terraform`,
+  or the HashiCorp installer).
+- gh, when CI wiring or triggering is the chosen path and it is absent.
 
-Never type, store, or echo a credential yourself. If the user
-offers to paste a key into chat, decline and point them at the
-login flow or at their environment's secret store.
+Pin the same tag on every machine that touches a project; mixed
+versions are how label and bucket contracts drift.
 
-A long-lived cloud environment the user controls (a Codespace, a
-cloud agent environment with a setup script and secrets) counts as
-"can get it" when the user says so: suggest they add gapp,
-terraform, and a service-account credential to that environment's
-setup, and note that a stored key is a tradeoff against gapp's
-no-stored-credentials principle. It is their call.
+Then configure gapp from what is discoverable, asking only when it is
+ambiguous: if exactly one gcloud account is active, pin it with
+`gapp config account <email>`; set `gapp config owner` only when the
+user has named an owner namespace; leave discovery on.
+
+What installation cannot supply is an identity. A browser login
+(`gcloud auth login`, `gh auth login`) is the one step that needs the
+user at the keyboard. Run it where a browser is reachable and tell the
+user it is coming; where no browser is reachable, go to outcome 3.
+Never type, store, or echo a credential yourself, and if the user
+offers to paste a key into chat, decline and point them at the login
+flow or at their environment's secret store.
+
+A long-lived cloud environment the user controls (a Codespace, a cloud
+agent environment with a setup script and secrets) can carry gapp,
+terraform, and a service-account credential in its setup; suggest it
+when the user keeps hitting outcome 3, and note that a stored key is a
+tradeoff against gapp's no-stored-credentials principle. It is their
+call.
 
 ### 3. Something is missing and this machine cannot get it: route elsewhere
 
-Applies to ephemeral or shared machines, or whenever interactive
-login is impossible. Before handing anything off, do everything that
+Applies only to identity: the machine cannot complete a browser login
+and holds no GCP credential. Tooling never lands here; outcome 2 covers
+it. Before handing anything off, do everything that
 does not need the missing capability:
 
+- install the gapp CLI if it is missing (outcome 2), then use it for
+  everything that needs no identity: `gapp init`, `gapp manifest
+  schema`, `gapp ci status`
 - write and commit `gapp.yaml`, push the branch
 - if GitHub access exists, check whether CI is already wired and
   draft the operator workflow for the CI repo
@@ -103,7 +122,8 @@ report: `gapp status` or the workflow file's presence confirms it.
 Environment variables such as `CLAUDE_CODE_REMOTE`, `CI`,
 `CODESPACES`, or `GITHUB_ACTIONS` suggest an ephemeral or headless
 machine where a browser login is unlikely. Use them only to choose
-the default suggestion between outcome 2 and outcome 3. They are
+between a persistent install and a temporary prefix, and between
+running a login here and outcome 3. They are
 not evidence of what is installed, and they say nothing about a
 user who deliberately provisioned their cloud environment with
 credentials. The probes decide; the hints only break ties, and
