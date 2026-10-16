@@ -455,7 +455,8 @@ Available tools:
 Each tool calls the same SDK function the CLI uses and returns the same structured result. Register with Claude Code:
 
 ```bash
-claude mcp add --scope user gapp-admin gapp-mcp
+claude mcp add --scope user gapp-admin gapp-mcp     # Claude Code
+agy mcp add gapp-admin -- gapp-mcp                   # Antigravity CLI
 ```
 
 ## Version Management
