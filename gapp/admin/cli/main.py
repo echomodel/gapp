@@ -443,8 +443,9 @@ def ci_setup_cmd(solution, solution_repo):
 
     Creates the project's Workload Identity pool and provider and the
     gapp-deploy service account if missing (shared by every solution on
-    the project), binds the pool to the CI repo, and pushes this
-    solution's workflow file into the CI repo. Requires `gapp ci init`
+    the project), binds the pool to the CI repo, and writes this
+    solution's workflow file into the CI repo through the GitHub API
+    (no clone, commit, or push on this machine). Requires `gapp ci init`
     and `gapp setup` first.
     """
     from gapp.admin.sdk.ci import setup_ci

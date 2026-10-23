@@ -153,7 +153,7 @@ gapp deploy --project <project-id>
 
 ### **CI/CD (`gapp ci`)**
 *   `gapp ci init <owner/repo> [--local-only]`: Designate the private CI repo that holds deploy workflows (once per operator).
-*   `gapp ci setup [--solution <name>] [--solution-repo <owner/name>]`: Create the project's WIF pool and deploy service account if missing and push this solution's workflow (once per solution).
+*   `gapp ci setup [--solution <name>] [--solution-repo <owner/name>]`: Create the project's WIF pool and deploy service account if missing and write this solution's workflow into the CI repo via the GitHub API (once per solution).
 *   `gapp ci trigger [--solution <name>] [--ref <ref>] [--no-watch]`: Dispatch the deploy workflow and stream the run.
 *   `gapp ci status [--solution <name>]`: Show the CI repo, whether the workflow exists, and the next step.
 
