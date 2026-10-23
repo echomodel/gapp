@@ -89,7 +89,8 @@ No terraform or gcloud on the deploying machine.
 2. `gapp ci setup` creates the Workload Identity pool and provider
    and the `gapp-deploy` service account in the project (once per
    project, shared by every solution there), binds the pool to the
-   CI repo, and pushes one workflow per solution into the CI repo.
+   CI repo, and writes one workflow per solution into the CI repo through
+   the GitHub API (no clone, commit, or push on the operator's machine).
 3. `gapp ci trigger` dispatches that workflow and streams the run;
    it needs `gh` logged in. Any GitHub tool that can dispatch a
    workflow and read the run does the same job.

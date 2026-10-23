@@ -440,6 +440,16 @@ This is intentional and must be preserved. Reasons:
 
 When adding new operations, never reach for an unfiltered list of project-wide resources. Use the existing label or ID-addressed paths, or extend them with a new label. If a future operation genuinely needs a project-wide scan, that needs explicit design discussion — it is not the default shape.
 
+### 16. gapp Is Not a Git Client for the Operator's Repos
+
+gapp never clones, commits to, or pushes an operator's repository on their
+behalf. Generated files gapp owns (the CI workflow callers) are written
+through the GitHub API as config-store updates; anything a human authors
+goes through the operator's own commit process and hooks. A tool that
+commits in the operator's name with hooks disabled is defeating controls
+the operator chose. See docs/CI.md, "Why the workflow file is written
+through the API, not git."
+
 ## MCP Admin Server
 
 The `gapp-mcp` entry point runs a stdio MCP server that exposes admin operations as tools. All tools are prefixed with `gapp_` to avoid name collisions.

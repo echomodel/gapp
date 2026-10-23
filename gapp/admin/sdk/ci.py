@@ -572,56 +572,52 @@ def _generate_workflow(solution_name: str, solution_repo: str,
     return yaml.dump(workflow, default_flow_style=False, sort_keys=False)
 
 
-def _push_workflow_to_ci_repo(ci_repo: str, solution_name: str,
-                               workflow_content: str) -> str:
-    """Push a workflow file to the CI repo via gh."""
-    import tempfile
-    import os
+def _write_workflow_to_ci_repo(ci_repo: str, solution_name: str,
+                                workflow_content: str) -> str:
+    """Create or update the workflow file in the CI repo via the GitHub
+    Contents API.
 
-    with tempfile.TemporaryDirectory() as parent:
-        tmpdir = os.path.join(parent, "repo")
-        # Clone the CI repo
-        clone = subprocess.run(
-            ["gh", "repo", "clone", ci_repo, tmpdir, "--", "--depth", "1"],
-            capture_output=True,
-            text=True,
-        )
-        if clone.returncode != 0:
-            raise RuntimeError(f"Failed to clone {ci_repo}: {clone.stderr.strip()}")
+    gapp is not a git client for the operator's repos (CONTRIBUTING.md,
+    principle 16): the file is generated configuration, so it is written as a
+    config-store update. GitHub makes the commit server-side; nothing is
+    cloned, committed, or pushed on the operator's machine, so local git hooks
+    are neither triggered nor bypassed. Idempotent: an identical file is
+    reported as "unchanged".
 
-        # Write workflow file
-        workflows_dir = os.path.join(tmpdir, ".github", "workflows")
-        os.makedirs(workflows_dir, exist_ok=True)
-        workflow_path = os.path.join(workflows_dir, f"{solution_name}.yml")
-        with open(workflow_path, "w") as f:
-            f.write(workflow_content)
+    Returns "pushed" (created), "updated", or "unchanged".
+    """
+    import base64
+    import json
 
-        # Commit and push
-        subprocess.run(
-            ["git", "add", ".github/"],
-            capture_output=True, text=True, cwd=tmpdir,
-        )
-        status = subprocess.run(
-            ["git", "status", "--porcelain"],
-            capture_output=True, text=True, cwd=tmpdir,
-        )
-        if not status.stdout.strip():
+    path = f".github/workflows/{solution_name}.yml"
+    endpoint = f"repos/{ci_repo}/contents/{path}"
+
+    sha = None
+    existing = subprocess.run(
+        ["gh", "api", endpoint], capture_output=True, text=True,
+    )
+    if existing.returncode == 0 and existing.stdout.strip():
+        data = json.loads(existing.stdout)
+        sha = data.get("sha")
+        current = base64.b64decode(data.get("content", "")).decode()
+        if current == workflow_content:
             return "unchanged"
 
-        commit = subprocess.run(
-            ["git", "-c", "core.hooksPath=/dev/null", "commit",
-             "-m", f"Add deploy workflow for {solution_name}"],
-            capture_output=True, text=True, cwd=tmpdir,
+    payload = {
+        "message": f"{'Update' if sha else 'Add'} deploy workflow for {solution_name}",
+        "content": base64.b64encode(workflow_content.encode()).decode(),
+    }
+    if sha:
+        payload["sha"] = sha
+    result = subprocess.run(
+        ["gh", "api", "-X", "PUT", endpoint, "--input", "-"],
+        input=json.dumps(payload), capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"Failed to write {path} to {ci_repo}: {result.stderr.strip()}"
         )
-        if commit.returncode != 0:
-            raise RuntimeError(f"Failed to commit workflow: {commit.stderr.strip()}")
-        push = subprocess.run(
-            ["git", "push"],
-            capture_output=True, text=True, cwd=tmpdir,
-        )
-        if push.returncode != 0:
-            raise RuntimeError(f"Failed to push to {ci_repo}: {push.stderr.strip()}")
-        return "pushed"
+    return "updated" if sha else "pushed"
 
 
 def setup_ci(solution: str | None = None, solution_repo: str | None = None) -> dict:
@@ -711,7 +707,7 @@ def setup_ci(solution: str | None = None, solution_repo: str | None = None) -> d
     workflow_content = _generate_workflow(
         solution_name, full_solution_repo, project_id, gapp_repo,
     )
-    result["workflow"] = _push_workflow_to_ci_repo(ci_repo, solution_name, workflow_content)
+    result["workflow"] = _write_workflow_to_ci_repo(ci_repo, solution_name, workflow_content)
 
     return result
 
