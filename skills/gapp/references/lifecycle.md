@@ -152,6 +152,14 @@ and raise incompatibilities before deploying; the user may need a
 migration or backup first. Then deploy by the chosen path. Remind
 the user that uncommitted changes are not included.
 
+**Operator data on the volume.** A solution that reads its data from
+the path it maps to `{{SOLUTION_DATA_PATH}}` (a property definition,
+a user list, seed files) gets that data by copying it to the same
+bucket path from a logged-in machine, for example
+`gsutil -m rsync -r <local folder> gs://gapp-<name>-<project-id>/data/<subdir>`;
+the running service sees it on its next read. The solution's own
+skill or README says what belongs there and how it finds out.
+
 **Status and discovery.** `gapp status` for health, URL, and next
 step. `gapp list` for the active owner namespace, `gapp list --all`
 for every namespace, `gapp projects list` for env bindings.
