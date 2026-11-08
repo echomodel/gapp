@@ -109,52 +109,62 @@ gapp list --all
 ```
 
 ### **8. Deploy From Anywhere (CI/CD)**
-gapp has **two fleet systems that do not talk to each other**. The root commands (`gapp setup`, `deploy`, `status`, `secrets`) are the **direct** system: they need a Google Cloud identity, and their record of where a solution lives is the GCP project label. The `gapp ci` commands are the **CI** system: they need GitHub, and their record is `gapp/solutions.yaml` in your CI repo plus a GitHub Environment per project. A solution is deployed by one system; no command consults the other system's state, and every command's requirements are fixed by its name.
+gapp has **two fleet systems, kept apart**. The root commands (`gapp setup`, `deploy`, `status`, `list`, `secrets`) deploy the local checkout to GCP with gcloud. The `gapp ci` commands manage your **fleet** through GitHub only: they never use gcloud (except `gapp ci project setup`) and never read the working directory. The fleet is kept in a private **fleet repo**: `gapp/deployments.yaml`, one entry per **deployment** (a repo deployed to a project under a name you choose; the same repo deployed twice is two deployments), plus gapp's two workflows. The `ci` group mirrors the root verbs.
 
-| Command | System | Needs | How often |
-|---|---|---|---|
-| `gapp setup`, `deploy`, `status`, `secrets` | direct | gcloud signed in (deploy: terraform, clean tree) | per solution |
-| `gapp ci init <owner>/<repo>` | CI | `gh` that can write to the CI repo (GitHub API) | once per operator |
-| `gapp ci project setup <project>` | CI (the one command that also touches GCP) | gcloud signed in as an Owner of the project; `gh` as an admin of the CI repo | once per project |
-| `gapp ci sources add <owner>` | CI | `gh` with write access to the CI repo | once per source owner |
-| `gapp ci setup --project <project> [--domain <d>]` | CI | `gh` that can dispatch workflows | once per solution |
-| `gapp ci deploy [--ref <r>]` | CI | `gh` that can dispatch workflows | any time |
-| `gapp ci status` | CI | `gh` that can read the CI repo | any time |
+**From nothing to first deploy:**
 
 ```bash
-gapp ci init <owner>/<private-ci-repo>        # once per operator: installs gapp's two workflows and gapp/solutions.yaml
-gapp ci project setup <project-id>            # once per project: the CI repo becomes trusted to deploy there
-gapp ci sources add <owner>                   # once per GitHub owner whose repos may deploy
-gapp ci setup --project <project-id> --domain mcp.example.com   # once per solution: registers it
-gapp ci deploy --ref main                     # any time, from any machine with `gh`
+gapp ci init                                     # finds your fleet repo, or says how to create one
+gapp ci init <owner>/<fleet-repo> --create       # creates a private fleet repo and sets it for this machine
+gapp ci sources add <owner>                      # allows the GitHub owner whose repos you deploy
+gapp ci project setup <project-id>               # once per GCP project: gcloud as an Owner, gh as an admin
+gapp ci setup my-app --repo <owner>/my-app --project <project-id> --domain app.example.com
+gapp ci deploy my-app                            # any time, from any machine with gh
 ```
 
-**From a cloud session** (no gcloud, no GitHub API write, just a `gh` that can dispatch): `gapp ci setup --project <project-id>`, `gapp ci deploy` and `gapp ci status` are the whole story; nothing else is needed there. `ci setup` dispatches the register workflow, which validates and writes the solution's entry with its own token; `ci deploy` dispatches the deploy workflow with the solution's name. The two one-time steps that need more are told to you verbatim when they are missing:
+Each step's output names the next. `gapp ci status my-app` is one deployment (project, domain, last deploy); `gapp ci list` is the fleet; `--verbose` adds the fleet repo, its files and variables, and ids.
+
+| Command | Does | Needs |
+|---|---|---|
+| `gapp ci init [<owner>/<repo>] [--create] [--owner <org>]` | shows, finds, sets or creates your fleet repo; the only command that sets it | `gh` |
+| `gapp ci sources add\|remove\|list <owner>` | the GitHub owners whose repos may be deployed from your fleet | `gh` write |
+| `gapp ci project setup <project>` | once per GCP project: trust between the fleet repo and the project | gcloud Owner, `gh` admin |
+| `gapp ci setup [<name>] --repo <owner>/<repo> --project <p> [--domain <d>] [--config <file>]` | adds or updates a deployment; the name defaults to the repo's name | `gh` dispatch |
+| `gapp ci setup <name> --copy-of <existing> [--project <p>]` | a new deployment from an existing one (an environment, a second instance) | `gh` dispatch |
+| `gapp ci rename <old> <new>` | changes the name only; the GCP resources stay | `gh` dispatch |
+| `gapp ci deploy <name> [--ref <r>]` | deploys it through GitHub Actions | `gh` dispatch |
+| `gapp ci status <name>`, `gapp ci list [--repo <owner>/<repo>]` | where things stand | `gh` read |
+
+`--repo` always means the deployed app's repo, never the fleet repo.
+
+**From a cloud session** (no gcloud, no GitHub API write, just a `gh` that can dispatch): `gapp ci setup`, `gapp ci deploy`, `gapp ci status` and `gapp ci list` are the whole story. `ci setup` dispatches the register run, which validates and writes the entry with its own token; `ci deploy` dispatches the deploy workflow with the deployment's name. The two one-time steps that need more are told to you verbatim when they are missing:
 
 ```
-CI repo <owner>/<repo> is not yet trusted to deploy to GCP project <project>. One-time setup:
+<owner>/<repo> can't be set up yet: your fleet isn't trusted to deploy to <project>.
+Fleet repo <fleet-owner>/<fleet-repo> is not yet trusted to deploy to GCP project <project>. One-time setup:
 
 1. Run `gapp ci project setup <project>`
    - Requires gcloud signed in as an Owner of <project>
-   - Requires `gh` signed in as an admin of <owner>/<repo>
-2. Run this command again: gapp ci setup --project <project>
+   - Requires `gh` signed in as an admin of <fleet-owner>/<fleet-repo>
+2. Run this command again: gapp ci setup <name> --repo <owner>/<repo> --project <project>
 ```
 
 ```
-Source repos owned by <owner> are not yet allowed to deploy through CI repo <ci-owner>/<ci-repo>. One-time setup:
+<owner>/<repo> can't be set up yet: apps owned by <owner> aren't allowed in your fleet.
+Apps owned by <owner> aren't allowed in your fleet yet (fleet repo <fleet-owner>/<fleet-repo>). One-time setup:
 
 1. Run `gapp ci sources add <owner>`
-   - Or: gh variable set GAPP_ALLOWED_SOURCES --repo <ci-owner>/<ci-repo> --body <current-list>,<owner>
-   - Requires `gh` signed in with write access to <ci-owner>/<ci-repo>
-2. Run this command again: gapp ci setup --project <project>
+   - Or: gh variable set GAPP_ALLOWED_SOURCES --repo <fleet-owner>/<fleet-repo> --body <current-list>,<owner>
+   - Requires `gh` signed in with write access to <fleet-owner>/<fleet-repo>
+2. Run this command again: gapp ci setup <name> --repo <owner>/<repo> --project <project>
 ```
 
-Every `gapp ci` command ends the same way: either it did the thing, or it prints a plain statement of what stands in the way and the exact next step (no stack traces, no raw errors). Without `gh`, press **Run workflow** on the CI repo's Actions tab instead. The runner authenticates with Workload Identity Federation, so no key is stored anywhere.
+Every `gapp ci` command ends the same way: it did the thing, or it prints a plain sentence with the exact fix (no stack traces, no raw errors). Something is called missing only when GitHub confirms it; a read gapp could not make says "Couldn't check ..." in GitHub's own words. Without `gh`, press **Run workflow** on the fleet repo's Actions tab instead. The runner authenticates with Workload Identity Federation, so no key is stored anywhere.
 
-Deployment values stay out of the solution repo: `--domain` goes into the solution's entry, where it overrides `gapp.yaml` at deploy time, and re-running `gapp ci setup` keeps it. Private solution repos work too: install a read-only GitHub App on the organization that holds them and store its id and key in the CI repo under the fixed names `HOSTING_GITHUB_APP_ID` and `HOSTING_GITHUB_APP_PRIVATE_KEY`; `gapp ci init` and `gapp ci status` print the commands when they are missing. Every `gcloud` call uses the account from `gapp config account` when one is set. Design notes and the security model: [CI/CD setup](docs/CI.md).
+**The entry is the deployment's configuration.** `repo` and `project` are the entry's own fields; every other key is a gapp.yaml key (`domain`, `env`, `service`, ...) merged over the repo's `gapp.yaml` at deploy time, or written as the whole file when the repo has none, so deployment values never live in the deployed repo and a repo that runs on Cloud Run can be deployed without knowing about gapp. `--domain` sets one key, `--config <file>` any. Private repos work too: install a read-only GitHub App on the organization that holds them and store its id and key in the fleet repo under the fixed names `HOSTING_GITHUB_APP_ID` and `HOSTING_GITHUB_APP_PRIVATE_KEY`; `gapp ci init --verbose` reports them. Design notes and the security model: [CI/CD setup](docs/CI.md).
 
 ### **9. Custom Domains**
-Map a subdomain to the service with `domain:` in `gapp.yaml` (or `gapp ci setup --domain` for CI deploys), deploy, and add the CNAME `gapp status` shows. Cloud Run only maps a domain for an identity that has verified it, so verify once per domain (`gcloud domains verify example.com`, which opens Search Console; for CI deploys, add the `gapp-deploy` service account as a verified owner there too). Deploys guard the live mapping: one that would replace or remove it is refused unless you pass `gapp deploy --replace-domain`, because Terraform destroys the old mapping before creating the new one.
+Map a subdomain to the service with `domain:` in `gapp.yaml` (or `gapp ci setup <name> --repo <owner>/<repo> --project <project> --domain <host>` for fleet deploys), deploy, and add the CNAME `gapp status` shows. Cloud Run only maps a domain for an identity that has verified it, so verify once per domain (`gcloud domains verify example.com`, which opens Search Console; for CI deploys, add the `gapp-deploy` service account as a verified owner there too). Deploys guard the live mapping: one that would replace or remove it is refused unless you pass `gapp deploy --replace-domain`, because Terraform destroys the old mapping before creating the new one.
 
 ### **10. Expert Mode (Explicit Management)**
 Use this when you use a configuration repository or external fleet management tool to track environment locations. In this mode, `gapp` acts as a **stateless deployment tool** where commands leverage only the local `gapp.yaml` and explicit command-line overrides.
@@ -192,12 +202,14 @@ gapp deploy --project <project-id>
 *   `gapp manifest schema`: Print the live JSON Schema for `gapp.yaml`.
 
 ### **CI/CD (`gapp ci`)**
-*   `gapp ci init <owner/repo> [--local-only]`: Designate the private CI repo (once per operator) and install gapp's files in it through the GitHub API (needs a `gh` that can write to the repo): the generic deploy workflow, the register workflow and `gapp/solutions.yaml` (the workflows are updated when a new gapp release changes them; the data file is never overwritten). Also reports whether the repo holds `GAPP_ALLOWED_SOURCES`, `HOSTING_GITHUB_APP_ID` and `HOSTING_GITHUB_APP_PRIVATE_KEY` and prints the commands to set them; never sets them.
-*   `gapp ci project setup <project>`: Make the CI repo trusted to deploy to a GCP project (once per project, idempotent). The only `ci` command that touches GCP: creates or confirms the WIF pool, provider and `gapp-deploy` service account, binds the pool to the CI repo, and records them as the CI repo's GitHub Environment named after the project. Requires gcloud signed in as an Owner of the project and `gh` signed in as an admin of the CI repo.
-*   `gapp ci sources add|remove|list [<owner>]`: Manage the GitHub owners whose repos may deploy through the CI repo (the repository variable `GAPP_ALLOWED_SOURCES`). Needs `gh` with write access to the CI repo.
-*   `gapp ci setup [--solution <name>] [--solution-repo <owner/name>] --project <project> [--domain <host>] [--no-watch]`: Register a solution for CI (once per solution, idempotent) by dispatching the register workflow and printing its result. Never uses gcloud; needs only a `gh` that can dispatch workflows. A project the CI repo is not yet trusted for, or a source owner not yet allowed, stops with the one-time message above. `--domain` sets the entry's domain and is kept on re-runs when omitted; `""` removes it.
-*   `gapp ci deploy [--solution <name>] [--ref <ref>] [--no-watch]`: Dispatch the deploy workflow for a registered solution and stream the run. A solution that is not registered gets the `ci setup` step instead. (`gapp ci trigger` is a hidden alias for this one release.)
-*   `gapp ci status [--solution <name>]`: The CI system's report: the CI repo, its gapp files (present and current) and variables, every registered solution with project, domain, gapp ref and Environment, solutions still on a per-solution workflow, and the next step for the current solution. Never touches GCP.
+*   `gapp ci init [<owner>/<repo>] [--create] [--owner <org>]`: Show, find, set or create your fleet repo; the only command that sets it. Setting an existing repo installs or updates gapp's two workflows and creates `gapp/deployments.yaml` (never overwritten); `--create` makes a new private, tagged fleet repo first.
+*   `gapp ci sources add|remove|list <owner>`: The GitHub owners whose repos may be deployed from your fleet (the fleet repo variable `GAPP_ALLOWED_SOURCES`).
+*   `gapp ci project setup <project>`: Make your fleet trusted to deploy to a GCP project (once per project, idempotent). The only `ci` command that touches GCP: creates or confirms the WIF pool, provider and `gapp-deploy` service account, binds the pool to the fleet repo, and records them as the fleet repo's GitHub Environment named after the project. Requires gcloud signed in as an Owner of the project and `gh` signed in as an admin of the fleet repo.
+*   `gapp ci setup [<name>] --repo <owner>/<repo> --project <project> [--domain <host>] [--config <file>] [--copy-of <existing>] [--no-watch]`: Add or update a deployment (the name defaults to the repo's name; the same name again updates its gapp.yaml keys). Never uses gcloud; needs only a `gh` that can dispatch workflows. A repo already deployed under another name is refused: update that one, or add another deployment of it with `--copy-of`.
+*   `gapp ci rename <old> <new>`: Rename a deployment; its id and GCP resources are unchanged.
+*   `gapp ci deploy <name> [--ref <ref>] [--no-watch]`: Deploy one deployment through the fleet's deploy workflow and stream the run.
+*   `gapp ci status <name>`: One deployment: repo, project, domain, last deploy, and the next step if a deploy cannot run.
+*   `gapp ci list [--repo <owner>/<repo>] [--verbose]`: The fleet's deployments, optionally one repo's; `--verbose` adds the fleet repo's files and variables.
 
 ---
 

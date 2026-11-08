@@ -382,23 +382,73 @@ def list_cmd(sdk: GappSDK, all_owners, project_limit):
         click.echo(click.style(f"WARNING: {warn}", fg="yellow"))
 
 
-# -- gapp secrets --
-
 # -- gapp ci --
 
+# Parity: the ci group mirrors the root group's verbs where both have the
+# operation (CONTRIBUTING, "Rules of the CI system"); a test checks the names.
+CI_PARITY_VERBS = ("setup", "deploy", "status", "list")
+
+
 def _state(present):
-    return "present" if present else "missing" if present is False else "unverified"
+    return "present" if present else "missing" if present is False else "not checked"
 
 
-def _finish(result, ready_line):
-    """Print the outcome's next step and exit 1, or the ready line."""
+def _ci_finish(result, *ok_lines, verbose=False, details=()):
+    """The deployment-first ending of every ci command.
+
+    On success: the lines given (what happened), the fleet detail only
+    with --verbose, then "Next: <exact command>" when there is one. On an
+    outcome: its plain sentence with the fix, and exit 1.
+    """
+    if result.get("ok") is False:
+        click.echo(result["next_step"]["hint"])
+        raise SystemExit(1)
+    for line in ok_lines:
+        if line:
+            click.echo(line)
+    if verbose:
+        for line in details:
+            if line:
+                click.echo(f"  {line}")
+    if result.get("problem"):
+        click.echo(result["problem"])
     if next_step := result.get("next_step"):
-        click.echo(f"\nNext Step: {next_step['action']}")
-        click.echo(f"  {next_step['hint']}\n")
-        if result.get("ok") is False:
-            raise SystemExit(1)
-    elif ready_line:
-        click.echo(f"\n{ready_line}\n")
+        click.echo(f"Next: {next_step['hint']}")
+
+
+def _fleet_details(result):
+    """The fleet detail lines `--verbose` adds."""
+    lines = [f"Fleet repo: {result.get('fleet_repo') or '(none)'}"]
+    if result.get("id"):
+        lines.append(f"Id: {result['id']} (what the GCP resources are keyed by)")
+    if files := result.get("files"):
+        parts = []
+        for path, info in files.items():
+            name = path.rsplit("/", 1)[-1]
+            if isinstance(info, str):
+                parts.append(f"{name} {info}")
+            elif info.get("present") is None:
+                parts.append(f"{name} not checked")
+            elif not info["present"]:
+                parts.append(f"{name} missing")
+            else:
+                parts.append(f"{name} present" + (", not current" if info.get("current") is False else ""))
+        lines.append("Files: " + ", ".join(parts))
+    if result.get("variables") is not None:
+        if result.get("variables_note"):
+            lines.append(f"Variables: {result['variables_note']}")
+        else:
+            lines.append("Variables: " + ", ".join(f"{n} {_state(ok)}" for n, ok in result["variables"].items()))
+    if result.get("topic"):
+        lines.append(f"Topic gapp-ci: {result['topic']}")
+    if result.get("legacy_workflows"):
+        lines.append("Per-solution workflows from gapp 3.x (still run from the Actions tab; delete once set up here): "
+                     + ", ".join(result["legacy_workflows"]))
+    return lines
+
+
+def _verbose_option(fn):
+    return click.option("--verbose", "-v", is_flag=True, help="Also show the fleet repo, its files, variables and ids.")(fn)
 
 
 @main.group("ci")
@@ -406,280 +456,383 @@ def ci_group():
     """Deploy through GitHub Actions: the CI fleet system.
 
     gapp has two fleet systems that do not talk to each other. The root
-    commands (setup, deploy, status, secrets) are the direct system: they
-    need a Google Cloud identity, and their record is the GCP project
-    label. These `ci` commands are the CI system: they need GitHub, and
-    their record is gapp/solutions.yaml in the CI repo plus the project's
-    GitHub Environment. A solution is deployed by one system.
+    commands (setup, deploy, status, list) deploy the local checkout to
+    GCP with gcloud. These `ci` commands manage your fleet through GitHub
+    only: they never use gcloud (except `ci project setup`) and never read
+    the working directory. The fleet is kept in a private fleet repo:
+    gapp/deployments.yaml, one entry per deployment, plus gapp's two
+    workflows. A deployment is one repo deployed to one project under a
+    name you choose; the same repo deployed twice is two deployments.
 
     \b
-      gapp ci init <owner/repo>            once per operator: install gapp's workflows   (gh, API write)
-      gapp ci project setup <project>      once per project: trust the CI repo          (gcloud Owner + gh admin)
-      gapp ci sources add <owner>          once per source owner                        (gh write)
-      gapp ci setup --project <project>    once per solution: register it               (gh dispatch)
-      gapp ci deploy                       any time                                     (gh dispatch)
-      gapp ci status                       where you are                                (gh read)
-
-    Every command's requirements are fixed by its name; `ci project setup`
-    is the only one that touches GCP. The runner authenticates with
-    Workload Identity Federation, so no key is stored anywhere.
+    From nothing to first deploy:
+      gapp ci init                              finds your fleet repo, or says how to create one
+      gapp ci init <owner>/<repo> --create      creates a private fleet repo and sets it
+      gapp ci sources add <owner>               allows the GitHub owner whose repos you deploy
+      gapp ci project setup <project>           once per GCP project (gcloud as an Owner)
+      gapp ci setup <name> --repo <owner>/<repo> --project <project>
+      gapp ci deploy <name>
+    Each step's output names the next. `gapp ci list` and `gapp ci status
+    <name>` say where things stand; `--verbose` adds the fleet detail.
     """
-
-
-@ci_group.command("status")
-@click.option("--solution", "-s", default=None, help="Solution name. Defaults to current directory.")
-def ci_status_cmd(solution):
-    """The CI system's report: files, variables, registered solutions, Environments.
-
-    Never touches GCP. The output names the next step when `gapp ci deploy`
-    would fail for the current solution.
-    """
-    from gapp.admin.sdk.ci import get_ci_status
-    result = get_ci_status(solution=solution)
-    click.echo(f"CI repo:   {result['repo'] or '(none)'}")
-    if files := result.get("files"):
-        parts = []
-        for path, info in files.items():
-            name = path.rsplit("/", 1)[-1]
-            state = "present" if info["present"] else "missing"
-            if info["present"] and info.get("current") is False:
-                state = "present, not current"
-            parts.append(f"{name} {state}")
-        click.echo("Files:     " + ", ".join(parts))
-    if result.get("variables") is not None:
-        if result.get("variables_checked") is False:
-            click.echo(f"Variables: {result['variables_note']}")
-        else:
-            click.echo("Variables: " + ", ".join(f"{n} {_state(ok)}" for n, ok in result["variables"].items()))
-    if result.get("solutions"):
-        click.echo("Solutions:")
-        for s in result["solutions"]:
-            env = "Environment present" if s["environment_exists"] else "Environment missing"
-            domain = f", domain {s['domain']}" if s.get("domain") else ""
-            ref = f", gapp {s['gapp_ref']}" if s.get("gapp_ref") else ""
-            click.echo(f"  {s['name']}: {s['repo']} → {s['project']} ({env}{domain}{ref})")
-    elif result.get("files"):
-        click.echo("Solutions: none registered")
-    if result.get("legacy_workflows"):
-        click.echo(f"Legacy per-solution workflows (register, then delete): {', '.join(result['legacy_workflows'])}")
-    if result.get("solution"):
-        click.echo(f"\nSolution:  {result['solution']} ({'registered' if result['registered'] else 'not registered'})")
-    if result.get("solution_repo"):
-        click.echo(f"Source:    {result['solution_repo']}")
-    if result.get("domain"):
-        click.echo(f"Domain:    {result['domain']}")
-    if result.get("environment"):
-        record = result.get("environment_record") or {}
-        if record.get("exists") is False:
-            click.echo(f"Environment: {result['environment']} (missing)")
-        elif record.get("checked") is False:
-            click.echo(f"Environment: {result['environment']} (exists; variables {record.get('note') or 'not checked'})")
-        else:
-            click.echo(
-                f"Environment: {result['environment']} (GAPP_WIF_PROVIDER "
-                f"{_state(record.get('wif_provider_present'))}, GAPP_DEPLOY_SERVICE_ACCOUNT "
-                f"{_state(record.get('service_account_present'))})"
-            )
-    _finish(result, "Ready: gapp ci deploy" if result.get("registered") else None)
 
 
 @ci_group.command("init")
-@click.argument("repo")
-@click.option("--local-only", is_flag=True, help="Write local config only; skip everything on GitHub.")
-def ci_init_cmd(repo, local_only):
-    """Designate the private CI repo and install gapp's files in it (once per operator).
+@click.argument("repo", required=False, metavar="[OWNER/REPO]")
+@click.option("--owner", default=None, help="Search this GitHub owner's repos for the fleet repo (the gapp-ci topic).")
+@click.option("--create", is_flag=True, help="Create OWNER/REPO as a new private fleet repo, with gapp's workflows, and set it.")
+@_verbose_option
+def ci_init_cmd(repo, owner, create, verbose):
+    """Show, find, set or create your fleet repo (the only command that sets it).
 
-    Needs a `gh` login that can write to the repo through the GitHub API:
-    it installs or updates .github/workflows/gapp-deploy.yml and
-    gapp-register.yml and creates gapp/solutions.yaml (never overwritten).
-    REPO is owner/name or a bare name under your GitHub account; it is
-    created private if missing and tagged so other machines can find it.
-    This is not the solution repo. Also reports whether the repo holds
-    GAPP_ALLOWED_SOURCES, HOSTING_GITHUB_APP_ID and
-    HOSTING_GITHUB_APP_PRIVATE_KEY (never sets them). Re-running is safe.
+    \b
+      gapp ci init                     shows the saved fleet repo; if none is saved, finds the one
+                                       repo under your account carrying the gapp-ci topic and saves it
+      gapp ci init --owner <org>       the same search under that owner
+      gapp ci init <owner>/<repo>      sets an existing repo as your fleet repo and installs or
+                                       updates gapp's workflows and gapp/deployments.yaml in it
+      gapp ci init <owner>/<repo> --create   creates it private, tagged and populated, and sets it
+
+    Needs a `gh` login; installing gapp's files needs one that can write to the repo.
     """
-    from gapp.admin.sdk.ci import init_ci
-    result = init_ci(repo, local_only=local_only)
-    click.echo(f"\n  CI repo: {result['repo']}")
-    if result.get("config_status"):
-        click.echo(f"    config {result['config_status']} ✓")
-    if result.get("repo_created"):
-        click.echo("    repo created (private) ✓")
-    if result.get("topic_status"):
-        click.echo(f"    topic {result['topic_status']} ✓")
-    for path, status in (result.get("files") or {}).items():
-        click.echo(f"    {path} {status} ✓")
-    if result.get("variables") is not None:
-        if result.get("variables_checked") is False:
-            click.echo(f"    Variables: {result['variables_note']}")
+    from gapp.admin.sdk.ci import init_fleet
+    result = init_fleet(repo, owner=owner, create=create)
+    lines = []
+    if result.get("ok") is not False:
+        files = result.get("files") or {}
+        changed = any(s in ("created", "updated") for s in files.values())
+        if result.get("created"):
+            lines.append(f"Created your private fleet repo {result['fleet_repo']} with gapp's workflows and an empty gapp/deployments.yaml.")
+            lines.append("gapp can now deploy your apps through GitHub Actions.")
+        elif repo:
+            lines.append("gapp can now deploy your apps through GitHub Actions.")
+            if not changed:
+                lines.append("Nothing changed.")
+            elif files.get("gapp/deployments.yaml") == "created":
+                lines.append(f"Installed gapp's workflows and gapp/deployments.yaml in {result['fleet_repo']}.")
+            else:
+                lines.append(f"Updated gapp's workflows in {result['fleet_repo']} to this release.")
+            legacy = result.get("legacy_solutions") or {}
+            if legacy and not legacy.get("kept"):
+                lines.append("Removed the empty gapp/solutions.yaml left by gapp 3.9.")
         else:
-            click.echo("    Variables: " + ", ".join(f"{n} {_state(ok)}" for n, ok in result["variables"].items()))
-    _finish(result, "Next Step: gapp ci project setup <project>, then gapp ci setup --project <project>"
-            if not local_only else None)
+            lines.append(f"Your fleet is kept in {result['fleet_repo']} (set by: {result.get('set_by') or 'unknown'}).")
+        if repo or result.get("created"):
+            lines.append(f"(Your fleet is kept in {result['fleet_repo']}.)")
+    _ci_finish(result, *lines, verbose=verbose, details=_fleet_details(result))
 
 
 @ci_group.group("project")
 def ci_project_group():
-    """Per-project trust between the CI repo and a GCP project."""
+    """Per-project trust between the fleet repo and a GCP project."""
 
 
 @ci_project_group.command("setup")
 @click.argument("project")
-def ci_project_setup_cmd(project):
-    """Make the CI repo trusted to deploy to PROJECT (once per project, idempotent).
+@_verbose_option
+def ci_project_setup_cmd(project, verbose):
+    """Make your fleet trusted to deploy to PROJECT (once per project, idempotent).
 
     The only `gapp ci` command that touches GCP. Creates or confirms the
     Workload Identity pool and provider and the gapp-deploy service
-    account in the project, binds the pool to the CI repo, and records the
-    deploy identity in the CI repo as the GitHub Environment named PROJECT
-    (GAPP_WIF_PROVIDER, GAPP_DEPLOY_SERVICE_ACCOUNT).
+    account in the project, binds the pool to the fleet repo, and records
+    the deploy identity in the fleet repo as the GitHub Environment named
+    PROJECT (GAPP_WIF_PROVIDER, GAPP_DEPLOY_SERVICE_ACCOUNT).
 
     Requires gcloud signed in as an Owner of PROJECT, and `gh` signed in
-    as an admin of the CI repo (its owner, for a personal repo). Every
+    as an admin of the fleet repo (its owner, for a personal repo). Every
     failure says which requirement is not met.
     """
     from gapp.admin.sdk.ci import setup_ci_project
     result = setup_ci_project(project)
-    click.echo(f"\n  Project {result['project_id'] or '?'} ← CI repo {result['ci_repo'] or '?'}\n")
-    for key, label in (("wif_pool", "WIF pool"), ("wif_provider", "WIF provider"),
-                       ("service_account", "Service account"), ("binding", "Binding")):
-        if result.get(key):
-            click.echo(f"    {label} {result[key]} ✓")
-    if result.get("environment_record"):
-        click.echo(f"    Environment {result['environment']} {result['environment_record']} ✓")
-    _finish(result, f"Next Step: gapp ci setup --project {result['project_id']}")
+    if result.get("ok") is not False:
+        if result.get("changed"):
+            result["next_step"] = {"action": "ci setup", "hint": f"gapp ci setup <name> --repo <owner>/<repo> --project {result['project_id']}"}
+            line = f"{result['project_id']} now trusts your fleet to deploy to it."
+        else:
+            result["next_step"] = {"action": "ci setup", "hint": f"gapp ci setup <name> --repo <owner>/<repo> --project {result['project_id']}"}
+            line = f"{result['project_id']} already trusts your fleet to deploy to it. Nothing changed."
+    else:
+        line = None
+    details = _fleet_details(result) + [
+        f"{label}: {result[key]}" for key, label in (("wif_pool", "WIF pool"), ("wif_provider", "WIF provider"),
+                                                      ("service_account", "Service account"), ("binding", "Binding"),
+                                                      ("environment_record", f"Environment {result.get('environment')}"))
+        if result.get(key)]
+    _ci_finish(result, line, verbose=verbose, details=details)
 
 
 @ci_group.group("sources")
 def ci_sources_group():
-    """The GitHub owners whose repos may deploy through the CI repo.
+    """The GitHub owners whose repos may be deployed from your fleet.
 
-    The list is the CI repo's repository variable GAPP_ALLOWED_SOURCES;
-    the register workflow refuses a solution repo whose owner is not on
-    it. Needs `gh` with write access to the CI repo (read for `list`).
+    The list is the fleet repo's repository variable GAPP_ALLOWED_SOURCES;
+    the register run refuses a repo whose owner is not on it. Needs `gh`
+    with write access to the fleet repo (read for `list`).
     """
-
-
-def _print_sources(result):
-    click.echo(f"\n  CI repo: {result['ci_repo'] or '?'}")
-    if result.get("owners") is not None:
-        click.echo("    Allowed sources: " + (", ".join(result["owners"]) if result["owners"] else "(none)"))
-    if result.get("note"):
-        click.echo(f"    {result['note']}")
-    _finish(result, "")
 
 
 @ci_sources_group.command("add")
 @click.argument("owner")
-def ci_sources_add_cmd(owner):
-    """Allow repos owned by OWNER to be registered and deployed."""
+@_verbose_option
+def ci_sources_add_cmd(owner, verbose):
+    """Allow apps owned by OWNER in your fleet."""
     from gapp.admin.sdk.ci import manage_sources
-    _print_sources(manage_sources("add", owner))
+    result = manage_sources("add", owner)
+    line = None
+    if result.get("ok") is not False:
+        line = (f"Apps owned by {owner} are now allowed in your fleet." if result.get("changed")
+                else f"Apps owned by {owner} are already allowed in your fleet. Nothing changed.")
+        result["next_step"] = {"action": "ci project setup", "hint": "gapp ci project setup <project>"}
+    _ci_finish(result, line, verbose=verbose, details=_fleet_details(result))
 
 
 @ci_sources_group.command("remove")
 @click.argument("owner")
-def ci_sources_remove_cmd(owner):
-    """Stop allowing repos owned by OWNER."""
+@_verbose_option
+def ci_sources_remove_cmd(owner, verbose):
+    """Stop allowing apps owned by OWNER."""
     from gapp.admin.sdk.ci import manage_sources
-    _print_sources(manage_sources("remove", owner))
+    result = manage_sources("remove", owner)
+    line = None
+    if result.get("ok") is not False:
+        line = (f"Apps owned by {owner} are no longer allowed in your fleet." if result.get("changed")
+                else f"Apps owned by {owner} were not allowed in your fleet. Nothing changed.")
+    _ci_finish(result, line, verbose=verbose, details=_fleet_details(result))
 
 
 @ci_sources_group.command("list")
-def ci_sources_list_cmd():
+@_verbose_option
+def ci_sources_list_cmd(verbose):
     """Show the allowed owners."""
     from gapp.admin.sdk.ci import manage_sources
-    _print_sources(manage_sources("list"))
+    result = manage_sources("list")
+    line = None
+    if result.get("ok") is not False:
+        owners = result.get("owners") or []
+        line = ("Allowed owners: " + ", ".join(owners)) if owners else "No owners are allowed in your fleet yet."
+        if not owners:
+            result["next_step"] = {"action": "ci sources add", "hint": "gapp ci sources add <owner>"}
+    _ci_finish(result, line, verbose=verbose, details=_fleet_details(result))
 
 
 @ci_group.command("setup")
-@click.option("--solution", "-s", default=None, help="Solution name. Defaults to current directory.")
-@click.option(
-    "--solution-repo", default=None,
-    help="GitHub repo the pipeline deploys (owner/name or URL). Defaults to this checkout's origin.",
-)
-@click.option("--project", required=True, metavar="PROJECT", help="GCP project id the solution deploys to.")
-@click.option(
-    "--domain", default=None,
-    help="Custom domain the CI deploy maps (overrides gapp.yaml). Omit to keep the "
-         "domain the solution's entry already has; pass an empty string to remove it.",
-)
+@click.argument("name", required=False)
+@click.option("--repo", default=None, metavar="OWNER/REPO", help="The repo to deploy (never the fleet repo). The name defaults to its repo name.")
+@click.option("--project", default=None, metavar="PROJECT", help="GCP project id the deployment deploys to.")
+@click.option("--domain", default=None, help="Custom domain the deploy maps (a gapp.yaml key). Omit to keep the entry's; pass \"\" to remove it.")
+@click.option("--config", "config_path", default=None, type=click.Path(exists=True, dir_okay=False),
+              help="YAML file of gapp.yaml keys to set on the entry (merged over the repo's gapp.yaml at deploy time).")
+@click.option("--copy-of", default=None, metavar="EXISTING", help="Start NAME as a copy of an existing deployment (same repo and keys; its own id; no domain).")
 @click.option("--no-watch", is_flag=True, help="Return after dispatching the register run instead of waiting for it.")
-def ci_setup_cmd(solution, solution_repo, project, domain, no_watch):
-    """Register one solution for CI deploys (once per solution, idempotent). Never uses gcloud.
+@_verbose_option
+def ci_setup_cmd(name, repo, project, domain, config_path, copy_of, no_watch, verbose):
+    """Add or update a deployment: NAME deploys --repo to --project. Mirrors `gapp setup` for the fleet.
 
-    Dispatches the register workflow in the CI repo with the solution's
-    name, repo, project and domain, waits for the run, and prints its
-    result. The run checks that the project's Environment exists, that the
-    repo's owner is in GAPP_ALLOWED_SOURCES, that the repo is reachable,
-    and that no other project already holds the solution, then writes the
-    entry in gapp/solutions.yaml. Needs only a `gh` that can dispatch
-    workflows in the CI repo.
+    Never uses gcloud and never reads the working directory: the repo is
+    named by --repo and the name defaults to the repo's name. Same name
+    again updates its gapp.yaml keys (--domain, --config). A repo already
+    deployed under another name is refused: update that one, or add
+    another deployment of it with --copy-of. Writes go through the fleet
+    repo's register run, so this needs only a `gh` that can dispatch
+    workflows; a project your fleet is not yet trusted for, or an owner
+    not yet allowed, stops with the one-time step.
 
-    A project the CI repo is not yet trusted for stops with the one-time
-    `gapp ci project setup` step; a source owner not yet allowed stops
-    with the one-time `gapp ci sources add` step. Re-running keeps the
-    entry's domain unless --domain is passed; an empty --domain removes it.
+    \b
+      gapp ci setup --repo me/my-app --project my-project
+      gapp ci setup my-app-staging --copy-of my-app --project my-staging-project
     """
-    from gapp.admin.sdk.ci import setup_ci
+    from gapp.admin.sdk.ci import setup_deployment
+    config = None
+    if config_path:
+        import yaml as _yaml
+        with open(config_path) as f:
+            config = _yaml.safe_load(f) or {}
+        if not isinstance(config, dict):
+            click.echo(f"{config_path} is not a mapping of gapp.yaml keys.")
+            raise SystemExit(1)
     command = "gapp " + " ".join(sys.argv[1:]) if sys.argv and sys.argv[0] else None
-    result = setup_ci(
-        solution=solution, solution_repo=solution_repo, project=project, domain=domain,
-        watch=not no_watch, command=command,
-    )
-    click.echo()
-    click.echo(f"  {result['solution'] or '?'} ({result['solution_repo'] or '?'}) → {result['project_id'] or '?'} via {result['ci_repo'] or '?'}")
-    if result.get("domain"):
-        click.echo(f"    Domain {result['domain']}")
-    if result.get("dispatched"):
-        click.echo(f"    Register run dispatched: {result['workflow']} in {result['ci_repo']}")
-        if result.get("run_url"):
-            click.echo(f"      Run: {result['run_url']}")
-        if result.get("conclusion"):
-            click.echo(f"      Conclusion: {result['conclusion']}")
-        for message in result.get("messages") or []:
-            if not message.startswith("result="):
-                click.echo(f"      {message}")
-    if result.get("ok") and result.get("registered") is None and result.get("dispatched"):
-        _finish(result, "Next Step: watch the run, then gapp ci deploy")
-    else:
-        _finish(result, "Next Step: gapp ci deploy")
+    result = setup_deployment(name, repo=repo, project=project, domain=domain, config=config,
+                              copy_of=copy_of, watch=not no_watch, command=command)
+    if result.get("ok") is False:
+        action = result["next_step"]["action"]
+        repo_shown = result.get("repo") or repo or "the repo"
+        if action == "ci sources add":
+            click.echo(f"{repo_shown} can't be set up yet: apps owned by {repo_shown.split('/')[0]} aren't allowed in your fleet.")
+        elif action == "ci project setup":
+            click.echo(f"{repo_shown} can't be set up yet: your fleet isn't trusted to deploy to {result.get('project')}.")
+    lines = []
+    if result.get("ok") is not False:
+        nm, rp, pj = result.get("name"), result.get("repo"), result.get("project")
+        if result.get("action") == "unchanged":
+            lines.append(f"{nm} is already set up to deploy {rp} to {pj}. Nothing changed.")
+        elif result.get("dispatched") and result.get("action") is None:
+            lines.append(f"Setting up {nm} ({rp} to {pj}): {result.get('run_url')}")
+            result["next_step"] = {"action": "ci status", "hint": f"gapp ci status {nm}"}
+        elif copy_of:
+            lines.append(f"{nm} is set up as a copy of {copy_of}: {rp} deploys to {pj}"
+                         + (" (the same project as the source)." if result.get("project_from_source") else "."))
+            if result.get("copied_env"):
+                lines.append("Env copied (check them for this environment): " + ", ".join(result["copied_env"]))
+            if result.get("secrets"):
+                lines.append(f"Secrets {nm} needs set on {pj} before its first deploy: " + ", ".join(result["secrets"]))
+            lines.append("The repo's own gapp.yaml secrets, if any, must be set on that project too.")
+        else:
+            lines.append(f"{rp} is set up to deploy to {pj} as {nm}.")
+        if result.get("domain"):
+            lines.append(f"Domain: {result['domain']}")
+        if result.get("action") in ("added", "updated", "unchanged"):
+            result["next_step"] = {"action": "ci deploy", "hint": f"gapp ci deploy {nm}"}
+            if result.get("next_step") and result["next_step"]["action"] == "ci deploy":
+                lines.append(f"Deploy it: gapp ci deploy {nm}")
+                result["next_step"] = None
+    _ci_finish(result, *lines, verbose=verbose, details=_fleet_details(result))
+
+
+@ci_group.command("rename")
+@click.argument("old")
+@click.argument("new")
+@click.option("--no-watch", is_flag=True, help="Return after dispatching the register run instead of waiting for it.")
+@_verbose_option
+def ci_rename_cmd(old, new, no_watch, verbose):
+    """Rename a deployment. Its id and every GCP resource stay as they are."""
+    from gapp.admin.sdk.ci import rename_deployment
+    result = rename_deployment(old, new, watch=not no_watch)
+    line = None
+    if result.get("ok") is not False:
+        if result.get("action") == "renamed":
+            line = f"{old} is now {new}. Its id and GCP resources are unchanged."
+            result["next_step"] = {"action": "ci deploy", "hint": f"gapp ci deploy {new}"}
+        elif result.get("dispatched"):
+            line = f"Renaming {old} to {new}: {result.get('run_url')}"
+            result["next_step"] = {"action": "ci status", "hint": f"gapp ci status {new}"}
+    _ci_finish(result, line, verbose=verbose, details=_fleet_details(result))
+
+
+def _print_ci_deploy(result, verbose):
+    lines = []
+    if result.get("ok") is not False:
+        if result.get("watched"):
+            lines.append(f"{result['name']} deployed ({result.get('conclusion')}): {result.get('run_url')}")
+            result["next_step"] = {"action": "ci status", "hint": f"gapp ci status {result['name']}"}
+        else:
+            lines.append(f"{result['name']} deploy started (ref {result.get('ref')}): {result.get('run_url')}")
+            result["next_step"] = {"action": "ci status", "hint": f"gapp ci status {result['name']}"}
+    _ci_finish(result, *lines, verbose=verbose, details=_fleet_details(result))
 
 
 @ci_group.command("deploy")
-@click.option("--solution", "-s", default=None, help="Solution name. Defaults to current directory.")
-@click.option("--ref", default="main", show_default=True, help="Git ref to deploy.")
+@click.argument("name")
+@click.option("--ref", default="main", show_default=True, help="Git ref of the deployed repo to deploy.")
 @click.option("--no-watch", is_flag=True, help="Return after dispatch instead of streaming the run.")
-def ci_deploy_cmd(solution, ref, no_watch):
-    """Deploy a registered solution through the CI repo's deploy workflow.
+@_verbose_option
+def ci_deploy_cmd(name, ref, no_watch, verbose):
+    """Deploy NAME through your fleet's deploy workflow. Mirrors `gapp deploy` for the fleet.
 
-    Equivalent to pressing "Run workflow" on the CI repo's Actions tab
-    with the solution's name. Streams the run until it finishes unless
-    --no-watch is given. Needs only a `gh` that can dispatch workflows in
-    the CI repo; no gcloud or terraform on this machine.
+    Equivalent to "Run workflow" on the fleet repo's Actions tab with the
+    deployment's name. Streams the run until it finishes unless --no-watch
+    is given. Needs only a `gh` that can dispatch workflows in the fleet
+    repo; no gcloud or terraform on this machine.
     """
-    from gapp.admin.sdk.ci import deploy_ci
-    _run_ci_deploy(deploy_ci(solution=solution, ref=ref, watch=not no_watch))
-
-
-def _run_ci_deploy(result):
-    if result.get("run_id"):
-        click.echo(f"\n  Dispatched {result['workflow']} in {result['ci_repo']} for {result['solution']} (ref {result['ref']})")
-        click.echo(f"    Run: {result['run_url']}")
-        if result["watched"]:
-            click.echo(f"    Conclusion: {result['conclusion'] or 'unknown'}")
-    _finish(result, "")
+    from gapp.admin.sdk.ci import deploy_deployment
+    click.echo(f"Deploying {name} (ref {ref}).")
+    _print_ci_deploy(deploy_deployment(name, ref=ref, watch=not no_watch), verbose)
 
 
 @ci_group.command("trigger", hidden=True)
-@click.option("--solution", "-s", default=None)
+@click.argument("name")
 @click.option("--ref", default="main")
 @click.option("--no-watch", is_flag=True)
-def ci_trigger_cmd(solution, ref, no_watch):
+def ci_trigger_cmd(name, ref, no_watch):
     """Former name of `gapp ci deploy`."""
-    from gapp.admin.sdk.ci import deploy_ci
-    click.echo("  `gapp ci trigger` is now `gapp ci deploy`; running it. This alias goes away in the next release.")
-    _run_ci_deploy(deploy_ci(solution=solution, ref=ref, watch=not no_watch))
+    from gapp.admin.sdk.ci import deploy_deployment
+    click.echo("`gapp ci trigger` is now `gapp ci deploy`; running it. This alias goes away in the next release.")
+    _print_ci_deploy(deploy_deployment(name, ref=ref, watch=not no_watch), False)
+
+
+@ci_group.command("status")
+@click.argument("name")
+@_verbose_option
+def ci_status_cmd(name, verbose):
+    """One deployment: its repo, project, domain and last deploy. Mirrors `gapp status` for the fleet.
+
+    Never touches GCP. Names the step when a deploy cannot run as things
+    stand. `gapp ci list` shows the whole fleet.
+    """
+    from gapp.admin.sdk.ci import status_deployment
+    result = status_deployment(name)
+    lines = []
+    if result.get("ok") is not False:
+        head = f"{name}: {result.get('repo')} deploys to {result.get('project')}"
+        if result.get("domain"):
+            head += f", domain {result['domain']}"
+        lines.append(head + ".")
+        last = result.get("last_deploy") or {}
+        if last.get("checked") is False:
+            lines.append(f"Last deploy: {last.get('note')}")
+        elif last.get("run"):
+            run = last["run"]
+            outcome = run.get("conclusion") or run.get("status") or "unknown"
+            lines.append(f"Last deploy: {outcome}, {run.get('created_at')} (ref {run.get('ref')}): {run.get('url')}")
+        else:
+            lines.append("No deploys yet.")
+        record = result.get("environment_record") or {}
+        if record.get("exists") is None and record.get("note"):
+            lines.append(f"Project trust: {record['note']}")
+        if result.get("next_step") is None:
+            lines.append(f"Deploy it: gapp ci deploy {name}")
+    details = _fleet_details(result)
+    if verbose and result.get("overlay"):
+        details.append("gapp.yaml keys set by the fleet: " + ", ".join(sorted(result["overlay"])))
+    _ci_finish(result, *lines, verbose=verbose, details=details)
+
+
+@ci_group.command("list")
+@click.option("--repo", default=None, metavar="OWNER/REPO", help="Only the deployments of this repo.")
+@_verbose_option
+def ci_list_cmd(repo, verbose):
+    """The fleet's deployments, optionally one repo's. Mirrors `gapp list` for the fleet.
+
+    Never touches GCP. --verbose adds the fleet repo's files and variables
+    and notes per-solution workflows left from gapp 3.x.
+    """
+    from gapp.admin.sdk.ci import list_deployments
+    result = list_deployments(repo, verbose=verbose)
+    lines = []
+    if result.get("ok") is not False and not result.get("deployments"):
+        lines.append(f"No deployment of {repo} in {result['fleet_repo']}." if repo
+                     else f"No deployments in {result['fleet_repo']} yet.")
+    if result.get("ok") is not False and result.get("deployments"):
+        n = len(result["deployments"])
+        lines.append(f"{n} deployment{'s' if n != 1 else ''} in {result['fleet_repo']}"
+                     + (f" of {repo}" if repo else "") + ":")
+        width = max(len(d["name"]) for d in result["deployments"])
+        for d in result["deployments"]:
+            extra = f", domain {d['domain']}" if d.get("domain") else ""
+            lines.append(f"  {d['name']:<{width}}  {d['repo']} -> {d['project']}{extra}")
+    _ci_finish(result, *lines, verbose=verbose, details=_fleet_details(result))
+
+
+@ci_group.group("runner", hidden=True)
+def ci_runner_group():
+    """Commands the fleet repo's workflows run on the runner (not for people)."""
+
+
+@ci_runner_group.command("register")
+def ci_runner_register_cmd():
+    """Validate and write one change to gapp/deployments.yaml; inputs come from the environment."""
+    from gapp.admin.sdk.ci import runner_register
+    raise SystemExit(runner_register())
+
+
+@ci_runner_group.command("overlay")
+@click.argument("path", default="gapp.yaml")
+def ci_runner_overlay_cmd(path):
+    """Merge the deployment's gapp.yaml keys (OVERLAY, a JSON object; DOMAIN) over PATH."""
+    import os
+    from gapp.admin.sdk.ci import runner_overlay
+    merged = runner_overlay(path, os.environ.get("OVERLAY"), os.environ.get("DOMAIN"))
+    click.echo(f"gapp-deploy: gapp.yaml for '{merged.get('name')}' with the fleet's keys applied.")
 
 
 # -- gapp manifest --

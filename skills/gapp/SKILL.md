@@ -26,11 +26,13 @@ These hold in every phase, so keep them in mind before reading on.
 - gapp does not do auth, users, or tokens. That is the solution's
   own framework's job; point the user at that framework's docs.
 - One repo is one solution is one Cloud Run service.
-- Two fleet systems, one per solution: the root commands (direct,
-  Google Cloud identity, GCP labels) and `gapp ci` (CI, GitHub, the
-  CI repo). Neither reads the other's state; every command's
-  requirements are fixed by its name. Every `ci` result carries `ok`
-  and, when false, `next_step` with the exact step to relay.
+- Two fleet systems, kept apart: the root commands deploy the local
+  checkout (Google Cloud identity, GCP labels) and `gapp ci` manages
+  the fleet through GitHub (the fleet repo's `gapp/deployments.yaml`,
+  one entry per deployment). `ci` never uses gcloud (one command
+  excepted) and never reads the working directory, so it takes names.
+  Neither reads the other's state. Every `ci` result carries `ok` and,
+  when false, `next_step` with a plain sentence and the exact fix.
 - Never put a credential into chat, a file in the repo, or a Cloud
   Run env var as a workaround. Never run an interactive login the
   user cannot complete from this machine.
@@ -82,7 +84,7 @@ already know.
 | GitHub write access | `gh auth status`; or GitHub tools in this agent that can read repos and dispatch workflows | CI wiring, CI deploys |
 | Interactive login possible | a hint, not a verdict: `CLAUDE_CODE_REMOTE`, `CI`, or `CODESPACES` set usually means no browser; when unsure, ask the user | preparing this machine versus handing off |
 | Solution state | `gapp.yaml` exists; then `gapp status` when an identity exists, else read the file | which phase is next |
-| CI wired | `gapp ci status` (the CI system's own report; `gapp status` never mentions CI) | whether deploys can go through Actions |
+| Fleet | `gapp ci init` (the fleet repo set on this machine, or how to get one) and `gapp ci list` (its deployments); `gapp status` never mentions CI | whether deploys can go through Actions |
 
 Then match what the next step needs against what you found. The
 needs table and the three outcomes (proceed; install missing tooling
@@ -114,9 +116,9 @@ Phases, each detailed in `references/lifecycle.md`:
    (`references/secrets.md`). Needs an identity with Secret Manager
    access.
 4. **Deploy**: locally (gapp, identity, terraform, clean tree) or
-   through GitHub Actions once CI is wired (GitHub access only).
-   Recommend CI for anyone who wants to deploy from more than one
-   machine or from agents.
+   through GitHub Actions as a deployment of a fleet (GitHub access
+   only). Recommend the fleet for anyone who wants to deploy from more
+   than one machine, from agents, or to more than one project.
 5. **Verify and hand over**: status, service URL, admin credential
    retrieval, custom domain if wanted.
 
@@ -124,9 +126,9 @@ Phases, each detailed in `references/lifecycle.md`:
 
 When a step needs something this machine does not have and cannot
 get, do everything that does not need it first (write and commit
-`gapp.yaml`, push, draft the CI workflow), then give the user a
+`gapp.yaml`, push, add the deployment to the fleet), then give the user a
 handoff they can act on without re-deriving anything: which machine,
 the exact commands or tool calls in order, and what to report back.
 The template is in `references/environment.md`. One-time steps
-(setup, CI wiring) are the usual reason; after CI is wired, deploys
-never need the workstation again.
+(setup, `gapp ci project setup`) are the usual reason; once a project
+trusts the fleet, deploys never need the workstation again.

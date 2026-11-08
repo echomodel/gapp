@@ -1,8 +1,7 @@
-"""CLI surface for `gapp ci` and `gapp status` — thin wrappers over the SDK.
-
-Every SDK outcome (`ok` False with `next_step`) is printed as a plain
-statement and the exact next step, and the command exits 1; nothing raises
-through to the user.
+"""The `gapp ci` CLI: output leads with the deployment and what happened,
+then "Next: <exact command>"; the fleet repo, files, variables and id only
+with --verbose or when they are the problem; every outcome is its plain
+sentence and exit 1. Each reference output from the design has a test.
 """
 
 from click.testing import CliRunner
@@ -10,331 +9,282 @@ from click.testing import CliRunner
 from gapp.admin.cli.main import main as cli_main
 from gapp.admin.sdk import ci as ci_mod
 
-FILES = {
-    ".github/workflows/gapp-deploy.yml": {"present": True, "current": True},
-    ".github/workflows/gapp-register.yml": {"present": True, "current": True},
-    "gapp/solutions.yaml": {"present": True, "current": None},
-}
-VARS = {"GAPP_ALLOWED_SOURCES": True, "HOSTING_GITHUB_APP_ID": True, "HOSTING_GITHUB_APP_PRIVATE_KEY": True}
+FLEET = "acme/fleet"
 
 
-def _status(**overrides):
-    base = {
-        "ok": True, "repo": "acme/deploy-workflows", "files": FILES, "variables": VARS, "variables_checked": True,
-        "variables_note": None, "solutions": [], "environments": {}, "legacy_workflows": [], "solution": "my-app",
-        "registered": False, "solution_repo": None, "domain": None, "gapp_ref": None, "environment": None,
-        "environment_record": None,
-        "next_step": {"action": "ci setup", "hint": "'my-app' is not registered."},
-    }
-    base.update(overrides)
+def _run(args):
+    return CliRunner().invoke(cli_main, args)
+
+
+def _init_result(**over):
+    base = {"ok": True, "fleet_repo": FLEET, "set_by": "gapp ci init acme/fleet", "found": [], "created": False,
+            "files": {".github/workflows/gapp-deploy.yml": "created", ".github/workflows/gapp-register.yml": "created",
+                      "gapp/deployments.yaml": "created"},
+            "legacy_solutions": None, "variables": {"GAPP_ALLOWED_SOURCES": False, "HOSTING_GITHUB_APP_ID": False,
+                                                    "HOSTING_GITHUB_APP_PRIVATE_KEY": False},
+            "variables_note": None, "topic": "set",
+            "next_step": {"action": "ci sources add", "hint": "gapp ci sources add <owner>"}}
+    base.update(over)
     return base
 
 
-def test_ci_status_reports_files_variables_and_next_step(monkeypatch):
-    monkeypatch.setattr(ci_mod, "get_ci_status", lambda solution=None: _status())
-    result = CliRunner().invoke(cli_main, ["ci", "status"])
+def test_init_leads_with_what_gapp_can_do_then_next_then_the_fleet_in_brackets(monkeypatch):
+    monkeypatch.setattr(ci_mod, "init_fleet", lambda repo=None, owner=None, create=False: _init_result())
+    result = _run(["ci", "init", FLEET])
     assert result.exit_code == 0, result.output
-    assert "acme/deploy-workflows" in result.output
-    assert "gapp-deploy.yml present, gapp-register.yml present, solutions.yaml present" in result.output
-    assert "GAPP_ALLOWED_SOURCES present" in result.output
-    assert "my-app (not registered)" in result.output
-    assert "Next Step: ci setup" in result.output
+    assert result.output.splitlines() == [
+        "gapp can now deploy your apps through GitHub Actions.",
+        f"Installed gapp's workflows and gapp/deployments.yaml in {FLEET}.",
+        f"(Your fleet is kept in {FLEET}.)",
+        "Next: gapp ci sources add <owner>",
+    ]
+    assert "✓" not in result.output and "created" not in result.output.replace("Installed", "")
 
 
-def test_ci_status_outcome_exits_nonzero(monkeypatch):
-    monkeypatch.setattr(ci_mod, "get_ci_status", lambda solution=None: _status(
-        ok=False, repo=None, files=None, variables=None, solution=None,
-        next_step={"action": "ci init", "hint": "No CI repo is configured on this machine."}))
-    result = CliRunner().invoke(cli_main, ["ci", "status"])
-    assert result.exit_code == 1, result.output
-    assert "Next Step: ci init" in result.output and "No CI repo is configured" in result.output
+def test_init_rerun_with_nothing_to_do_says_so(monkeypatch):
+    monkeypatch.setattr(ci_mod, "init_fleet", lambda repo=None, owner=None, create=False: _init_result(
+        files={k: "unchanged" for k in _init_result()["files"]},
+        variables={"GAPP_ALLOWED_SOURCES": True, "HOSTING_GITHUB_APP_ID": False, "HOSTING_GITHUB_APP_PRIVATE_KEY": False},
+        next_step={"action": "ci project setup", "hint": "gapp ci project setup <project>"}))
+    out = _run(["ci", "init", FLEET]).output.splitlines()
+    assert out[:2] == ["gapp can now deploy your apps through GitHub Actions.", "Nothing changed."]
+    assert out[-1] == "Next: gapp ci project setup <project>"
 
 
-def test_ci_status_lists_solutions_and_is_ready(monkeypatch):
-    monkeypatch.setattr(ci_mod, "get_ci_status", lambda solution=None: _status(
-        files={**FILES, ".github/workflows/gapp-deploy.yml": {"present": True, "current": False}},
-        solutions=[{"name": "my-app", "repo": "me/my-app", "project": "my-proj", "domain": "mcp.example.com",
-                    "gapp_ref": "v3.9.1", "environment_exists": True}],
-        legacy_workflows=["old-app"],
-        registered=True, solution_repo="me/my-app", domain="mcp.example.com", environment="my-proj",
-        environment_record={"exists": True, "wif_provider_present": True, "service_account_present": True, "checked": True},
-        next_step=None,
-    ))
-    result = CliRunner().invoke(cli_main, ["ci", "status"])
-    assert result.exit_code == 0, result.output
-    assert "gapp-deploy.yml present, not current" in result.output
-    assert "my-app: me/my-app → my-proj (Environment present, domain mcp.example.com, gapp v3.9.1)" in result.output
-    assert "Legacy per-solution workflows (register, then delete): old-app" in result.output
-    assert "Environment: my-proj (GAPP_WIF_PROVIDER present, GAPP_DEPLOY_SERVICE_ACCOUNT present)" in result.output
-    assert "Ready: gapp ci deploy" in result.output
+def test_init_without_args_shows_the_saved_repo_and_how_it_was_set(monkeypatch):
+    monkeypatch.setattr(ci_mod, "init_fleet", lambda repo=None, owner=None, create=False: _init_result(
+        files=None, variables=None, topic=None, next_step=None))
+    out = _run(["ci", "init"]).output
+    assert out.strip() == f"Your fleet is kept in {FLEET} (set by: gapp ci init acme/fleet)."
 
 
-def test_ci_status_reports_unchecked_variables(monkeypatch):
-    monkeypatch.setattr(ci_mod, "get_ci_status", lambda solution=None: _status(
-        variables={k: None for k in VARS}, variables_checked=False, variables_note="not checked from this machine"))
-    result = CliRunner().invoke(cli_main, ["ci", "status"])
-    assert "Variables: not checked from this machine" in result.output
+def test_init_create_and_the_two_verbatim_refusals(monkeypatch):
+    monkeypatch.setattr(ci_mod, "init_fleet", lambda repo=None, owner=None, create=False: _init_result(created=True))
+    out = _run(["ci", "init", FLEET, "--create"]).output.splitlines()
+    assert out[0] == f"Created your private fleet repo {FLEET} with gapp's workflows and an empty gapp/deployments.yaml."
+    for message in (ci_mod.REPO_MISSING_MESSAGE.format(repo=FLEET), ci_mod.REPO_EXISTS_MESSAGE.format(repo=FLEET)):
+        monkeypatch.setattr(ci_mod, "init_fleet", lambda repo=None, owner=None, create=False, m=message: {
+            "ok": False, "fleet_repo": None, "next_step": {"action": "x", "hint": m}})
+        result = _run(["ci", "init", FLEET])
+        assert result.exit_code == 1 and result.output.strip() == message
 
 
-def test_ci_init_local_only(monkeypatch):
-    calls = {}
-
-    def fake_init(repo, local_only=False):
-        calls["repo"], calls["local_only"] = repo, local_only
-        return {"ok": True, "repo": "acme/deploy-workflows", "config_status": "saved", "topic_status": "skipped", "next_step": None}
-
-    monkeypatch.setattr(ci_mod, "init_ci", fake_init)
-    result = CliRunner().invoke(cli_main, ["ci", "init", "deploy-workflows", "--local-only"])
-    assert result.exit_code == 0, result.output
-    assert calls == {"repo": "deploy-workflows", "local_only": True}
-    assert "Variables" not in result.output
+def test_verbose_adds_the_fleet_detail_and_default_output_hides_it(monkeypatch):
+    monkeypatch.setattr(ci_mod, "init_fleet", lambda repo=None, owner=None, create=False: _init_result())
+    plain = _run(["ci", "init", FLEET]).output
+    verbose = _run(["ci", "init", FLEET, "--verbose"]).output
+    assert "Files:" not in plain and "Variables:" not in plain and "Topic" not in plain
+    assert f"Fleet repo: {FLEET}" in verbose
+    assert "Files: gapp-deploy.yml created, gapp-register.yml created, deployments.yaml created" in verbose
+    assert "Variables: GAPP_ALLOWED_SOURCES missing, HOSTING_GITHUB_APP_ID missing, HOSTING_GITHUB_APP_PRIVATE_KEY missing" in verbose
+    assert "Topic gapp-ci: set" in verbose
 
 
-def test_ci_init_prints_the_installed_files_and_the_variables(monkeypatch):
-    monkeypatch.setattr(ci_mod, "init_ci", lambda repo, local_only=False: {
-        "ok": True, "repo": "acme/deploy-workflows", "config_status": "saved", "topic_status": "added", "repo_created": True,
-        "files": {".github/workflows/gapp-deploy.yml": "created", ".github/workflows/gapp-register.yml": "created",
-                  "gapp/solutions.yaml": "created"},
-        "variables": {"GAPP_ALLOWED_SOURCES": False, "HOSTING_GITHUB_APP_ID": True, "HOSTING_GITHUB_APP_PRIVATE_KEY": False},
-        "variables_checked": True, "variables_note": None,
-        "next_step": {"action": "configure variables", "hint": "No source owners are allowed yet in acme/deploy-workflows."},
-    })
-    result = CliRunner().invoke(cli_main, ["ci", "init", "acme/deploy-workflows"])
-    assert result.exit_code == 0, result.output                 # ok with advice: exit 0
-    assert "repo created" in result.output
-    assert ".github/workflows/gapp-register.yml created" in result.output
-    assert "GAPP_ALLOWED_SOURCES missing, HOSTING_GITHUB_APP_ID present, HOSTING_GITHUB_APP_PRIVATE_KEY missing" in result.output
-    assert "Next Step: configure variables" in result.output
-
-
-def test_ci_init_refused_write_exits_nonzero(monkeypatch):
-    monkeypatch.setattr(ci_mod, "init_ci", lambda repo, local_only=False: {
-        "ok": False, "repo": "acme/deploy-workflows", "config_status": "saved", "topic_status": "already_set", "files": None,
-        "variables": None, "next_step": {"action": "install operator files", "hint": "gapp's files could not be written."}})
-    result = CliRunner().invoke(cli_main, ["ci", "init", "acme/deploy-workflows"])
-    assert result.exit_code == 1, result.output
-    assert "Next Step: install operator files" in result.output
-
-
-def test_ci_init_help_states_the_api_write_requirement():
-    result = CliRunner().invoke(cli_main, ["ci", "init", "--help"])
-    assert "GitHub API" in result.output and "write" in result.output
-
-
-def test_ci_project_setup_prints_resources_and_next_step(monkeypatch):
-    calls = {}
-
-    def fake(project):
-        calls["project"] = project
-        return {"ok": True, "project_id": project, "ci_repo": "acme/deploy-workflows", "wif_pool": "created",
-                "wif_provider": "created", "service_account": "exists", "binding": "set", "environment": project,
-                "environment_record": "created", "next_step": None}
-
-    monkeypatch.setattr(ci_mod, "setup_ci_project", fake)
-    result = CliRunner().invoke(cli_main, ["ci", "project", "setup", "my-proj"])
-    assert result.exit_code == 0, result.output
-    assert calls == {"project": "my-proj"}
-    assert "WIF pool created" in result.output and "Environment my-proj created" in result.output
-    assert "Next Step: gapp ci setup --project my-proj" in result.output
-
-
-def test_ci_project_setup_outcome_exits_nonzero_with_the_requirement(monkeypatch):
-    monkeypatch.setattr(ci_mod, "setup_ci_project", lambda project: {
-        "ok": True, "project_id": project, "ci_repo": "acme/deploy-workflows", "wif_pool": None, "wif_provider": None,
-        "service_account": None, "binding": None, "environment": project, "environment_record": None,
-    } | ci_mod._outcome("install gcloud", "gcloud is not installed on this machine."))
-    result = CliRunner().invoke(cli_main, ["ci", "project", "setup", "my-proj"])
-    assert result.exit_code == 1, result.output
-    assert "Next Step: install gcloud" in result.output
-    help_text = CliRunner().invoke(cli_main, ["ci", "project", "setup", "--help"]).output
-    assert "Owner" in help_text and "admin of the CI repo" in help_text
-
-
-def test_ci_sources_commands(monkeypatch):
-    calls = []
-
-    def fake(action, owner=None):
-        calls.append((action, owner))
-        return {"ok": True, "action": action, "ci_repo": "acme/deploy-workflows", "owner": owner,
-                "owners": ["me", "other-org"], "changed": action != "list", "next_step": None,
-                "note": "me may now deploy through acme/deploy-workflows." if action == "add" else None}
-
-    monkeypatch.setattr(ci_mod, "manage_sources", fake)
-    runner = CliRunner()
-    assert runner.invoke(cli_main, ["ci", "sources", "add", "me"]).exit_code == 0
-    out = runner.invoke(cli_main, ["ci", "sources", "list"]).output
-    assert "Allowed sources: me, other-org" in out
-    assert runner.invoke(cli_main, ["ci", "sources", "remove", "other-org"]).exit_code == 0
-    assert calls == [("add", "me"), ("list", None), ("remove", "other-org")]
-
-
-def test_ci_sources_outcome_exits_nonzero(monkeypatch):
-    monkeypatch.setattr(ci_mod, "manage_sources", lambda action, owner=None: {
-        "ok": False, "action": action, "ci_repo": "acme/deploy-workflows", "owner": owner, "owners": None, "changed": False,
-        "next_step": {"action": "sign in to gh with write access", "hint": "Could not write GAPP_ALLOWED_SOURCES."}})
-    result = CliRunner().invoke(cli_main, ["ci", "sources", "add", "me"])
-    assert result.exit_code == 1 and "Next Step: sign in to gh with write access" in result.output
-
-
-def _setup_result(**overrides):
-    base = {
-        "ok": True, "solution": "my-app", "solution_repo": "me/my-app", "project_id": "my-proj",
-        "ci_repo": "acme/deploy-workflows", "domain": None, "environment": "my-proj",
-        "workflow": "gapp-register.yml", "dispatched": True, "run_id": "42",
-        "run_url": "https://github.com/acme/deploy-workflows/actions/runs/42", "conclusion": "success",
-        "registered": True, "result_code": "added",
-        "messages": ["result=added", "added 'my-app' -> me/my-app on project 'my-proj'."], "next_step": None,
-    }
-    base.update(overrides)
+def _setup_result(**over):
+    base = {"ok": True, "name": "my-app", "repo": "me/my-app", "project": "my-proj", "domain": None, "id": "my-app",
+            "fleet_repo": FLEET, "copy_of": None, "action": "added", "changes": {}, "copied_env": [], "secrets": [],
+            "project_from_source": False, "workflow": "gapp-register.yml", "dispatched": True, "run_id": "42",
+            "run_url": f"https://github.com/{FLEET}/actions/runs/42", "conclusion": "success", "result_code": "added",
+            "messages": [], "next_step": None}
+    base.update(over)
     return base
 
 
-def test_ci_setup_passes_args_including_the_exact_command_line(monkeypatch):
+def test_setup_output_leads_with_the_repo_project_and_name_then_the_deploy_command(monkeypatch):
     calls = {}
 
-    def fake_setup(solution=None, solution_repo=None, project=None, domain=None, watch=True, command=None):
-        calls.update(solution=solution, solution_repo=solution_repo, project=project, domain=domain, watch=watch, command=command)
-        return _setup_result(domain=domain)
-
-    monkeypatch.setattr(ci_mod, "setup_ci", fake_setup)
-    monkeypatch.setattr("sys.argv", ["gapp", "ci", "setup", "-s", "my-app", "--solution-repo", "me/my-app",
-                                     "--project", "my-proj", "--domain", "mcp.example.com"])
-    result = CliRunner().invoke(cli_main, [
-        "ci", "setup", "-s", "my-app", "--solution-repo", "me/my-app", "--project", "my-proj", "--domain", "mcp.example.com",
-    ])
-    assert result.exit_code == 0, result.output
-    assert calls == {"solution": "my-app", "solution_repo": "me/my-app", "domain": "mcp.example.com",
-                     "project": "my-proj", "watch": True,
-                     "command": "gapp ci setup -s my-app --solution-repo me/my-app --project my-proj --domain mcp.example.com"}
-    assert "my-app (me/my-app) → my-proj via acme/deploy-workflows" in result.output
-    assert "Domain mcp.example.com" in result.output
-    assert "Register run dispatched: gapp-register.yml" in result.output
-    assert "actions/runs/42" in result.output and "Conclusion: success" in result.output
-    assert "added 'my-app' -> me/my-app on project 'my-proj'." in result.output
-    assert "result=added" not in result.output
-    assert "Next Step: gapp ci deploy" in result.output
-
-
-def test_ci_setup_requires_project():
-    result = CliRunner().invoke(cli_main, ["ci", "setup"])
-    assert result.exit_code != 0 and "--project" in result.output
-
-
-def test_ci_setup_prints_the_one_time_message_and_exits_nonzero(monkeypatch):
-    message = ci_mod.PROJECT_NOT_TRUSTED_MESSAGE.format(ci_repo="acme/deploy-workflows", project="my-proj",
-                                                         command="gapp ci setup --project my-proj")
-    monkeypatch.setattr(ci_mod, "setup_ci", lambda **kw: _setup_result(
-        dispatched=False, run_id=None, run_url=None, conclusion=None, registered=None, result_code=None, messages=[],
-    ) | ci_mod._outcome("ci project setup", message))
-    result = CliRunner().invoke(cli_main, ["ci", "setup", "--project", "my-proj"])
-    assert result.exit_code == 1, result.output
-    assert message in result.output
-    assert "Register run dispatched" not in result.output
-
-
-def test_ci_setup_no_watch_maps_the_flag(monkeypatch):
-    calls = {}
-
-    def fake_setup(**kw):
+    def fake(name=None, **kw):
+        calls["name"] = name
         calls.update(kw)
-        return _setup_result(conclusion=None, registered=None, result_code=None, messages=[])
+        return _setup_result()
 
-    monkeypatch.setattr(ci_mod, "setup_ci", fake_setup)
-    result = CliRunner().invoke(cli_main, ["ci", "setup", "--project", "my-proj", "--no-watch"])
+    monkeypatch.setattr(ci_mod, "setup_deployment", fake)
+    monkeypatch.setattr("sys.argv", ["gapp", "ci", "setup", "--repo", "me/my-app", "--project", "my-proj"])
+    result = _run(["ci", "setup", "--repo", "me/my-app", "--project", "my-proj"])
     assert result.exit_code == 0, result.output
-    assert calls["watch"] is False and "watch the run" in result.output
+    assert result.output.splitlines() == ["me/my-app is set up to deploy to my-proj as my-app.", "Deploy it: gapp ci deploy my-app"]
+    assert calls["name"] is None and calls["repo"] == "me/my-app" and calls["project"] == "my-proj"
+    assert calls["command"] == "gapp ci setup --repo me/my-app --project my-proj" and calls["watch"] is True
 
 
-def test_ci_setup_has_no_gcloud_era_flags():
-    for flag in ("--app-id-var", "--app-key-secret", "--out"):
-        result = CliRunner().invoke(cli_main, ["ci", "setup", "--project", "p", flag, "X"])
-        assert result.exit_code != 0 and "No such option" in result.output
+def test_setup_id_shows_only_with_verbose(monkeypatch):
+    monkeypatch.setattr(ci_mod, "setup_deployment", lambda name=None, **kw: _setup_result(id="my-app-2"))
+    assert "my-app-2" not in _run(["ci", "setup", "--repo", "me/my-app", "--project", "my-proj"]).output
+    assert "Id: my-app-2" in _run(["ci", "setup", "--repo", "me/my-app", "--project", "my-proj", "--verbose"]).output
 
 
-def test_ci_deploy_maps_no_watch_and_prints_run(monkeypatch):
+def test_setup_blocked_by_the_owner_leads_with_the_repo_then_the_verbatim_message(monkeypatch):
+    message = ci_mod.SOURCE_NOT_ALLOWED_MESSAGE.format(owner="me", fleet_repo=FLEET, command="gapp ci setup --repo me/my-app --project my-proj")
+    monkeypatch.setattr(ci_mod, "setup_deployment", lambda name=None, **kw: _setup_result(
+        dispatched=True, conclusion="failure", result_code="source-owner-not-allowed", action=None,
+    ) | ci_mod._outcome("ci sources add", message))
+    result = _run(["ci", "setup", "--repo", "me/my-app", "--project", "my-proj"])
+    assert result.exit_code == 1
+    assert result.output.startswith("me/my-app can't be set up yet: apps owned by me aren't allowed in your fleet.\n" + message)
+    assert "<current-list>" in result.output
+
+
+def test_setup_blocked_by_trust_leads_with_the_repo_then_the_verbatim_message(monkeypatch):
+    message = ci_mod.PROJECT_NOT_TRUSTED_MESSAGE.format(fleet_repo=FLEET, project="my-proj", command="gapp ci setup --repo me/my-app --project my-proj")
+    monkeypatch.setattr(ci_mod, "setup_deployment", lambda name=None, **kw: _setup_result(
+        dispatched=False, run_id=None, run_url=None, conclusion=None, result_code=None, action=None,
+    ) | ci_mod._outcome("ci project setup", message))
+    result = _run(["ci", "setup", "--repo", "me/my-app", "--project", "my-proj"])
+    assert result.exit_code == 1
+    assert result.output.startswith("me/my-app can't be set up yet: your fleet isn't trusted to deploy to my-proj.\n" + message)
+
+
+def test_setup_refusals_print_their_sentence(monkeypatch):
+    hint = ("me/my-app can't be set up as my-app-staging: me/my-app is already deployed as my-app. "
+            "Update it: gapp ci setup my-app --repo me/my-app --project my-proj ... Add another: gapp ci setup my-app-staging --copy-of my-app ...")
+    monkeypatch.setattr(ci_mod, "setup_deployment", lambda name=None, **kw: _setup_result(dispatched=False) | ci_mod._outcome("update or copy", hint))
+    result = _run(["ci", "setup", "my-app-staging", "--repo", "me/my-app", "--project", "my-proj"])
+    assert result.exit_code == 1 and result.output.strip() == hint
+
+
+def test_setup_copy_of_lists_env_copied_and_secrets_needed(monkeypatch):
+    monkeypatch.setattr(ci_mod, "setup_deployment", lambda name=None, **kw: _setup_result(
+        name="my-app-staging", project="staging-proj", copy_of="my-app", copied_env=["LOG_LEVEL", "API_KEY"], secrets=["api-key"]))
+    out = _run(["ci", "setup", "my-app-staging", "--copy-of", "my-app", "--project", "staging-proj"]).output.splitlines()
+    assert out[0] == "my-app-staging is set up as a copy of my-app: me/my-app deploys to staging-proj."
+    assert out[1] == "Env copied (check them for this environment): LOG_LEVEL, API_KEY"
+    assert out[2] == "Secrets my-app-staging needs set on staging-proj before its first deploy: api-key"
+    assert out[-1] == "Deploy it: gapp ci deploy my-app-staging"
+
+
+def test_setup_copy_to_the_same_project_states_it(monkeypatch):
+    monkeypatch.setattr(ci_mod, "setup_deployment", lambda name=None, **kw: _setup_result(
+        name="my-app-2", copy_of="my-app", project_from_source=True))
+    assert "deploys to my-proj (the same project as the source)." in _run(["ci", "setup", "my-app-2", "--copy-of", "my-app"]).output
+
+
+def test_setup_unchanged_and_no_watch(monkeypatch):
+    monkeypatch.setattr(ci_mod, "setup_deployment", lambda name=None, **kw: _setup_result(action="unchanged", dispatched=False))
+    out = _run(["ci", "setup", "--repo", "me/my-app", "--project", "my-proj"]).output.splitlines()
+    assert out == ["my-app is already set up to deploy me/my-app to my-proj. Nothing changed.", "Deploy it: gapp ci deploy my-app"]
+    monkeypatch.setattr(ci_mod, "setup_deployment", lambda name=None, **kw: _setup_result(action=None, conclusion=None, result_code=None))
+    out = _run(["ci", "setup", "--repo", "me/my-app", "--project", "my-proj", "--no-watch"]).output.splitlines()
+    assert out == [f"Setting up my-app (me/my-app to my-proj): https://github.com/{FLEET}/actions/runs/42", "Next: gapp ci status my-app"]
+
+
+def test_setup_config_file_is_read_as_gapp_yaml_keys(monkeypatch, tmp_path):
     calls = {}
+    monkeypatch.setattr(ci_mod, "setup_deployment", lambda name=None, **kw: calls.update(kw) or _setup_result())
+    cfg = tmp_path / "staging.yaml"
+    cfg.write_text("env:\n  - name: LOG_LEVEL\n    value: DEBUG\n")
+    _run(["ci", "setup", "--repo", "me/my-app", "--project", "my-proj", "--config", str(cfg), "--domain", "d.example.com"])
+    assert calls["config"] == {"env": [{"name": "LOG_LEVEL", "value": "DEBUG"}]} and calls["domain"] == "d.example.com"
 
-    def fake_deploy(solution=None, ref="main", watch=True):
-        calls.update(solution=solution, ref=ref, watch=watch)
-        return {"ok": True, "solution": "my-app", "ci_repo": "acme/deploy-workflows", "workflow": "gapp-deploy.yml",
-                "ref": ref, "run_id": "42", "run_url": "https://github.com/acme/deploy-workflows/actions/runs/42",
+
+def test_setup_without_repo_prints_the_outcome(monkeypatch):
+    monkeypatch.setattr(ci_mod, "setup_deployment", lambda name=None, **kw: _setup_result(dispatched=False) | ci_mod._outcome(
+        "pass --repo", "Name the repo to deploy: `gapp ci setup [<name>] --repo <owner>/<repo> --project <project>`."))
+    result = _run(["ci", "setup", "my-app"])
+    assert result.exit_code == 1 and result.output.startswith("Name the repo to deploy")
+    assert "--solution" not in _run(["ci", "setup", "--help"]).output
+
+
+def test_rename_output(monkeypatch):
+    monkeypatch.setattr(ci_mod, "rename_deployment", lambda old, new, watch=True: {
+        "ok": True, "name": new, "old_name": old, "id": "my-app", "fleet_repo": FLEET, "action": "renamed",
+        "dispatched": True, "run_url": "u", "next_step": None})
+    out = _run(["ci", "rename", "my-app", "renamed"]).output.splitlines()
+    assert out == ["my-app is now renamed. Its id and GCP resources are unchanged.", "Next: gapp ci deploy renamed"]
+
+
+def test_project_setup_output(monkeypatch):
+    base = {"ok": True, "project_id": "my-proj", "fleet_repo": FLEET, "wif_pool": "created", "wif_provider": "created",
+            "service_account": "exists", "binding": "set", "environment": "my-proj", "environment_record": "created",
+            "changed": True, "next_step": None}
+    monkeypatch.setattr(ci_mod, "setup_ci_project", lambda project: base)
+    out = _run(["ci", "project", "setup", "my-proj"]).output.splitlines()
+    assert out == ["my-proj now trusts your fleet to deploy to it.", "Next: gapp ci setup <name> --repo <owner>/<repo> --project my-proj"]
+    monkeypatch.setattr(ci_mod, "setup_ci_project", lambda project: {**base, "changed": False, "environment_record": "unchanged"})
+    assert _run(["ci", "project", "setup", "my-proj"]).output.splitlines()[0] == "my-proj already trusts your fleet to deploy to it. Nothing changed."
+    assert "WIF pool: created" in _run(["ci", "project", "setup", "my-proj", "--verbose"]).output
+    help_text = _run(["ci", "project", "setup", "--help"]).output
+    assert "Owner" in help_text and "admin of the fleet repo" in help_text
+
+
+def test_sources_output(monkeypatch):
+    monkeypatch.setattr(ci_mod, "manage_sources", lambda action, owner=None: {
+        "ok": True, "action": action, "fleet_repo": FLEET, "owner": owner, "owners": ["me", "other-org"],
+        "changed": action != "list", "next_step": None})
+    assert _run(["ci", "sources", "add", "me"]).output.splitlines() == [
+        "Apps owned by me are now allowed in your fleet.", "Next: gapp ci project setup <project>"]
+    assert _run(["ci", "sources", "list"]).output.strip() == "Allowed owners: me, other-org"
+    assert _run(["ci", "sources", "remove", "other-org"]).output.strip() == "Apps owned by other-org are no longer allowed in your fleet."
+    monkeypatch.setattr(ci_mod, "manage_sources", lambda action, owner=None: {
+        "ok": False, "action": action, "fleet_repo": FLEET, "owner": owner, "owners": None, "changed": False,
+        "next_step": {"action": "sign in to gh with write access", "hint": "GAPP_ALLOWED_SOURCES in acme/fleet could not be written: GitHub returned 403: blocked."}})
+    result = _run(["ci", "sources", "add", "me"])
+    assert result.exit_code == 1 and result.output.strip().startswith("GAPP_ALLOWED_SOURCES in acme/fleet could not be written")
+
+
+def test_deploy_output(monkeypatch):
+    def fake(name, ref="main", watch=True):
+        return {"ok": True, "name": name, "repo": "me/my-app", "project": "my-proj", "fleet_repo": FLEET,
+                "workflow": "gapp-deploy.yml", "ref": ref, "run_id": "42", "run_url": f"https://github.com/{FLEET}/actions/runs/42",
                 "watched": watch, "conclusion": "success" if watch else None, "next_step": None}
-
-    monkeypatch.setattr(ci_mod, "deploy_ci", fake_deploy)
-    result = CliRunner().invoke(cli_main, ["ci", "deploy", "--ref", "v1.2.3", "--no-watch"])
-    assert result.exit_code == 0, result.output
-    assert calls == {"solution": None, "ref": "v1.2.3", "watch": False}
-    assert "Dispatched gapp-deploy.yml in acme/deploy-workflows for my-app (ref v1.2.3)" in result.output
-    assert "Conclusion" not in result.output
-
-
-def test_ci_deploy_outcome_exits_nonzero(monkeypatch):
-    monkeypatch.setattr(ci_mod, "deploy_ci", lambda **kw: {
-        "ok": False, "solution": "my-app", "ci_repo": "acme/deploy-workflows", "workflow": "gapp-deploy.yml", "ref": "main",
-        "run_id": None, "run_url": None, "watched": False, "conclusion": None,
-        "next_step": {"action": "ci setup", "hint": "'my-app' is not registered in acme/deploy-workflows."}})
-    result = CliRunner().invoke(cli_main, ["ci", "deploy"])
-    assert result.exit_code == 1 and "Next Step: ci setup" in result.output
+    monkeypatch.setattr(ci_mod, "deploy_deployment", fake)
+    out = _run(["ci", "deploy", "my-app", "--ref", "v1.2.3", "--no-watch"]).output.splitlines()
+    assert out == ["Deploying my-app (ref v1.2.3).", f"my-app deploy started (ref v1.2.3): https://github.com/{FLEET}/actions/runs/42",
+                   "Next: gapp ci status my-app"]
+    out = _run(["ci", "deploy", "my-app"]).output.splitlines()
+    assert out[1] == f"my-app deployed (success): https://github.com/{FLEET}/actions/runs/42"
+    monkeypatch.setattr(ci_mod, "deploy_deployment", lambda name, ref="main", watch=True: {
+        "ok": False, "name": name, "fleet_repo": FLEET, "next_step": {"action": "ci setup", "hint": "'x' is not a deployment in acme/fleet, so there is nothing to deploy. Set it up: gapp ci setup x --repo <owner>/<repo> --project <project>. See the deployments: gapp ci list"}})
+    result = _run(["ci", "deploy", "x"])
+    assert result.exit_code == 1 and "'x' is not a deployment in acme/fleet" in result.output
 
 
-def test_ci_trigger_is_a_hidden_alias_that_names_the_new_command(monkeypatch):
-    calls = {}
-
-    def fake_deploy(solution=None, ref="main", watch=True):
-        calls.update(ref=ref)
-        return {"ok": True, "solution": "my-app", "ci_repo": "acme/ci", "workflow": "gapp-deploy.yml", "ref": ref,
-                "run_id": "7", "run_url": "https://github.com/acme/ci/actions/runs/7", "watched": False,
-                "conclusion": None, "next_step": None}
-
-    monkeypatch.setattr(ci_mod, "deploy_ci", fake_deploy)
-    result = CliRunner().invoke(cli_main, ["ci", "trigger", "--ref", "v1", "--no-watch"])
-    assert result.exit_code == 0, result.output
-    assert "is now `gapp ci deploy`" in result.output and calls == {"ref": "v1"}
-    assert "trigger" not in CliRunner().invoke(cli_main, ["ci", "--help"]).output
-
-
-# -- gapp status never crashes --
-
-
-def test_status_without_identity_prints_the_sign_in_step(monkeypatch):
-    from gapp.admin.sdk.core import GappSDK
-    from gapp.admin.sdk.models import DeploymentInfo, NextStep, StatusResult
-
-    monkeypatch.setattr(GappSDK, "status", lambda self, name=None, env=None: StatusResult(
-        initialized=True, name="my-app", deployment=DeploymentInfo(project=None, pending=True),
-        next_step=NextStep(action="sign in", hint="No Google Cloud identity this machine can use. Sign in with `gcloud auth login`.")))
-    result = CliRunner().invoke(cli_main, ["status"])
-    assert result.exit_code == 0, result.output
-    assert "App:      my-app" in result.output and "Status:   PENDING" in result.output
-    assert "Next Step: sign in" in result.output and "gcloud auth login" in result.output
-    assert "NoneType" not in result.output and "Error" not in result.output
+def test_status_output(monkeypatch):
+    base = {"ok": True, "name": "my-app", "fleet_repo": FLEET, "registered": True, "id": "my-app-2", "repo": "me/my-app",
+            "project": "my-proj", "domain": "mcp.example.com", "overlay": {"domain": "mcp.example.com"},
+            "environment_record": {"exists": True, "checked": True, "wif_provider_present": True, "service_account_present": True, "note": None},
+            "last_deploy": {"checked": True, "note": None, "run": {"id": "42", "status": "completed", "conclusion": "success",
+                            "created_at": "2026-01-01T00:00:00Z", "ref": "main", "url": f"https://github.com/{FLEET}/actions/runs/42"}},
+            "problem": None, "next_step": None}
+    monkeypatch.setattr(ci_mod, "status_deployment", lambda name: base)
+    out = _run(["ci", "status", "my-app"]).output.splitlines()
+    assert out == ["my-app: me/my-app deploys to my-proj, domain mcp.example.com.",
+                   f"Last deploy: success, 2026-01-01T00:00:00Z (ref main): https://github.com/{FLEET}/actions/runs/42",
+                   "Deploy it: gapp ci deploy my-app"]
+    assert "my-app-2" not in "\n".join(out)
+    verbose = _run(["ci", "status", "my-app", "--verbose"]).output
+    assert "Id: my-app-2" in verbose and "gapp.yaml keys set by the fleet: domain" in verbose
+    monkeypatch.setattr(ci_mod, "status_deployment", lambda name: {**base, "last_deploy": {"checked": True, "run": None, "note": None},
+                                                                   "problem": "acme/fleet has no Environment named 'my-proj', so a deploy cannot authenticate to that project.",
+                                                                   "next_step": {"action": "ci project setup", "hint": "gapp ci project setup my-proj"}})
+    out = _run(["ci", "status", "my-app"]).output.splitlines()
+    assert out[1] == "No deploys yet." and out[-2].startswith("acme/fleet has no Environment") and out[-1] == "Next: gapp ci project setup my-proj"
+    assert "Deploy it" not in "\n".join(out)
 
 
-def test_status_uninitialized_prints_the_init_step(monkeypatch):
-    from gapp.admin.sdk.core import GappSDK
-    from gapp.admin.sdk.models import DeploymentInfo, NextStep, StatusResult
+def test_list_output(monkeypatch):
+    monkeypatch.setattr(ci_mod, "list_deployments", lambda repo=None, verbose=False: {
+        "ok": True, "fleet_repo": FLEET, "repo": repo, "deployments": [
+            {"name": "my-app", "id": "my-app", "repo": "me/my-app", "project": "my-proj", "domain": "mcp.example.com", "keys": ["domain"]},
+            {"name": "my-app-staging", "id": "my-app-staging", "repo": "me/my-app", "project": "staging-proj", "domain": None, "keys": []}],
+        "files": None, "variables": None, "variables_note": None, "legacy_workflows": ["old-app"] if verbose else [],
+        "problem": None, "next_step": None})
+    out = _run(["ci", "list"]).output.splitlines()
+    assert out[0] == f"2 deployments in {FLEET}:"
+    assert out[1] == "  my-app          me/my-app -> my-proj, domain mcp.example.com"
+    assert out[2] == "  my-app-staging  me/my-app -> staging-proj"
+    assert "old-app" not in "\n".join(out)
+    assert "Per-solution workflows from gapp 3.x" in _run(["ci", "list", "--verbose"]).output
+    monkeypatch.setattr(ci_mod, "list_deployments", lambda repo=None, verbose=False: {
+        "ok": True, "fleet_repo": FLEET, "repo": repo, "deployments": [], "files": None, "variables": None,
+        "variables_note": None, "legacy_workflows": [], "problem": None,
+        "next_step": {"action": "ci setup", "hint": "gapp ci setup <name> --repo <owner>/<repo> --project <project>"}})
+    assert _run(["ci", "list"]).output.splitlines() == [f"No deployments in {FLEET} yet.",
+                                                        "Next: gapp ci setup <name> --repo <owner>/<repo> --project <project>"]
 
-    monkeypatch.setattr(GappSDK, "status", lambda self, name=None, env=None: StatusResult(
-        initialized=False, deployment=DeploymentInfo(), next_step=NextStep(action="init", hint="No gapp.yaml here.")))
-    result = CliRunner().invoke(cli_main, ["status"])
-    assert result.exit_code == 0, result.output
-    assert "not initialized here" in result.output and "Next Step: init" in result.output
-    assert "NoneType" not in result.output
 
-
-def test_deploy_passes_replace_domain(monkeypatch):
-    from gapp.admin.sdk.core import GappSDK
-    calls = {}
-
-    def fake_deploy(self, **kwargs):
-        calls.update(kwargs)
-        return {"name": "my-app"}
-
-    monkeypatch.setattr(GappSDK, "deploy", fake_deploy)
-    result = CliRunner().invoke(cli_main, ["deploy", "--replace-domain"])
-    assert result.exit_code == 0, result.output
-    assert calls["replace_domain"] is True
-
-    result = CliRunner().invoke(cli_main, ["deploy"])
-    assert result.exit_code == 0, result.output
-    assert calls["replace_domain"] is False
+def test_ci_commands_take_names_not_working_directory_defaults():
+    assert "Defaults to current directory" not in _run(["ci", "--help"]).output
+    for cmd in ("setup", "deploy", "status", "list", "rename"):
+        help_text = _run(["ci", cmd, "--help"]).output
+        assert "--solution" not in help_text and "current directory" not in help_text, cmd
+    assert _run(["ci", "deploy"]).exit_code != 0 and _run(["ci", "status"]).exit_code != 0

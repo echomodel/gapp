@@ -5,50 +5,82 @@ source is `gapp/__init__.py`.
 
 ## Unreleased (4.0.0)
 
-gapp now has two fleet systems with a rigid line between them. The root
-commands (`gapp setup`, `deploy`, `status`, `secrets`, ...) are the direct
-system: they need a Google Cloud identity and their record is the GCP
-project label. The `gapp ci` commands are the CI system: they need GitHub
-and their record is `gapp/solutions.yaml` in the CI repo plus the project's
-GitHub Environment. No command consults the other system's state, and
-every command's requirements are fixed by its name.
+gapp now has two fleet systems, kept apart. The root commands (`gapp
+setup`, `deploy`, `status`, `list`, `secrets`) deploy the local checkout
+to GCP with gcloud, as before. The `gapp ci` commands manage a fleet
+through GitHub only: they never use gcloud (except `ci project setup`)
+and never read the working directory. The fleet is kept in a private
+**fleet repo**: `gapp/deployments.yaml`, one entry per deployment, plus
+gapp's two workflows. The `ci` group mirrors the root verbs (`setup`,
+`deploy`, `status`, `list`).
 
 Breaking changes:
 
+- The unit of the CI system is a **deployment**: one repo deployed to one
+  project under a name you choose. `gapp ci setup [<name>] --repo
+  <owner>/<repo> --project <project> [--domain <d>] [--config <file>]`
+  adds or updates one (the name defaults to the repo's name); `gapp ci
+  deploy <name>`, `gapp ci status <name>` and `gapp ci list [--repo
+  <owner>/<repo>]` take names. No `ci` command reads the working
+  directory, so `--solution` and `--solution-repo` are gone.
+- The fleet file is `gapp/deployments.yaml` (a mapping of names to
+  entries) instead of `gapp/solutions.yaml` (a list). An entry's own
+  fields are `id`, `repo` and `project`; every other key is a gapp.yaml
+  key the deploy run merges over the repo's `gapp.yaml`, or writes as
+  the whole file when the repo has none. `ci init` removes an empty
+  `gapp/solutions.yaml` left by 3.9.0 and reports a non-empty one;
+  existing apps are set up again under their current names, which keeps
+  their live resources.
+- `gapp ci init` is the only command that sets the fleet repo, in gapp's
+  local config; no other command looks it up by topic any more. Without
+  a repo it shows the saved one or finds the one tagged `gapp-ci` under
+  your account (`--owner <org>` for an organization); `gapp ci init
+  <owner>/<repo>` sets an existing repo and `--create` makes a new
+  private one. `--local-only` is gone.
 - `gapp ci setup` never uses gcloud and no longer bootstraps a project.
   The one-time per-project work (Workload Identity pool, provider,
-  `gapp-deploy` service account, binding, the project's Environment) moved
-  to the new `gapp ci project setup <project>`, the only `ci` command that
-  touches GCP. `--project` is required on `ci setup`; a project the CI
-  repo is not yet trusted for stops with the one-time message.
+  `gapp-deploy` service account, binding, the project's Environment)
+  moved to `gapp ci project setup <project>`, the only `ci` command that
+  touches GCP. A project the fleet is not yet trusted for stops with the
+  one-time message.
 - `gapp ci trigger` is renamed `gapp ci deploy` (the MCP tool
-  `gapp_ci_trigger` likewise becomes `gapp_ci_deploy`). `ci trigger` and
-  `gapp_ci_trigger` remain for this one release as hidden aliases that
-  name the new command. A solution with no entry in `gapp/solutions.yaml`
-  is no longer deployed through a legacy per-solution workflow; `ci
-  status` lists such solutions to register.
-- The CI repo variable `GAPP_ALLOWED_OWNERS` is renamed
-  `GAPP_ALLOWED_SOURCES`, with no alias, and is managed by the new
-  `gapp ci sources add|remove|list <owner>`. The register workflow reads
-  the new name; re-run `gapp ci init` to update the workflows.
+  `gapp_ci_trigger` likewise becomes `gapp_ci_deploy`); both old names
+  remain for this one release as hidden aliases. A deployment with no
+  entry is not deployed; the outcome names `gapp ci setup`.
+- The fleet repo variable `GAPP_ALLOWED_OWNERS` is renamed
+  `GAPP_ALLOWED_SOURCES`, with no alias, and is managed by `gapp ci
+  sources add|remove|list <owner>`.
+- The reusable deploy workflow takes an `overlay` input (the entry's
+  gapp.yaml keys as JSON) applied by `gapp ci runner overlay`; the
+  one-key `domain` input is kept for older callers. The installed deploy
+  workflow's input is `deployment` (was `solution`); its runs are named
+  `Deploy <name> (<ref>)`.
+- Result keys: `fleet_repo` replaces `ci_repo` and `repo` in every
+  `gapp ci` result and MCP tool.
 
 Also:
 
-- Every `gapp ci` command returns a plain outcome with a next step instead
-  of failing: `ok` and `next_step` in every result (CLI exits 1 and prints
-  the step; MCP tools return the same dict). No stack traces, raw HTTP
-  errors or raw gcloud errors reach the user. The register workflow
-  reports every outcome as a structured result (`result=<code>`) that
-  `ci setup` prints verbatim; the deploy workflow names a missing
-  Environment, Environment variable or App credential in words on its
-  first step.
-- `gapp status` reports the direct system only and never crashes: with no
-  usable Google Cloud identity it says so and names the login command;
+- `gapp ci setup <new> --copy-of <existing> [--project <p>]` starts a new
+  deployment from an existing one (same repo and gapp.yaml keys; its own
+  id; no domain, history or secret values), which is how environments
+  and multiple instances work. `gapp ci rename <old> <new>` changes the
+  name only. `id` (what the GCP resources are keyed by) defaults to the
+  name, takes the next free variant on a project, is at most 27
+  characters, and shows only with `--verbose`.
+- Output leads with the deployment and what happened, then
+  `Next: <exact command>`; the fleet repo, files, topic, variables and
+  id appear only with `--verbose` or when they are the problem. `gapp ci
+  --help` and the README tell the story from nothing to first deploy.
+- Every failure is a plain sentence with the exact fix. Something is
+  reported missing only when GitHub confirms it; otherwise "Couldn't
+  check <thing>: GitHub returned <status>: <message>" with the request
+  that failed, and a 404 names both readings (it doesn't exist, or your
+  login can't see it).
+- `gapp status` reports the direct system only and never crashes: with
+  no usable Google Cloud identity it says so and names the login command;
   without a `gapp.yaml` it says what to run.
-- `gapp ci status` is the CI system's complete report: the three gapp
-  files (present and current), the three variables, every registered
-  solution with project, domain, gapp ref and Environment, legacy
-  per-solution workflows, and the next step.
+- `scripts/release.py` accepts release candidates (`X.Y.ZrcN`, PEP 440),
+  which tag as `vX.Y.ZrcN` so `gapp ci init`'s pin resolves.
 
 ## 3.9.0
 
