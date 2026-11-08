@@ -33,7 +33,7 @@ gapp-mcp = "gapp.admin.mcp.server:main"
 include = ["gapp*"]
 
 [tool.setuptools.package-data]
-gapp = ["templates/*", "terraform/*", "modules/**/*.tf", "features.yaml"]
+gapp = ["templates/*", "templates/ci/*", "terraform/*", "modules/**/*.tf", "features.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

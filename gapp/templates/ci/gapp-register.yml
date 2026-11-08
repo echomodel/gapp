@@ -1,0 +1,148 @@
+# Registers a solution for CI deploys by writing its entry into
+# gapp/solutions.yaml. Installed and kept current by `gapp ci init`; gapp
+# owns this file, so do not edit it. `gapp ci setup` dispatches it from any
+# machine that can dispatch workflows here; no gcloud and no GitHub API
+# write are needed on that machine, because this run does the write with
+# its own token.
+#
+# Refuses when: the project has no Environment in this repository (the
+# first `gapp ci setup` on a project, from a machine with gcloud, records
+# it); the solution repo's owner is not listed in the repository variable
+# GAPP_ALLOWED_OWNERS; the solution repo is not readable with the run's
+# token and the hosting app's credential is not present; or the solution
+# is already registered on a different project.
+#
+# Inputs reach the shell through `env:` only, never interpolated into a
+# `run:` script. The write uses the file's current SHA, so two runs that
+# race fail cleanly instead of overwriting each other.
+
+name: Register a gapp solution
+
+on:
+  workflow_dispatch:
+    inputs:
+      solution:
+        description: Solution name (as in its gapp.yaml)
+        required: true
+        type: string
+      solution-repo:
+        description: Solution repo (owner/name)
+        required: true
+        type: string
+      project:
+        description: GCP project id (an Environment of this name must exist here)
+        required: true
+        type: string
+      domain:
+        description: Custom domain the deploy maps (optional; overrides gapp.yaml)
+        required: false
+        default: ''
+        type: string
+      gapp-ref:
+        description: gapp ref to install on the runner (optional; the deploy workflow's own pin otherwise)
+        required: false
+        default: ''
+        type: string
+
+permissions: {}
+
+jobs:
+  register:
+    name: Register
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    env:
+      SOLUTION: ${{ inputs.solution }}
+      SOLUTION_REPO: ${{ inputs.solution-repo }}
+      PROJECT: ${{ inputs.project }}
+      DOMAIN: ${{ inputs.domain }}
+      GAPP_REF: ${{ inputs.gapp-ref }}
+      ALLOWED_OWNERS: ${{ vars.GAPP_ALLOWED_OWNERS }}
+      APP_ID: ${{ vars.HOSTING_GITHUB_APP_ID }}
+      APP_KEY_SET: ${{ secrets.HOSTING_GITHUB_APP_PRIVATE_KEY != '' }}
+      GH_TOKEN: ${{ github.token }}
+      DATA_FILE: gapp/solutions.yaml
+    steps:
+      - name: Check the inputs
+        run: |
+          set -euo pipefail
+          refuse() { echo "gapp-register: refused: $*"; exit 1; }
+          [[ "$SOLUTION" =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]] || refuse "'$SOLUTION' is not a valid solution name"
+          [[ "$SOLUTION_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || refuse "solution repo '$SOLUTION_REPO' is not owner/name"
+          [[ "$PROJECT" =~ ^[a-z][a-z0-9-]{4,28}[a-z0-9]$ ]] || refuse "'$PROJECT' is not a GCP project id"
+          [[ "$DOMAIN" =~ ^([a-z0-9-]+\.)*[a-z0-9-]*$ ]] || refuse "domain '$DOMAIN' is not a host name"
+          [[ "$GAPP_REF" =~ ^[A-Za-z0-9._/-]*$ ]] || refuse "gapp ref '$GAPP_REF' is not a git ref"
+          [ -n "$ALLOWED_OWNERS" ] || refuse "the repository variable GAPP_ALLOWED_OWNERS is not set; it lists, comma-separated, the GitHub owners whose repos may be registered here"
+          owner="${SOLUTION_REPO%%/*}"
+          allowed=no
+          IFS=',' read -ra owners <<< "$ALLOWED_OWNERS"
+          for candidate in "${owners[@]}"; do
+            candidate="${candidate// /}"
+            if [ "${candidate,,}" = "${owner,,}" ]; then allowed=yes; fi
+          done
+          [ "$allowed" = yes ] || refuse "owner '$owner' is not in GAPP_ALLOWED_OWNERS ($ALLOWED_OWNERS)"
+          echo "gapp-register: inputs accepted for '$SOLUTION' ($SOLUTION_REPO) on project '$PROJECT'"
+
+      - name: Check the project's Environment
+        run: |
+          set -euo pipefail
+          if ! gh api "repos/$GITHUB_REPOSITORY/environments/$PROJECT" --silent 2>/dev/null; then
+            echo "gapp-register: refused: this repository has no Environment '$PROJECT'. The first gapp ci setup on a project runs from a machine with gcloud and records the project's deploy identity there."
+            exit 1
+          fi
+          echo "gapp-register: Environment '$PROJECT' exists"
+
+      - name: Check the solution repo is reachable
+        run: |
+          set -euo pipefail
+          visibility="$(gh api "repos/$SOLUTION_REPO" --jq .private 2>/dev/null || echo unreadable)"
+          if [ "$visibility" = "false" ]; then
+            echo "gapp-register: $SOLUTION_REPO is public"
+          elif [ -z "$APP_ID" ] || [ "$APP_KEY_SET" != "true" ]; then
+            echo "gapp-register: refused: $SOLUTION_REPO is not readable with this run's token (private, or does not exist), and the hosting app's HOSTING_GITHUB_APP_ID variable and HOSTING_GITHUB_APP_PRIVATE_KEY secret are not both set in this repository."
+            exit 1
+          else
+            echo "gapp-register: $SOLUTION_REPO is private; the hosting app's credential is present, and the first deploy verifies that the app reaches the repo"
+          fi
+
+      - name: Write the entry
+        run: |
+          set -euo pipefail
+          endpoint="repos/$GITHUB_REPOSITORY/contents/$DATA_FILE"
+          if ! gh api "$endpoint" > entry.json 2>/dev/null; then
+            echo "gapp-register: refused: $DATA_FILE does not exist in this repository; gapp ci init installs it."
+            exit 1
+          fi
+          sha="$(yq -p=json -oy '.sha' entry.json)"
+          yq -p=json -oy '.content' entry.json | base64 -d > current.yaml
+          cp current.yaml solutions.yaml
+          existing="$(yq '.solutions[] | select(.name == strenv(SOLUTION)) | .project' solutions.yaml)"
+          if [ -n "$existing" ] && [ "$existing" != "$PROJECT" ]; then
+            echo "gapp-register: refused: '$SOLUTION' is already registered on project '$existing'. A solution deploys to one project per operator repo; remove its entry from $DATA_FILE first to move it."
+            exit 1
+          fi
+          yq -i '
+            .solutions = ((.solutions // []) | map(select(.name != strenv(SOLUTION))))
+              + [{"name": strenv(SOLUTION), "repo": strenv(SOLUTION_REPO), "project": strenv(PROJECT),
+                  "domain": strenv(DOMAIN), "gapp_ref": strenv(GAPP_REF)}]
+            | .solutions[] |= with_entries(select(.value != ""))
+            | .solutions |= sort_by(.name)
+          ' solutions.yaml
+          if cmp -s current.yaml solutions.yaml; then
+            echo "gapp-register: unchanged: '$SOLUTION' is already registered with these values"
+            echo "unchanged: $SOLUTION on $PROJECT" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          action=updated
+          [ -z "$existing" ] && action=added
+          if ! gh api -X PUT "$endpoint" --silent \
+               -f message="Register $SOLUTION on $PROJECT" \
+               -f content="$(base64 -w0 solutions.yaml)" \
+               -f sha="$sha" 2> put.err; then
+            echo "gapp-register: refused: the write to $DATA_FILE was rejected: $(tr -d '\n' < put.err). Either the file changed during this run (dispatch again) or a rule on the default branch blocks this workflow's token."
+            exit 1
+          fi
+          echo "gapp-register: $action '$SOLUTION' -> $SOLUTION_REPO on project '$PROJECT'${DOMAIN:+, domain $DOMAIN}${GAPP_REF:+, gapp ref $GAPP_REF}"
+          echo "$action: $SOLUTION -> $SOLUTION_REPO on $PROJECT${DOMAIN:+, domain $DOMAIN}" >> "$GITHUB_STEP_SUMMARY"

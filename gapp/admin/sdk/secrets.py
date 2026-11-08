@@ -20,6 +20,7 @@ from pathlib import Path
 
 from gapp.admin.sdk.core import GappSDK
 from gapp.admin.sdk.manifest import get_env_vars, load_manifest, save_manifest
+from gapp.admin.sdk.util import run_gcloud
 
 GAPP_SOLUTION_LABEL = "gapp-solution"
 
@@ -209,8 +210,8 @@ def _classify_unlabeled(project_id: str, secret_id: str) -> dict:
     Returns {"kind": "missing"|"unattached"|"conflict", "owner": str|None}.
     `owner` is set only for `conflict`.
     """
-    result = subprocess.run(
-        ["gcloud", "secrets", "describe", secret_id,
+    result = run_gcloud(
+        ["secrets", "describe", secret_id,
          "--project", project_id,
          "--format", f"value(labels.{GAPP_SOLUTION_LABEL})"],
         capture_output=True, text=True,
@@ -313,8 +314,8 @@ def list_secrets_by_label(project_id: str, solution_name: str) -> list[dict]:
     properties this query was built for.
     """
     filter_expr = f"labels.{GAPP_SOLUTION_LABEL}={solution_name}"
-    result = subprocess.run(
-        ["gcloud", "secrets", "list",
+    result = run_gcloud(
+        ["secrets", "list",
          "--project", project_id,
          "--filter", filter_expr,
          "--format", "value(name)"],
@@ -493,8 +494,8 @@ def get_secret(name: str, plaintext: bool = False, solution: str | None = None) 
 
 
 def _read_secret_version(project_id: str, secret_id: str) -> str | None:
-    result = subprocess.run(
-        ["gcloud", "secrets", "versions", "access", "latest",
+    result = run_gcloud(
+        ["secrets", "versions", "access", "latest",
          "--secret", secret_id,
          "--project", project_id],
         capture_output=True,
@@ -519,8 +520,8 @@ def _ensure_secret(project_id: str, secret_id: str, solution_name: str) -> str:
     """
     from gapp import __version__
 
-    describe = subprocess.run(
-        ["gcloud", "secrets", "describe", secret_id,
+    describe = run_gcloud(
+        ["secrets", "describe", secret_id,
          "--project", project_id,
          "--format", f"value(labels.{GAPP_SOLUTION_LABEL})"],
         capture_output=True, text=True,
@@ -541,8 +542,8 @@ def _ensure_secret(project_id: str, secret_id: str, solution_name: str) -> str:
         )
 
     label_arg = f"{GAPP_SOLUTION_LABEL}={solution_name}"
-    result = subprocess.run(
-        ["gcloud", "secrets", "create", secret_id,
+    result = run_gcloud(
+        ["secrets", "create", secret_id,
          "--replication-policy", "automatic",
          "--labels", label_arg,
          "--project", project_id],
@@ -554,8 +555,8 @@ def _ensure_secret(project_id: str, secret_id: str, solution_name: str) -> str:
 
 
 def _add_secret_version(project_id: str, secret_id: str, value: str) -> None:
-    result = subprocess.run(
-        ["gcloud", "secrets", "versions", "add", secret_id,
+    result = run_gcloud(
+        ["secrets", "versions", "add", secret_id,
          "--data-file=-",
          "--project", project_id],
         input=value,

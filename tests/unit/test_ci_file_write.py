@@ -1,5 +1,5 @@
-"""The CI workflow caller is written through the GitHub Contents API, never
-by cloning, committing, or pushing on the operator's machine."""
+"""gapp's files in the CI repo are written through the GitHub Contents API,
+never by cloning, committing, or pushing on the operator's machine."""
 
 import base64
 import json
@@ -9,7 +9,8 @@ import pytest
 
 from gapp.admin.sdk import ci as ci_mod
 
-CONTENT = "name: Deploy demo\n'on': {}\n"
+PATH = ".github/workflows/gapp-deploy.yml"
+CONTENT = "name: Deploy a gapp solution\n'on': {}\n"
 
 
 class _Result:
@@ -36,12 +37,12 @@ def _runner(calls, existing=None, put_rc=0):
 def test_creates_file_when_missing(monkeypatch):
     calls = []
     monkeypatch.setattr(subprocess, "run", _runner(calls, existing=None))
-    assert ci_mod._write_workflow_to_ci_repo("acme/ci", "demo", CONTENT) == "pushed"
+    assert ci_mod._write_ci_file("acme/ci", PATH, CONTENT, "Install gapp workflow") == "created"
     put_cmd, put_kwargs = calls[-1]
-    assert put_cmd[2:5] == ["-X", "PUT", "repos/acme/ci/contents/.github/workflows/demo.yml"]
+    assert put_cmd[2:5] == ["-X", "PUT", f"repos/acme/ci/contents/{PATH}"]
     payload = json.loads(put_kwargs["input"])
     assert base64.b64decode(payload["content"]).decode() == CONTENT
-    assert payload["message"] == "Add deploy workflow for demo"
+    assert payload["message"] == "Install gapp workflow"
     assert "sha" not in payload
 
 
@@ -49,10 +50,9 @@ def test_updates_file_when_content_differs(monkeypatch):
     calls = []
     existing = {"sha": "abc123", "content": base64.b64encode(b"old\n").decode()}
     monkeypatch.setattr(subprocess, "run", _runner(calls, existing=existing))
-    assert ci_mod._write_workflow_to_ci_repo("acme/ci", "demo", CONTENT) == "updated"
+    assert ci_mod._write_ci_file("acme/ci", PATH, CONTENT, "Update") == "updated"
     payload = json.loads(calls[-1][1]["input"])
     assert payload["sha"] == "abc123"
-    assert payload["message"] == "Update deploy workflow for demo"
 
 
 def test_unchanged_file_makes_no_write(monkeypatch):
@@ -61,11 +61,11 @@ def test_unchanged_file_makes_no_write(monkeypatch):
     wrapped = "\n".join(base64.b64encode(CONTENT.encode()).decode()[i:i + 60] for i in range(0, 200, 60))
     existing = {"sha": "abc123", "content": wrapped}
     monkeypatch.setattr(subprocess, "run", _runner(calls, existing=existing))
-    assert ci_mod._write_workflow_to_ci_repo("acme/ci", "demo", CONTENT) == "unchanged"
+    assert ci_mod._write_ci_file("acme/ci", PATH, CONTENT, "Update") == "unchanged"
     assert len(calls) == 1 and "PUT" not in calls[0][0]
 
 
 def test_write_failure_is_actionable(monkeypatch):
     monkeypatch.setattr(subprocess, "run", _runner([], existing=None, put_rc=1))
-    with pytest.raises(RuntimeError, match="Failed to write .github/workflows/demo.yml to acme/ci"):
-        ci_mod._write_workflow_to_ci_repo("acme/ci", "demo", CONTENT)
+    with pytest.raises(RuntimeError, match=f"Failed to write {PATH} to acme/ci"):
+        ci_mod._write_ci_file("acme/ci", PATH, CONTENT, "Install")

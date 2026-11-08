@@ -1,23 +1,27 @@
 # Reusable workflow for deploying gapp solutions via GitHub Actions + WIF.
 #
 # This workflow is called from an operator's private CI repo, not from
-# the solution repo itself. The operator's workflow passes the solution
-# repo, ref, and GCP project identity as inputs.
+# the solution repo itself. The usual caller is the generic deploy
+# workflow `gapp ci init` installs there (gapp/templates/ci/gapp-deploy.yml),
+# which looks the solution up in the CI repo's gapp/solutions.yaml and
+# passes its repo, project, domain and gapp ref. Any workflow can call it
+# the same way:
 #
-# Example caller workflow (in operator's CI repo):
-#
-#   on:
-#     workflow_dispatch:
-#       inputs:
-#         ref:
-#           description: 'Version/tag/SHA to deploy'
-#           default: 'main'
 #   jobs:
 #     deploy:
-#       uses: <gapp-owner>/gapp/.github/workflows/deploy.yml@<pinned-sha>
+#       uses: <gapp-owner>/gapp/.github/workflows/deploy.yml@<pinned-ref>
+#       permissions:
+#         id-token: write
+#         contents: read
 #       with:
 #         solution-repo: <owner>/example-app
 #         ref: ${{ inputs.ref }}
+#         # The usual form: the job runs in the CI repo's GitHub Environment
+#         # named after the project id and reads GAPP_WIF_PROVIDER and
+#         # GAPP_DEPLOY_SERVICE_ACCOUNT from it (recorded by the first
+#         # `gapp ci setup` on the project).
+#         environment: my-gcp-project
+#         # Or spell the identity out (no Environment):
 #         project-id: my-gcp-project
 #         project-number: '123456789012'
 #         # Optional scalar overlays (currently: domain). Keeps deployment-
@@ -27,7 +31,7 @@
 #         # Private solution repo only: the GitHub App installed on the
 #         # solution repo's owner, whose one-hour token clones the repo.
 #         # The id is an Actions variable and the key an Actions secret
-#         # of the CI repo; `gapp ci setup` writes both lines.
+#         # of the CI repo.
 #         solution-repo-app-id: ${{ vars.HOSTING_GITHUB_APP_ID }}
 #       secrets:
 #         solution-repo-app-private-key: ${{ secrets.HOSTING_GITHUB_APP_PRIVATE_KEY }}
@@ -47,6 +51,19 @@ on:
           checkout.
         required: false
     inputs:
+      environment:
+        description: >-
+          Name of a GitHub Environment in the caller (CI) repo, normally
+          the GCP project id. The first `gapp ci setup` on a project
+          records its deploy identity there as the Environment variables
+          `GAPP_WIF_PROVIDER` and `GAPP_DEPLOY_SERVICE_ACCOUNT`; when this
+          input is set the job runs in that Environment and uses those
+          two values, so the caller carries no per-project literals.
+          Leave empty to pass the identity through `project-id` and
+          `project-number` (or the deprecated explicit inputs) instead.
+        required: false
+        default: ''
+        type: string
       solution-repo-app-id:
         description: >-
           Id of the GitHub App that may read the solution repo. When
@@ -153,6 +170,11 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    # A caller job cannot declare an environment on a reusable-workflow
+    # call, so the called job declares it from the input. The Environment
+    # belongs to the caller repo, which is where its variables are read
+    # from. Empty means no environment.
+    environment: ${{ inputs.environment }}
     permissions:
       id-token: write
       contents: read
@@ -225,14 +247,15 @@ jobs:
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
-          # Prefer the explicit DEPRECATED input when supplied (v3 back-
-          # compat path); otherwise derive from `project-number` using
-          # gapp's convention. v4 will remove the explicit fallback.
-          workload_identity_provider: ${{ inputs.workload-identity-provider || format('projects/{0}/locations/global/workloadIdentityPools/github/providers/github', inputs.project-number) }}
-          # Prefer the explicit DEPRECATED input when supplied (v3 back-
-          # compat path); otherwise derive from `project-id` using
-          # gapp's convention. v4 will remove the explicit fallback.
-          service_account: ${{ inputs.service-account || format('gapp-deploy@{0}.iam.gserviceaccount.com', inputs.project-id) }}
+          # Resolution order: the explicit DEPRECATED input (v3 back-compat);
+          # then the Environment variable recorded by the first `gapp ci
+          # setup` on the project (set when `environment` names a CI-repo
+          # Environment); then the value derived from `project-number` by
+          # gapp's convention.
+          workload_identity_provider: ${{ inputs.workload-identity-provider || vars.GAPP_WIF_PROVIDER || format('projects/{0}/locations/global/workloadIdentityPools/github/providers/github', inputs.project-number) }}
+          # Same order: explicit DEPRECATED input, then the Environment
+          # variable, then derived from `project-id`.
+          service_account: ${{ inputs.service-account || vars.GAPP_DEPLOY_SERVICE_ACCOUNT || format('gapp-deploy@{0}.iam.gserviceaccount.com', inputs.project-id) }}
 
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v2

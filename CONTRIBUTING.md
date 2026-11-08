@@ -444,12 +444,14 @@ When adding new operations, never reach for an unfiltered list of project-wide r
 ### 16. gapp Is Not a Git Client for the Operator's Repos
 
 gapp never clones, commits to, or pushes an operator's repository on their
-behalf. Generated files gapp owns (the CI workflow callers) are written
-through the GitHub API as config-store updates; anything a human authors
-goes through the operator's own commit process and hooks. A tool that
-commits in the operator's name with hooks disabled is defeating controls
-the operator chose. See docs/CI.md, "Why the workflow file is written
-through the API, not git."
+behalf. Generated files gapp owns (the two CI workflows and the solutions
+data file) are written through the GitHub API as config-store updates, by
+`ci init` from the operator's machine and by the register workflow's own
+token from the runner; anything a human authors goes through the
+operator's own commit process and hooks. A tool that commits in the
+operator's name with hooks disabled is defeating controls the operator
+chose. See docs/CI.md, "Why gapp's files are written through the API, not
+git."
 
 ## MCP Admin Server
 
@@ -531,6 +533,13 @@ string. Two derived locations track it:
 A release is one local prep command plus two publish steps. The local
 prep is automated via `scripts/release.py` so the version files can
 never drift and the test suite is never skipped.
+
+#### 0. Changelog
+
+Move the entries under `## Unreleased` in `CHANGELOG.md` to a `## X.Y.Z`
+heading and commit that with the last change going into the release (or
+on its own), so the version bump below lands on a changelog that already
+names the version.
 
 #### 1. Local prep (one command)
 

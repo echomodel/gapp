@@ -1,0 +1,105 @@
+# Generic deploy workflow for every gapp solution registered in this
+# repository. Installed and kept current by `gapp ci init`; gapp owns this
+# file, so do not edit it. Dispatch it with a solution name (`gapp ci
+# trigger`, or "Run workflow" on the Actions tab): the first job reads the
+# solution's entry from gapp/solutions.yaml, and the second runs in the
+# GitHub Environment named after the entry's project and calls gapp's
+# reusable deploy workflow with the entry's values. The Environment holds
+# the project's deploy identity (GAPP_WIF_PROVIDER and
+# GAPP_DEPLOY_SERVICE_ACCOUNT); a private solution repo is cloned with the
+# hosting app whose id and key are this repository's HOSTING_GITHUB_APP_ID
+# variable and HOSTING_GITHUB_APP_PRIVATE_KEY secret.
+
+name: Deploy a gapp solution
+
+on:
+  workflow_dispatch:
+    inputs:
+      solution:
+        description: Solution to deploy (an entry in gapp/solutions.yaml)
+        required: true
+        type: string
+      ref:
+        description: Git ref of the solution repo to deploy (commit, tag, or branch)
+        required: false
+        default: main
+        type: string
+
+permissions: {}
+
+jobs:
+  resolve:
+    name: Look up the solution
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      repo: ${{ steps.entry.outputs.repo }}
+      project: ${{ steps.entry.outputs.project }}
+      domain: ${{ steps.entry.outputs.domain }}
+      gapp_ref: ${{ steps.entry.outputs.gapp_ref }}
+      app_id: ${{ steps.entry.outputs.app_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: gapp/solutions.yaml
+          sparse-checkout-cone-mode: false
+
+      - name: Read the entry
+        id: entry
+        env:
+          SOLUTION: ${{ inputs.solution }}
+          APP_ID: ${{ vars.HOSTING_GITHUB_APP_ID }}
+          GH_TOKEN: ${{ github.token }}
+          DATA_FILE: gapp/solutions.yaml
+        run: |
+          set -euo pipefail
+          # The Go yq pre-installed on GitHub's Ubuntu runners. strenv() reads
+          # the input from the environment, so it is never interpolated here.
+          count="$(yq '[.solutions[] | select(.name == strenv(SOLUTION))] | length' "$DATA_FILE")"
+          if [ "$count" != "1" ]; then
+            echo "gapp-deploy: '$SOLUTION' is not registered in $DATA_FILE; register it with gapp ci setup first."
+            exit 1
+          fi
+          entry='.solutions[] | select(.name == strenv(SOLUTION))'
+          repo="$(yq "$entry | .repo" "$DATA_FILE")"
+          project="$(yq "$entry | .project" "$DATA_FILE")"
+          domain="$(yq "$entry | .domain // \"\"" "$DATA_FILE")"
+          gapp_ref="$(yq "$entry | .gapp_ref // \"\"" "$DATA_FILE")"
+          # A public solution repo is cloned with the run's own token. Anything
+          # the token cannot read (private, or missing) needs the hosting app.
+          app_id=""
+          if [ "$(gh api "repos/$repo" --jq .private 2>/dev/null || echo unreadable)" != "false" ]; then
+            if [ -z "$APP_ID" ]; then
+              echo "gapp-deploy: $repo is not readable with the run's token (private, or does not exist) and the variable HOSTING_GITHUB_APP_ID is not set in this repository."
+              exit 1
+            fi
+            app_id="$APP_ID"
+          fi
+          {
+            echo "repo=$repo"
+            echo "project=$project"
+            echo "domain=$domain"
+            echo "gapp_ref=$gapp_ref"
+            echo "app_id=$app_id"
+          } >> "$GITHUB_OUTPUT"
+          echo "gapp-deploy: $SOLUTION -> $repo on project $project${domain:+, domain $domain}"
+
+  deploy:
+    name: Deploy
+    needs: resolve
+    permissions:
+      id-token: write
+      contents: read
+    uses: __GAPP_REPO__/.github/workflows/deploy.yml@__GAPP_REF__
+    with:
+      solution-repo: ${{ needs.resolve.outputs.repo }}
+      ref: ${{ inputs.ref }}
+      environment: ${{ needs.resolve.outputs.project }}
+      gapp-repo: __GAPP_REPO__
+      gapp-ref: ${{ needs.resolve.outputs.gapp_ref || '__GAPP_REF__' }}
+      solution-name: ${{ inputs.solution }}
+      domain: ${{ needs.resolve.outputs.domain }}
+      solution-repo-app-id: ${{ needs.resolve.outputs.app_id }}
+    secrets:
+      solution-repo-app-private-key: ${{ secrets.HOSTING_GITHUB_APP_PRIVATE_KEY }}

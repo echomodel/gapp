@@ -12,15 +12,15 @@ This ties the operator to their laptop. You can't deploy from your phone, from C
 
 ## Core Philosophy: Workstation Once, Then Never
 
-The operator's local machine is needed exactly once — to run `gapp setup` and `gapp ci setup`, which require personal GCP and GitHub credentials. These are bootstrap commands that establish trust relationships (WIF, IAM bindings) and push configuration (workflow files). After that, the operator's workstation is never needed again for deployments. All subsequent deploys happen through GitHub Actions, triggered from any device — GitHub UI, mobile, `gh` CLI, or an API call. The local machine becomes optional for the entire deployment lifecycle.
+The operator's local machine is needed exactly once per project — to run `gapp setup` and the first `gapp ci setup` on that project, which require personal GCP and GitHub credentials. These are bootstrap commands that establish trust relationships (WIF, IAM bindings) and record configuration (the project's Environment in the CI repo). After that, the operator's workstation is never needed again: registering further solutions and deploying both happen through GitHub Actions, triggered from any device — GitHub UI, mobile, `gh` CLI, an agent session, or an API call. The local machine becomes optional for the entire deployment lifecycle.
 
-This mirrors how `gapp setup` already works for GCP foundation — you run it once to establish the project, then `gapp deploy` works forever after. CI extends that pattern: run `gapp ci setup` once per solution, then deployments are fully automated and decoupled from any specific machine.
+This mirrors how `gapp setup` already works for GCP foundation — you run it once to establish the project, then `gapp deploy` works forever after. CI extends that pattern: `gapp ci init` once per operator, one `gapp ci setup` with gcloud per project, and from then on every `gapp ci setup` and `gapp ci trigger` is a workflow dispatch.
 
 Once CI is configured, tools like Claude.ai, Claude mobile app, Claude Code on the web, or GitHub's web editor can make code changes to a solution repo, push them, and trigger deployment to GCP — all without access to GCP credentials or a local development environment. The code change and the deployment are fully decoupled from the operator's machine. The operator's role shifts from "person who deploys" to "person who configured the deployment pipeline once."
 
 ### Why bootstrap stays on the workstation
 
-It would be possible to remove the one-time workstation step too: a hub project with a Workload Identity pool trusted by the operator's CI repo, a bootstrap service account granted admin roles at the folder level, and a workflow that runs `gapp setup` and `gapp ci setup` on a runner for any new project. That is deliberately not done. It replaces a per-project, deploy-only identity with one cross-project admin identity reachable from a GitHub repo, which contradicts goal 7 below (the deploy identity cannot set up new projects, access other projects, or escalate), and it saves only a few minutes per new solution. The per-solution `gapp setup` and `gapp ci setup` on a logged-in workstation are the intended cost of keeping each project's blast radius to itself. Revisit only if the bootstrap step itself can be scoped to one project at a time.
+It would be possible to remove the one-time workstation step too: a hub project with a Workload Identity pool trusted by the operator's CI repo, a bootstrap service account granted admin roles at the folder level, and a workflow that runs `gapp setup` and `gapp ci setup` on a runner for any new project. That is deliberately not done. It replaces a per-project, deploy-only identity with one cross-project admin identity reachable from a GitHub repo, which contradicts goal 7 below (the deploy identity cannot set up new projects, access other projects, or escalate), and it saves only a few minutes per new project. The per-project `gapp setup` and first `gapp ci setup` on a logged-in workstation are the intended cost of keeping each project's blast radius to itself. Revisit only if the bootstrap step itself can be scoped to one project at a time.
 
 ## Goals
 
@@ -65,13 +65,13 @@ This is the key insight. There are three layers:
 |-------|-----------|----------|
 | **Tool** (gapp) | Public product | CLI, Terraform modules, Dockerfile template, runtime wrapper, reusable GitHub workflows |
 | **Application** (solution repo) | Public product | Application code, `gapp.yaml` |
-| **Operator config** (private repo) | Private, per-operator | Project IDs, WIF references, workflow files that wire tool + application to infrastructure |
+| **Operator config** (private repo) | Private, per-operator | The solutions data file (solution → repo, project, domain), per-project Environments holding the WIF references, and gapp's two workflows that wire tool + application to infrastructure |
 
 The operator config is the only place where "deploy this specific solution to this specific GCP project" is expressed. This is the `<your-ci-repo>` repo pattern.
 
 ### The operator repo is not intellectual work
 
-The operator's private repo is an address book, not a product. It maps "solution X → GCP project Y." There's nothing reusable or interesting in it. The interesting parts are in gapp (the reusable workflow) and in the solution repos (the applications). The private repo is configuration — each file says something different (which solution, which project, which identity), so it's not boilerplate even though it looks repetitive.
+The operator's private repo is an address book, not a product. It maps "solution X → GCP project Y." There's nothing reusable or interesting in it. The interesting parts are in gapp (the reusable workflow) and in the solution repos (the applications). The private repo is configuration: one data file of entries, each saying something different (which solution, which repo, which project, which domain), plus two gapp-owned workflows that read and write that file.
 
 The repo could be public — project IDs aren't sensitive, and WIF means no credentials are stored. But it's not a product. It's a worked example at best.
 
@@ -138,43 +138,36 @@ gapp needs `gcloud` on the runner because it shells out to `gcloud` for everythi
 
 ## The Operator's Private Repo
 
-The operator's private repo (e.g., `<your-ci-repo>`) is minimal. Per solution, it contains one workflow file, written by `gapp ci setup`:
+The operator's private repo (e.g., `<your-ci-repo>`) holds three gapp-owned files, installed by `gapp ci init`:
+
+| File | Written by | Role |
+|---|---|---|
+| `.github/workflows/gapp-deploy.yml` | `gapp ci init` (installed and updated) | The one deploy workflow. Dispatched with a solution name and a ref. Its first job reads the solution's entry from the data file; its second job runs in the GitHub Environment named after the entry's project and calls gapp's reusable workflow with the entry's values. |
+| `.github/workflows/gapp-register.yml` | `gapp ci init` (installed and updated) | The register workflow. Dispatched by `gapp ci setup` with solution, repo, project and domain. Validates, then writes the entry into the data file with the run's own token. |
+| `gapp/solutions.yaml` | `gapp ci init` (created empty), then the register workflow | The data file: one entry per solution. |
+
+The data file looks like this:
 
 ```yaml
-# .github/workflows/example-app.yml
-on:
-  workflow_dispatch:
-    inputs:
-      ref:
-        description: 'Version/tag/SHA to deploy'
-        default: 'main'
-
-jobs:
-  deploy:
-    uses: <gapp-owner>/gapp/.github/workflows/deploy.yml@<gapp-release-tag>
-    with:
-      solution-repo: <owner>/example-app
-      ref: ${{ inputs.ref }}
-      workload-identity-provider: projects/123/locations/global/workloadIdentityPools/github/providers/github
-      service-account: gapp-deploy@<your-project-id>.iam.gserviceaccount.com
-      gapp-repo: <gapp-owner>/gapp
-      gapp-ref: <gapp-release-tag>
-      solution-name: example-app
-      # Written by `gapp ci setup --domain`; overrides gapp.yaml at deploy time:
-      domain: mcp.example.com
-      # Written only when the solution repo is private (see "Private solution repos"):
-      solution-repo-app-id: ${{ vars.HOSTING_GITHUB_APP_ID }}
-    secrets:
-      solution-repo-app-private-key: ${{ secrets.HOSTING_GITHUB_APP_PRIVATE_KEY }}
+# gapp/solutions.yaml
+solutions:
+  - name: example-app
+    repo: <owner>/example-app
+    project: <your-project-id>        # the GitHub Environment of the same name holds the deploy identity
+    domain: mcp.example.com           # optional; overrides gapp.yaml at deploy time
+  - name: other-app
+    repo: <owner>/other-app
+    project: <your-project-id>
+    gapp_ref: v3.9.1                  # optional; the deploy workflow's own pin otherwise
 ```
 
-That's it. No boilerplate. Each file says something different — which solution, which project, which identity, which domain. The reusable workflow in gapp handles all the logic.
+That's it. Each entry says something different — which solution, which repo, which project, which domain. Everything the entries have in common lives once: the reusable workflow in gapp handles the deploy logic, the generic deploy workflow pins the gapp release once for the whole repo, and the per-project identity lives in the project's Environment (see "Per-project deploy identity: the Environment record"). Nothing in the repo is hand-edited: `gapp ci init` writes the workflows and the register workflow writes the entries, so a re-run of `gapp ci init` after a gapp upgrade is safe (it rewrites only the two workflows and leaves the data file alone).
 
-Deployment values such as the domain belong here, not in the solution repo's `gapp.yaml`: the `domain:` input wins over `gapp.yaml` at deploy time, so a public solution repo can carry a placeholder or no domain at all. Set it with `gapp ci setup --domain`, never by hand-editing the workflow: `gapp ci setup` rewrites the whole file, and it keeps the existing `domain:` only because it reads it back from the file first. Passing `--domain ""` removes it.
+Deployment values such as the domain belong in the entry, not in the solution repo's `gapp.yaml`: the entry's domain wins over `gapp.yaml` at deploy time, so a public solution repo can carry a placeholder or no domain at all. Set it with `gapp ci setup --domain`; a re-run without `--domain` keeps the entry's domain, and `--domain ""` removes it.
 
 ### Why deployments are manual by default
 
-`gapp ci setup` generates workflows with `workflow_dispatch` only — no automatic triggers. This is deliberate:
+The deploy workflow has `workflow_dispatch` only — no automatic triggers. This is deliberate:
 
 1. **Operator controls when code reaches production.** A push to a solution repo is a code change, not a deployment decision. The operator explicitly decides when a new version is ready for their infrastructure via `gapp ci trigger` (which calls `workflow_dispatch`). This keeps deployments stable and intentional.
 
@@ -186,7 +179,7 @@ Deployment values such as the domain belong here, not in the solution repo's `ga
 
 ### Optional: auto-deploy via polling
 
-For operators who want automatic deployments, a scheduled poller workflow in the CI repo can check each solution repo for new commits and dispatch the corresponding workflow. This is the only approach that:
+For operators who want automatic deployments, a scheduled poller workflow in the CI repo can check each registered solution repo for new commits and dispatch the deploy workflow with that solution's name. This is the only approach that:
 
 - Requires no access to the solution repo (public API read only)
 - Keeps solution repos untouched
@@ -199,11 +192,11 @@ This is not yet implemented — see the GitHub issue for tracking.
 
 ### Trigger options (operator's choice)
 
-For operators who want to customize beyond the default, the workflow YAML in the CI repo is plain GitHub Actions configuration. The operator can add triggers:
+For operators who want to customize beyond the default, the CI repo is plain GitHub Actions configuration. gapp's two workflows are rewritten by `gapp ci init`, so customization goes in a workflow of the operator's own that dispatches `gapp-deploy.yml` (with `gh workflow run gapp-deploy.yml -f solution=<name> -f ref=<ref>`, or the `workflow_dispatch` API):
 
 - **`workflow_dispatch`** (default) — manual trigger from GitHub UI, `gh` CLI, API, or `gapp ci trigger`. Best for third-party solution repos you don't own.
-- **`schedule`** — poll for new versions on a cron. The only auto-deploy option that works without access to the solution repo.
-- **Push-triggered** — only possible if the operator owns the solution repo AND moves the workflow there (breaks the three-layer separation, not recommended).
+- **`schedule`** — poll for new versions on a cron and dispatch the deploy workflow. The only auto-deploy option that works without access to the solution repo.
+- **Push-triggered** — only possible if the operator owns the solution repo AND adds a workflow there that dispatches the deploy workflow in the CI repo (couples the solution repo to one operator, not recommended).
 - **`repository_dispatch`** — webhook-triggered, but requires a sender (webhook on solution repo = requires admin access, or external infrastructure).
 
 The default (`workflow_dispatch` only) is the right choice for most operators. It's the only trigger that works universally — regardless of who owns the solution repo, without infrastructure, and without compromising the product-level cleanliness of any public repo.
@@ -220,10 +213,23 @@ The default (`workflow_dispatch` only) is the right choice for most operators. I
 
 - **WIF scoping**: GCP only trusts the specific operator repo. Forks can't authenticate.
 - **Service account scoping**: The deploy service account has only the permissions needed for deployment (Cloud Build, Cloud Run, Artifact Registry, specific secrets). It cannot run `gapp setup` or access other GCP projects.
-- **Workflow pinning**: The operator pins the reusable workflow to a specific SHA (`@abc123`), not `@main`. This prevents a compromised gapp repo from injecting malicious code into the deploy pipeline.
-- **GitHub token scoping**: The run's built-in `GITHUB_TOKEN` can read only the CI repo it runs in. That is enough to clone a public solution repo. A private solution repo is cloned with a separate token minted at the start of the run from a GitHub App the operator installs on the solution repo's owner: limited to that one repo, read-only Contents, valid for an hour, and discarded with the run (see "Private solution repos"). Neither token can reach any other repo.
+- **Workflow pinning**: The deploy workflow pins gapp's reusable workflow to a release tag, written once per CI repo by `gapp ci init` and moved only by re-running it. Nothing in the data file can point a deploy at another copy of the reusable workflow.
+- **Who can dispatch**: Dispatching a workflow in the CI repo requires write access to the CI repo. So "who can deploy" and "who can register a solution" are both exactly "who can write to the operator repo", and GitHub's audit log records every dispatch with its actor and inputs.
+- **The owner allowlist**: The register workflow accepts a solution repo only when its owner is listed in the CI repo's repository variable `GAPP_ALLOWED_OWNERS` (comma-separated). Someone with write access to the CI repo cannot register, and therefore cannot deploy, code from an owner the operator has not named.
+- **Inputs never reach a shell unquoted**: Both workflows pass their inputs to shell steps through `env:` and validate their shape (solution name, `owner/name`, project id, host name, git ref) before using them; nothing from an input is interpolated into a `run:` script.
+- **The data file write is SHA-checked**: The register workflow writes `gapp/solutions.yaml` through the Contents API with the SHA it read at the start of the run, so two runs that race fail cleanly instead of overwriting each other.
+- **A solution binds to one project**: The register workflow refuses to move a registered solution to a different project; the operator removes the entry first. A dispatch cannot quietly redirect a deployment.
+- **New domain mappings need a verified owner**: Cloud Run maps a domain only for an identity that has verified it (or a parent) in Search Console. The deploy service account must be added there as a verified owner before a deploy can create a mapping for a new domain, so registering an entry with a new domain is not enough to take the domain; the Search Console step is the gate, and a redeploy that keeps the live domain needs nothing.
+- **GitHub token scoping**: The run's built-in `GITHUB_TOKEN` can read only the CI repo it runs in. That is enough to clone a public solution repo. A private solution repo is cloned with a separate token minted at the start of the run from a GitHub App the operator installs on the solution repo's owner: limited to that one repo, read-only Contents, valid for an hour, and discarded with the run (see "Private solution repos"). Neither token can reach any other repo. The register run's token has `contents: write` on the CI repo alone, which is what it needs to write the data file.
 - **No setup permissions in CI**: The deploy service account should NOT have permissions to run `gapp setup`, create new WIF pools, access other GCP projects, or enable APIs. It can only deploy — build containers, apply Terraform, read secrets. This prevents a compromised workflow from bootstrapping access to other resources.
 - **No runaway automation**: The reusable workflow in gapp runs `gapp deploy`, not `gapp setup`. Even if malicious code were injected into the workflow, the service account's scoped permissions prevent it from accessing other projects, creating new trust relationships, or escalating privileges via `gh` (since the GitHub token is also scoped).
+
+### Recommended operator protections
+
+Two GitHub settings on the CI repo turn the model above into enforced policy. gapp does not set them; they are the operator's.
+
+- **Branch protection with required pull requests on the default branch.** Then no one changes `gapp-deploy.yml`, `gapp-register.yml` or `gapp/solutions.yaml` by hand without a review. The register workflow's write and `gapp ci init`'s writes go through the same rule, so give them a way through: exempt the GitHub Actions app and the operator's own account in the rule's bypass list, or accept that each registration lands as a change the operator merges. The register run reports GitHub's refusal when the rule blocks it.
+- **A required reviewer on each per-project Environment.** The deploy job runs in the Environment named after the project, so an Environment protection rule turns every deploy to that project into a run that waits for a named human's approval. This is the one-click way to get "a person approves each production deploy" without any change to gapp or the workflows.
 
 ## gapp Ships a Reusable GitHub Workflow
 
@@ -236,7 +242,7 @@ The reusable workflow lives in the gapp repo at `.github/workflows/deploy.yml`. 
 5. Installs gapp
 6. Runs `gapp deploy --ref <ref>`
 
-This is a product asset, like the Dockerfile template or Terraform modules. The operator's workflow file is a thin caller that passes values.
+This is a product asset, like the Dockerfile template or Terraform modules. The operator repo's deploy workflow is a thin caller that looks a solution up and passes its values.
 
 GitHub natively supports this via [reusable workflows](https://docs.github.com/en/actions/using-workflows/reusing-workflows). The called workflow declares `on: workflow_call` with inputs, and the caller uses `uses: owner/repo/.github/workflows/file.yml@ref`.
 
@@ -268,13 +274,14 @@ A private solution repo is supported. The principle "public repos must not depen
    rm <downloaded-key>.pem
    ```
 
-`HOSTING_GITHUB_APP_ID` and `HOSTING_GITHUB_APP_PRIVATE_KEY` are gapp's default names. `gapp ci setup --app-id-var NAME --app-key-secret NAME` writes other names into the workflow.
+`HOSTING_GITHUB_APP_ID` and `HOSTING_GITHUB_APP_PRIVATE_KEY` are fixed names, like `GITHUB_TOKEN`: the credentials belong to the CI repo, one pair per operator, and nothing about a solution could want different ones, so there is no option to rename them. `gapp ci init` checks for both and prints the two commands above when either is missing, so the operator learns about the step before the first private solution repo needs it; it never sets or overwrites them. A second credential pair, if one were ever needed, would be per solution-repo owner (a second organization with its own app), not per solution; that is not supported.
 
 **What gapp does with it.**
 
-- `gapp ci setup` reads the solution repo's visibility from the GitHub API. For a private repo it writes the two lines into the caller workflow (`solution-repo-app-id` from the Actions variable, `solution-repo-app-private-key` from the Actions secret), checks that the variable and secret exist in the CI repo, and returns a `next_step` naming the missing one. The workflow is written either way; only the trigger has to wait.
-- `gapp ci status` reports the solution repo's visibility, the variable and secret the workflow names, and whether each exists in the CI repo. A workflow written before this feature, for a repo that is now private, gets `next_step: ci setup`.
-- `gapp ci trigger` refuses up front, with the same `next_step`, for a private repo whose workflow lacks the app inputs or whose CI repo lacks the variable or secret, instead of dispatching a run that fails at checkout.
+- `gapp ci init` reports whether the CI repo holds the variable and secret and, when either is missing, returns the two `gh` commands as `next_step`, noting that only private solution repos need them. Where the Actions variables and secrets API is not reachable from the machine, the check is reported as not performed; the register and deploy runs perform it.
+- The register workflow checks that the solution repo is reachable: public (readable with the run's token), or otherwise with both the variable and the secret present in the CI repo. A private repo without them is refused with the two names. `gapp ci setup` makes the same check before dispatching where it can read the Actions API, and reports it as not checked where it cannot.
+- The deploy workflow's first job reads the solution repo's visibility at run time. A repo the run's token cannot read gets the hosting app's id passed to the reusable workflow, which mints the token and clones with it; a public repo is cloned with the run's own token. No per-solution flag records visibility, so a repo that turns private later keeps deploying once the app covers it.
+- `gapp ci status` reports the solution repo's visibility and whether the variable and secret exist in the CI repo. `gapp ci trigger` refuses up front, with the same `next_step`, for a private repo whose CI repo lacks the variable or secret, instead of dispatching a run that fails at checkout.
 
 ### GitHub Enterprise compatibility
 
@@ -303,27 +310,30 @@ gapp init                                        # scaffold solution (existing)
 gapp setup <project-id>                           # GCP foundation only (unchanged)
 gapp secret set <name>                            # prerequisites (existing)
 gapp deploy                                       # local deploy, still works (existing)
-gapp ci init <repo>                               # optional: designate CI repo (once per operator)
-gapp ci setup <repo>                              # optional: wire solution for CI (once per solution)
+gapp ci init <repo>                               # optional: designate the CI repo and install gapp's files (once per operator)
+gapp ci setup --project <id>                      # optional: register a solution (once per solution)
+gapp ci trigger                                   # optional: deploy a registered solution
 gapp ci status                                    # optional: check CI state
 ```
 
 `gapp setup` is unchanged — pure GCP foundation (APIs, bucket, label).
 
-`gapp ci` is a new command group that owns the entire CI concern, split into two phases:
+`gapp ci` is a command group that owns the entire CI concern:
 
 #### `gapp ci init <repo>`
 
-One-time setup per operator. Designates the CI repo — where deployment workflows live.
+One-time setup per operator. Designates the CI repo and installs gapp's files in it.
 
 The `<repo>` argument accepts a repo name or owner/name. If only a name is given, the owner defaults to the authenticated `gh` user. Examples: `<your-ci-repo>`, `myuser/<your-ci-repo>`.
 
 What it does:
-1. Writes the CI repo name to local XDG config (`~/.config/gapp/ci.yaml` or a `ci` section in `solutions.yaml`). This is the authoritative local setting.
-2. Tags the repo with a `gapp-ci` GitHub topic (for discoverability on other machines).
+1. Writes the CI repo name to local XDG config (`~/.config/gapp/ci.yaml`). This is the authoritative local setting.
+2. Tags the repo with a `gapp-ci` GitHub topic (for discoverability on other machines), creating the repo as private if it does not exist.
 3. Ensures exactly one repo is tagged for the authenticated `gh` user. If a repo with the topic already exists and the name doesn't match, it errors — one CI repo per operator.
+4. Installs `.github/workflows/gapp-deploy.yml` and `.github/workflows/gapp-register.yml` through the GitHub Contents API, pinned to the installed gapp's release tag, writing each only when missing or different (so re-running after a gapp upgrade updates them and re-running otherwise changes nothing); and creates `gapp/solutions.yaml` empty when missing, never touching it otherwise.
+5. Reports whether the CI repo holds the repository variable `GAPP_ALLOWED_OWNERS`, the Actions variable `HOSTING_GITHUB_APP_ID` and the Actions secret `HOSTING_GITHUB_APP_PRIVATE_KEY`, and returns the `gh variable set` / `gh secret set` commands for the missing ones as `next_step`. It reads, never writes, those values. `GAPP_ALLOWED_OWNERS` is needed before the first registration; the hosting app's pair only for private solution repos.
 
-**`--local-only`**: Skips the GitHub topic tagging. Only writes to XDG config. Useful when:
+**`--local-only`**: Skips everything on GitHub. Only writes to XDG config. Useful when:
 - You don't want to modify topics on the repo
 - You're in a GitHub organization or enterprise where topic management is restricted
 - You want to work without `gh` CLI configured
@@ -331,29 +341,24 @@ What it does:
 
 This is the prerequisite for all other `gapp ci` commands. It establishes "where do my deployment workflows live?" — locally via XDG config (always), and remotely via GitHub topic (optionally).
 
-Prerequisites: `gh` CLI authenticated (unless `--local-only`).
+Prerequisites: `gh` CLI authenticated with write access to the CI repo (unless `--local-only`). A machine whose GitHub access refuses API writes (some agent sessions) cannot install the files; `next_step` then names them and says to run `gapp ci init` from a machine that can.
 
-#### `gapp ci setup <repo>`
+#### `gapp ci setup --project <id>`
 
-Per-solution CI wiring. The `<repo>` argument is the solution repo to wire up — accepts repo name or owner/name. Since the solution repo may not be owned by the operator, owner/name is typical (e.g., `someuser/monarch-access`). If only a name is given, the owner defaults to the authenticated `gh` user.
+Per-solution registration. The solution is the current checkout's, or `--solution <name>`; its repo is read from the checkout's `origin` remote, or given as `--solution-repo <owner/name>` (owner/name is typical, since the solution repo may not be the operator's; a bare name defaults to the authenticated `gh` user).
 
-Does everything needed to deploy this solution via CI:
+What it does:
 
-1. Discovers the operator's CI repo from local XDG config (errors if `gapp ci init` hasn't been run)
-2. Reads the solution repo's visibility; a private repo gets the hosting
-   app's credentials wired in (see "Private solution repos")
-3. Reads the existing workflow file, if any, so its `domain:` survives a
-   re-run; `--domain <host>` sets or changes it, `--domain ""` removes it
-4. Creates WIF pool + provider in the GCP project (idempotent, first run only per project)
-5. Creates `gapp-deploy` service account with scoped permissions (idempotent, first run only per project)
-6. Adds IAM binding: CI repo can impersonate the deploy SA (idempotent)
-7. Generates workflow file for this solution with WIF references, project ID, solution repo, domain, and (private repo) app inputs baked in
-8. Writes the workflow file to the CI repo through the GitHub Contents API
-   (create or update by path; see "Why the workflow file is written through
-   the API, not git" below)
-9. For a private repo, checks that the CI repo holds the Actions variable and secret the workflow names, and returns a `next_step` naming any that is missing
+1. Discovers the operator's CI repo from local XDG config (errors if `gapp ci init` hasn't been run) and checks that it holds the register workflow (otherwise `next_step: gapp ci init`)
+2. Determines the project: `--project <id>`, or, when gcloud is available, the project found by the solution's label (the configured gapp account must be logged in); on a machine without gcloud and without `--project`, stops with `next_step` naming the flag
+3. **First-time project work**, only when the CI repo has no Environment named after the project (or, where the Actions variables API is readable, the Environment is missing a variable) and gcloud is available: verifies the project hosts the solution, creates the WIF pool and provider and the `gapp-deploy` service account (idempotent), adds the IAM binding (CI repo can impersonate the deploy SA), and records the deploy identity as the Environment (see "Per-project deploy identity: the Environment record"). On a machine without gcloud this case stops with `next_step` saying which machine to run it from; it never runs without gcloud.
+4. Reads the solution's existing entry, if any, so its domain survives a re-run; `--domain <host>` sets or changes it, `--domain ""` removes it
+5. Refuses up front what the register run would refuse, where this machine can already tell: the solution registered on a different project; a private solution repo whose hosting-app variable or secret is known to be missing; an owner not in `GAPP_ALLOWED_OWNERS`, where that variable is readable. Where the Actions API is not readable, those checks are reported as not performed and left to the run.
+6. Dispatches `gapp-register.yml` with `solution`, `solution-repo`, `project` and `domain`, waits for the run (`--no-watch` returns after the dispatch), and reports its conclusion and the lines it printed for the operator. A refused run's reason comes back as `next_step`.
 
-Prerequisites: `gapp ci init` completed, `gapp setup <project-id>` completed for this solution, `gh` and `gcloud` authenticated.
+Nothing is written through the GitHub API from this machine (except the Environment, in the first-time case); the register run writes the entry with its own token. So on an already-set-up project `gapp ci setup` needs only a `gh` that can dispatch workflows.
+
+Prerequisites: `gapp ci init` completed, `gapp setup <project-id>` completed for this solution, `gh` authenticated; `gcloud` authenticated as the configured account for the first setup on a project.
 
 #### Resource scoping decisions
 
@@ -363,57 +368,52 @@ Prerequisites: `gapp ci init` completed, `gapp setup <project-id>` completed for
 
 **IAM binding: one per operator repo.** This is the only repo-specific resource. It says "repo X can impersonate the deploy SA." Adding a binding is idempotent — adding the same one twice is a no-op.
 
-**Workflow file: one per solution.** Generated by `gapp ci setup` and written to the operator's CI repo through the GitHub API.
+**Workflows: two per CI repo.** The generic deploy workflow and the register workflow, installed by `gapp ci init`, shared by every solution.
 
-Steps 2-4 are idempotent and skip if already done.
+**Data file entry: one per solution.** Written by the register workflow.
 
-#### Why the workflow file is written through the API, not git
+#### Per-project deploy identity: the Environment record
 
-Earlier versions delivered the workflow file by cloning the CI repo to a
-temp directory, committing with hooks disabled, and pushing. That made gapp
-a git client acting as the operator on the operator's machine, and it broke
-on any machine with a pre-push gate: the commit carried none of the marks
-the gate required, the push was refused, and the temp clone was discarded,
-so the operator could not even repair the commit. Disabling hooks at commit
-time was itself the wrong instinct: an operator's hooks are a control they
-chose, and a tool has no business switching them off.
+A project's deploy identity is two values every solution on that project shares: the WIF provider resource path and the deploy service account email. They are recorded once, as a GitHub **Environment in the CI repo, named after the GCP project id**, holding two Environment variables:
 
-The workflow file is generated configuration, not authored content. Every
-value in it is already known to gapp (solution name and repo, project id
-and number, gapp release tag); there is no free-form text and, by gapp's
-secrets invariant, no credential can appear in it. Content of that kind
-belongs to the same class as the topic `gapp ci init` writes: a tool
-updating a config store. So gapp writes it the way it does every other
-GitHub operation, with one API call that creates or updates the file by
-path. GitHub makes the commit server-side; nothing on the operator's
-machine is cloned, committed, or pushed, and the operator's local git
-hooks are neither triggered nor bypassed, because no local git operation
-occurs. Re-runs are idempotent for free: the API takes the file's current
-SHA and either updates it or reports it unchanged.
+| Variable | Value |
+|---|---|
+| `GAPP_WIF_PROVIDER` | `projects/<project-number>/locations/global/workloadIdentityPools/github/providers/github` |
+| `GAPP_DEPLOY_SERVICE_ACCOUNT` | `gapp-deploy@<project-id>.iam.gserviceaccount.com` |
 
-What this deliberately does not cover: the operator's own content in the
-CI repo (notes, design records, anything a human wrote). That still goes
-through the operator's normal commit process and whatever scanning it
-carries. gapp never writes anything but its own generated files.
+- The first `gapp ci setup` on a project (gcloud required) creates or verifies the four GCP resources and writes the Environment through the GitHub API. Re-running is idempotent: unchanged values are left alone.
+- The deploy workflow's deploy job passes `environment: <project>` (from the solution's entry) to the reusable workflow. A job that calls a reusable workflow cannot declare an environment itself, so the reusable workflow's job does (`environment: ${{ inputs.environment }}`), and reads the two variables from that Environment of the caller repo. Nothing in the CI repo carries per-project literals.
+- The register workflow refuses a project whose Environment does not exist, so a solution can only be registered on a project that has been set up for CI. `gapp ci setup` makes the same check before dispatching, through the repo environments endpoint, which is readable wherever the repo is. The two variables are read through the Actions variables API only where that API is reachable; elsewhere they are reported as not checked from this machine, and the deploy run's auth step verifies them.
+- `gapp ci status` shows, per registered solution, whether its project's Environment exists, and `gapp ci trigger` refuses up front when it does not.
 
-In an environment where gapp has no GitHub transport (a cloud agent
-session where `gh` is not logged in), an agent with GitHub tools makes
-the same API call with the same rendered content. The GCP half of
-`ci setup` (pool, provider, service account, binding) is unaffected and
-still needs the operator's identity.
+#### Why gapp's files are written through the API, not git
+
+gapp is not a git client for the operator's repo. The two workflows and the data file are generated configuration, not authored content: every value in them is already known to gapp (the gapp release tag; a solution's name, repo, project and domain); there is no free-form text and, by gapp's secrets invariant, no credential can appear in them. Content of that kind belongs to the same class as the topic `gapp ci init` writes: a tool updating a config store. So they are written the way gapp does every other GitHub operation, with one API call that creates or updates the file by path. GitHub makes the commit server-side; nothing on the operator's machine is cloned, committed, or pushed, and the operator's local git hooks are neither triggered nor bypassed, because no local git operation occurs. Re-runs are idempotent for free: the API takes the file's current SHA and either updates it or reports it unchanged.
+
+Two writers use that path. `gapp ci init` writes the workflows and creates the data file from the operator's machine, which therefore needs a `gh` login that can write to the CI repo. The register workflow writes the data file's entries from the runner with the run's own token (`contents: write`), which is why registering a solution needs no API write from the machine that asks for it: a session behind a proxy that refuses GitHub API writes, or that has no gcloud identity, still completes `gapp ci setup` by dispatching the run. There is no separate verify or pre-flight workflow: the register run validates what it writes, and the deploy run verifies the credential (its first step) and the project (`gapp setup` on the runner).
+
+What this deliberately does not cover: the operator's own content in the CI repo (notes, design records, anything a human wrote). That still goes through the operator's normal commit process and whatever scanning it carries. gapp never writes anything but its own generated files.
 
 #### `gapp ci status`
 
-Shows the state of CI configuration. Discovers the CI repo from local config, then the `gapp-ci` topic using `gh`, then reports for the current solution:
+Shows the state of CI configuration. Discovers the CI repo from local config, then the `gapp-ci` topic using `gh`, then reports:
 
-- Which repo is the CI repo
-- Whether this solution has a workflow file
-- The solution repo the workflow deploys and whether it is private
-- The `domain:` the workflow passes, if any
-- For a private solution repo, the Actions variable and secret the workflow names and whether each exists in the CI repo
-- `next_step`, when a CI deploy would fail as things stand
+- Which repo is the CI repo, and whether it holds gapp's two workflows and the data file
+- Whether `GAPP_ALLOWED_OWNERS`, `HOSTING_GITHUB_APP_ID` and `HOSTING_GITHUB_APP_PRIVATE_KEY` exist (or that they could not be checked from this machine)
+- Every registered solution with its repo, project, domain, and whether the project's Environment exists
+- Solutions still deployed by a per-solution workflow in the CI repo (see "Migration")
+- For the current solution: whether it is registered, its repo's visibility, its domain, its project's Environment and the presence of the two variables, and for a private repo the hosting app's variable and secret
+- `next_step`, naming the gap when a CI deploy would fail as things stand
 
 The readiness check behind `gapp ci status` is the one `gapp ci trigger` runs before dispatching, so the two never disagree.
+
+#### `gapp ci trigger`
+
+Dispatches `gapp-deploy.yml` in the CI repo with `solution` (the current checkout's, or `--solution <name>`) and `ref`, and streams the run. Refuses up front when the solution is not registered, when its project's Environment is missing, or when a private solution repo's hosting-app variable or secret is known to be missing. A solution that is not registered but still has its own per-solution workflow is dispatched through that file, with a `next_step` to register it.
+
+#### Migration
+
+An operator repo written by earlier gapp releases holds one caller workflow per solution. Those keep working untouched: GitHub runs them as before, and `gapp ci trigger` dispatches them for a solution that has no entry yet. `gapp ci init` on such a repo adds the three gapp files beside them. Registering an existing solution with `gapp ci setup --project <id>` writes its entry (the register run sees no conflicting entry), after which `gapp ci trigger` uses the generic deploy workflow and the operator deletes the old file when convenient; `gapp ci status` lists the solutions still on their own workflow. The first `gapp ci setup` on each existing project, run with gcloud, creates the project's Environment.
 
 Future: `gapp ci logs`.
 
@@ -465,10 +465,10 @@ For the commands that already use a positional `name` argument (`status`, `mcp s
 
 ### Code changes
 
-1. **`gapp ci init` command** — designate and tag the operator's CI repo, write to XDG config
-2. **`gapp ci status` command** — discover CI repo, report configuration state (SDK reused by `ci setup`)
-3. **`gapp ci setup` command** — create WIF pool/provider/service account in GCP, add IAM binding, generate and push workflow file to CI repo
-4. **Reusable workflow** — `.github/workflows/deploy.yml` in gapp repo
+1. **`gapp ci init` command** — designate and tag the operator's CI repo, write to XDG config, install the two workflows and the data file
+2. **`gapp ci status` command** — discover CI repo, report configuration state (SDK reused by `ci trigger`)
+3. **`gapp ci setup` command** — first time per project: create WIF pool/provider/service account in GCP, add IAM binding, record the Environment; every time: dispatch the register workflow
+4. **Reusable workflow** — `.github/workflows/deploy.yml` in gapp repo, and the two operator-repo workflow templates under `gapp/templates/ci/`
 5. **`--solution` flag** — add to `deploy`, `setup`, `secrets *`, and `users *` (the commands that currently hardcode cwd)
 
 ### No changes needed
@@ -484,8 +484,8 @@ For the commands that already use a positional `name` argument (`status`, `mcp s
 The operator pattern is simple enough to be copy/paste documentation in gapp's README:
 
 1. Run `gapp setup <project-id>` (GCP foundation, same as always)
-2. Run `gapp ci init <your-repo-name>` (designate your CI repo, once per operator)
-3. Run `gapp ci setup --solution-repo <owner>/<repo> [--domain mcp.example.com]` (wire this solution for CI — creates WIF, SA, binding, workflow; a private solution repo also needs the hosting app from "Private solution repos")
-4. Done. Trigger deployments from GitHub UI, CLI, or API. Check with `gapp ci status`.
+2. Run `gapp ci init <your-repo-name>` (designate your CI repo and install gapp's files, once per operator), then set `GAPP_ALLOWED_OWNERS` with the command it prints
+3. Run `gapp ci setup --project <id> --solution-repo <owner>/<repo> [--domain mcp.example.com]` (register this solution). The first time on a project this needs gcloud and creates WIF, SA, binding and the project's Environment; every later solution on that project registers from any machine with `gh`. A private solution repo also needs the hosting app from "Private solution repos".
+4. Done. Trigger deployments from GitHub UI, CLI, or API with the solution's name. Check with `gapp ci status`.
 
-For someone else using your public solution repo: clone nothing, fork nothing. Copy the example workflow from gapp's docs into your own repo, fill in your project ID and WIF config, and you're running. Two public products, one private glue repo of your own.
+For someone else using your public solution repo: clone nothing, fork nothing. Run the same four steps against your own CI repo and project, and you're running. Two public products, one private glue repo of your own.
