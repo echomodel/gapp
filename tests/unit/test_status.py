@@ -225,8 +225,9 @@ def test_status_without_domain_leaves_domain_unset(tmp_path, monkeypatch, sdk):
 # -- auth failures are reported as auth failures, not as "not deployed" --
 
 
-def test_status_surfaces_cloud_access_errors(tmp_path, monkeypatch, sdk):
-    """An expired login during discovery must not come back as next_step=setup."""
+def test_status_without_a_usable_identity_is_an_outcome_not_a_crash(tmp_path, monkeypatch, sdk):
+    """No GCP identity: status says so and names the login command. It is
+    never reported as "not deployed" (next_step=setup), and it never raises."""
     from gapp.admin.sdk.cloud.base import CloudAccessError
 
     repo = tmp_path / "app"
@@ -236,11 +237,23 @@ def test_status_surfaces_cloud_access_errors(tmp_path, monkeypatch, sdk):
     monkeypatch.chdir(repo)
 
     def failing_list(*a, **kw):
-        raise CloudAccessError("Not authorized to list projects (HTTP 401): re-authenticate")
+        raise CloudAccessError("Could not list projects (gcloud exit 1): UNAUTHENTICATED")
 
     sdk.provider.list_projects = failing_list
-    with pytest.raises(CloudAccessError, match="re-authenticate"):
-        sdk.status()
+    res = sdk.status()
+    assert res.initialized is True and res.name == "my-app"
+    assert res.deployment.project is None and res.deployment.pending is True
+    assert res.next_step.action == "sign in"
+    assert "No Google Cloud identity this machine can use" in res.next_step.hint
+    assert "gcloud auth login test-user@example.com" in res.next_step.hint
+    assert "UNAUTHENTICATED" not in res.next_step.hint
+
+
+def test_status_uninitialized_carries_a_deployment_and_a_hint(tmp_path, monkeypatch, sdk):
+    monkeypatch.chdir(tmp_path)
+    res = sdk.status()
+    assert res.initialized is False and res.deployment is not None
+    assert "gapp init" in res.next_step.hint
 
 
 def test_resolve_with_explicit_project_surfaces_label_read_errors(sdk):

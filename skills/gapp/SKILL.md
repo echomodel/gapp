@@ -26,6 +26,11 @@ These hold in every phase, so keep them in mind before reading on.
 - gapp does not do auth, users, or tokens. That is the solution's
   own framework's job; point the user at that framework's docs.
 - One repo is one solution is one Cloud Run service.
+- Two fleet systems, one per solution: the root commands (direct,
+  Google Cloud identity, GCP labels) and `gapp ci` (CI, GitHub, the
+  CI repo). Neither reads the other's state; every command's
+  requirements are fixed by its name. Every `ci` result carries `ok`
+  and, when false, `next_step` with the exact step to relay.
 - Never put a credential into chat, a file in the repo, or a Cloud
   Run env var as a workaround. Never run an interactive login the
   user cannot complete from this machine.
@@ -56,7 +61,7 @@ results instead of text to parse. Hand off only commands that exist:
 the CLI and MCP columns in `references/tools.md` are the complete
 list. Triggering a CI deploy is the one operation with a third
 route: any GitHub tool that can dispatch a workflow and read the run
-does the same job as `gapp ci trigger`, which matters in sessions
+does the same job as `gapp ci deploy`, which matters in sessions
 where `gh` is not logged in but GitHub tools are.
 
 ## Step 0: probe before you plan
@@ -77,7 +82,7 @@ already know.
 | GitHub write access | `gh auth status`; or GitHub tools in this agent that can read repos and dispatch workflows | CI wiring, CI deploys |
 | Interactive login possible | a hint, not a verdict: `CLAUDE_CODE_REMOTE`, `CI`, or `CODESPACES` set usually means no browser; when unsure, ask the user | preparing this machine versus handing off |
 | Solution state | `gapp.yaml` exists; then `gapp status` when an identity exists, else read the file | which phase is next |
-| CI wired | `gapp ci status`, or the solution's entry present in the CI repo's `gapp/solutions.yaml` | whether deploys can go through Actions |
+| CI wired | `gapp ci status` (the CI system's own report; `gapp status` never mentions CI) | whether deploys can go through Actions |
 
 Then match what the next step needs against what you found. The
 needs table and the three outcomes (proceed; install missing tooling

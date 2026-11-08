@@ -11,6 +11,7 @@ not installed.
 import base64
 import json
 import os
+import pathlib
 import shutil
 import stat
 import subprocess
@@ -59,7 +60,7 @@ def test_register_workflow_takes_its_inputs_through_env_and_writes_with_contents
     job = doc["jobs"]["register"]
     assert job["permissions"] == {"contents": "write", "actions": "read"}
     assert job["env"]["SOLUTION"] == "${{ inputs.solution }}"
-    assert job["env"]["ALLOWED_OWNERS"] == "${{ vars.GAPP_ALLOWED_OWNERS }}"
+    assert job["env"]["ALLOWED_SOURCES"] == "${{ vars.GAPP_ALLOWED_SOURCES }}"
     assert job["env"]["APP_KEY_SET"] == "${{ secrets.HOSTING_GITHUB_APP_PRIVATE_KEY != '' }}"
     for step in job["steps"]:
         assert "${{" not in step["run"]
@@ -206,7 +207,7 @@ def _state(solutions="solutions: []\n", environments=("my-proj",), repos=None):
 
 REGISTER_ENV = {
     "SOLUTION": "my-app", "SOLUTION_REPO": "me/my-app", "PROJECT": "my-proj", "DOMAIN": "", "GAPP_REF": "",
-    "ALLOWED_OWNERS": "me,other-org", "APP_ID": "", "APP_KEY_SET": "false", "GH_TOKEN": "x",
+    "ALLOWED_SOURCES": "me,other-org", "APP_ID": "", "APP_KEY_SET": "false", "GH_TOKEN": "x",
 }
 
 
@@ -215,7 +216,8 @@ def test_register_adds_an_entry_with_a_sha_checked_write(tmp_path):
     runner = _Runner(tmp_path, _state())
     ok, log = runner.run_job(ci_mod.REGISTER_WORKFLOW, "register", {**REGISTER_ENV, "DOMAIN": "mcp.example.com"})
     assert ok, log
-    assert "gapp-register: added 'my-app' -> me/my-app on project 'my-proj', domain mcp.example.com" in log
+    assert "gapp-register: result=added" in log
+    assert "gapp-register: added 'my-app' -> me/my-app on project 'my-proj', domain mcp.example.com." in log
     state = runner.state
     assert yaml.safe_load(state["files"]["gapp/solutions.yaml"]["content"]) == {
         "solutions": [{"name": "my-app", "repo": "me/my-app", "project": "my-proj", "domain": "mcp.example.com"}],
@@ -234,7 +236,7 @@ def test_register_updates_an_entry_and_keeps_the_file_sorted(tmp_path):
     runner = _Runner(tmp_path, _state(solutions=existing))
     ok, log = runner.run_job(ci_mod.REGISTER_WORKFLOW, "register", REGISTER_ENV)
     assert ok, log
-    assert "gapp-register: updated 'my-app'" in log
+    assert "gapp-register: result=updated" in log and "gapp-register: updated 'my-app'" in log
     entries = yaml.safe_load(runner.state["files"]["gapp/solutions.yaml"]["content"])["solutions"]
     assert [e["name"] for e in entries] == ["my-app", "zeta"]
     assert "domain" not in entries[0]                      # an empty domain input removes it
@@ -246,24 +248,25 @@ def test_register_writes_nothing_when_the_entry_is_unchanged(tmp_path):
     runner = _Runner(tmp_path, _state(solutions=existing))
     ok, log = runner.run_job(ci_mod.REGISTER_WORKFLOW, "register", REGISTER_ENV)
     assert ok, log
-    assert "gapp-register: unchanged" in log
+    assert "gapp-register: result=unchanged" in log
     assert not [c for c in runner.state["calls"] if c["method"] == "PUT"]
 
 
 @needs_yq
 def test_register_refuses_an_unknown_owner(tmp_path):
     runner = _Runner(tmp_path, _state())
-    ok, log = runner.run_job(ci_mod.REGISTER_WORKFLOW, "register", {**REGISTER_ENV, "ALLOWED_OWNERS": "other-org"})
+    ok, log = runner.run_job(ci_mod.REGISTER_WORKFLOW, "register", {**REGISTER_ENV, "ALLOWED_SOURCES": "other-org"})
     assert not ok
-    assert "gapp-register: refused: owner 'me' is not in GAPP_ALLOWED_OWNERS (other-org)" in log
+    assert "gapp-register: result=source-owner-not-allowed" in log
+    assert "gapp-register: Source repos owned by me are not allowed to deploy through this CI repo; allow the owner with: gapp ci sources add me" in log
     assert runner.state["files"]["gapp/solutions.yaml"]["content"] == "solutions: []\n"
 
 
 @needs_yq
 def test_register_refuses_without_an_allowlist(tmp_path):
     runner = _Runner(tmp_path, _state())
-    ok, log = runner.run_job(ci_mod.REGISTER_WORKFLOW, "register", {**REGISTER_ENV, "ALLOWED_OWNERS": ""})
-    assert not ok and "GAPP_ALLOWED_OWNERS is not set" in log
+    ok, log = runner.run_job(ci_mod.REGISTER_WORKFLOW, "register", {**REGISTER_ENV, "ALLOWED_SOURCES": ""})
+    assert not ok and "gapp-register: result=source-owner-not-allowed" in log
 
 
 @needs_yq
@@ -271,7 +274,8 @@ def test_register_refuses_a_project_without_environment(tmp_path):
     runner = _Runner(tmp_path, _state(environments=()))
     ok, log = runner.run_job(ci_mod.REGISTER_WORKFLOW, "register", REGISTER_ENV)
     assert not ok
-    assert "gapp-register: refused: this repository has no Environment 'my-proj'" in log
+    assert "gapp-register: result=project-not-trusted" in log
+    assert "not yet trusted to deploy to GCP project my-proj" in log and "gapp ci project setup my-proj" in log
 
 
 @needs_yq
@@ -280,7 +284,8 @@ def test_register_refuses_a_conflicting_entry(tmp_path):
     runner = _Runner(tmp_path, _state(solutions=existing))
     ok, log = runner.run_job(ci_mod.REGISTER_WORKFLOW, "register", REGISTER_ENV)
     assert not ok
-    assert "gapp-register: refused: 'my-app' is already registered on project 'other-proj'" in log
+    assert "gapp-register: result=conflict" in log
+    assert "'my-app' is already registered on project 'other-proj'" in log
     assert not [c for c in runner.state["calls"] if c["method"] == "PUT"]
 
 
@@ -289,6 +294,7 @@ def test_register_refuses_an_unreadable_repo_without_the_hosting_app(tmp_path):
     runner = _Runner(tmp_path, _state(repos={}))
     ok, log = runner.run_job(ci_mod.REGISTER_WORKFLOW, "register", REGISTER_ENV)
     assert not ok
+    assert "gapp-register: result=repo-unreachable" in log
     assert "not readable with this run's token" in log and "HOSTING_GITHUB_APP_PRIVATE_KEY" in log
 
 
@@ -304,7 +310,7 @@ def test_register_accepts_a_private_repo_when_the_hosting_app_is_present(tmp_pat
 def test_register_refuses_malformed_inputs_before_touching_anything(tmp_path):
     runner = _Runner(tmp_path, _state())
     ok, log = runner.run_job(ci_mod.REGISTER_WORKFLOW, "register", {**REGISTER_ENV, "SOLUTION": "my app; rm -rf"})
-    assert not ok and "is not a valid solution name" in log
+    assert not ok and "gapp-register: result=invalid-input" in log and "is not a valid solution name" in log
     assert runner.state.get("calls", []) == []
 
 
@@ -320,7 +326,8 @@ def test_register_fails_cleanly_when_the_file_changed_during_the_run(tmp_path):
     gh.write_text(STUB_GH.replace('f["sha"] != fields.get("sha")', 'True'))
     ok, log = runner.run_job(ci_mod.REGISTER_WORKFLOW, "register", REGISTER_ENV)
     assert not ok
-    assert "the write to gapp/solutions.yaml was rejected" in log and "HTTP 409" in log
+    assert "gapp-register: result=write-rejected" in log
+    assert "the write to gapp/solutions.yaml was rejected by GitHub" in log and "HTTP 409" not in log
 
 
 DEPLOY_ENV = {"SOLUTION": "my-app", "APP_ID": "", "GH_TOKEN": "x", "DATA_FILE": "gapp/solutions.yaml"}
@@ -359,6 +366,37 @@ def test_deploy_refuses_an_unregistered_solution_and_a_private_repo_without_app(
     _with_data_file(tmp_path, "solutions:\n  - name: my-app\n    repo: me/my-app\n    project: my-proj\n")
     runner = _Runner(tmp_path, _state(repos={}))
     ok, log = runner.run_job(ci_mod.DEPLOY_WORKFLOW, "resolve", {**DEPLOY_ENV, "SOLUTION": "nope"})
-    assert not ok and "'nope' is not registered" in log
+    assert not ok and "'nope' is not registered" in log and "gapp ci setup --solution nope" in log
     ok, log = runner.run_job(ci_mod.DEPLOY_WORKFLOW, "resolve", DEPLOY_ENV)
-    assert not ok and "HOSTING_GITHUB_APP_ID is not set" in log
+    assert not ok and "HOSTING_GITHUB_APP_ID variable is not set" in log
+
+
+@needs_yq
+def test_deploy_refuses_a_project_without_environment_in_words(tmp_path):
+    _with_data_file(tmp_path, "solutions:\n  - name: my-app\n    repo: me/my-app\n    project: my-proj\n")
+    runner = _Runner(tmp_path, _state(environments=()))
+    ok, log = runner.run_job(ci_mod.DEPLOY_WORKFLOW, "resolve", DEPLOY_ENV)
+    assert not ok
+    assert "no Environment named 'my-proj'" in log and "gapp ci project setup my-proj" in log
+
+
+# -- the reusable workflow's first step names a missing deploy identity --
+
+
+def _identity_check_step():
+    doc = yaml.safe_load(pathlib.Path(".github/workflows/deploy.yml").read_text())
+    return next(s for s in doc["jobs"]["deploy"]["steps"] if s.get("name") == "Check the deploy identity")
+
+
+def test_reusable_workflow_checks_the_identity_first_and_names_the_missing_variable(tmp_path):
+    step = _identity_check_step()
+    assert step["if"].startswith("inputs.environment != ''")
+    env = {**os.environ, "ENVIRONMENT": "my-proj", "WIF_PROVIDER": "", "DEPLOY_SA": "sa"}
+    res = subprocess.run(["bash", "-c", step["run"]], env=env, capture_output=True, text=True)
+    assert res.returncode == 1
+    assert "no GAPP_WIF_PROVIDER variable" in res.stdout and "gapp ci project setup my-proj" in res.stdout
+    env.update(WIF_PROVIDER="", DEPLOY_SA="")
+    res = subprocess.run(["bash", "-c", step["run"]], env=env, capture_output=True, text=True)
+    assert "GAPP_WIF_PROVIDER and GAPP_DEPLOY_SERVICE_ACCOUNT" in res.stdout
+    env.update(WIF_PROVIDER="projects/1/x", DEPLOY_SA="sa")
+    assert subprocess.run(["bash", "-c", step["run"]], env=env, capture_output=True, text=True).returncode == 0

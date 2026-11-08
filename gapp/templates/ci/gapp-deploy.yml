@@ -1,7 +1,7 @@
 # Generic deploy workflow for every gapp solution registered in this
 # repository. Installed and kept current by `gapp ci init`; gapp owns this
 # file, so do not edit it. Dispatch it with a solution name (`gapp ci
-# trigger`, or "Run workflow" on the Actions tab): the first job reads the
+# deploy`, or "Run workflow" on the Actions tab): the first job reads the
 # solution's entry from gapp/solutions.yaml, and the second runs in the
 # GitHub Environment named after the entry's project and calls gapp's
 # reusable deploy workflow with the entry's values. The Environment holds
@@ -33,6 +33,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      actions: read
     outputs:
       repo: ${{ steps.entry.outputs.repo }}
       project: ${{ steps.entry.outputs.project }}
@@ -58,7 +59,7 @@ jobs:
           # the input from the environment, so it is never interpolated here.
           count="$(yq '[.solutions[] | select(.name == strenv(SOLUTION))] | length' "$DATA_FILE")"
           if [ "$count" != "1" ]; then
-            echo "gapp-deploy: '$SOLUTION' is not registered in $DATA_FILE; register it with gapp ci setup first."
+            echo "gapp-deploy: '$SOLUTION' is not registered in $DATA_FILE. Register it first: gapp ci setup --solution $SOLUTION --solution-repo <owner>/<repo> --project <project>"
             exit 1
           fi
           entry='.solutions[] | select(.name == strenv(SOLUTION))'
@@ -66,12 +67,18 @@ jobs:
           project="$(yq "$entry | .project" "$DATA_FILE")"
           domain="$(yq "$entry | .domain // \"\"" "$DATA_FILE")"
           gapp_ref="$(yq "$entry | .gapp_ref // \"\"" "$DATA_FILE")"
+          # The deploy job runs in the Environment named after the project; it
+          # must exist here, or the job cannot authenticate to GCP.
+          if ! gh api "repos/$GITHUB_REPOSITORY/environments/$project" --silent 2>/dev/null; then
+            echo "gapp-deploy: this CI repo has no Environment named '$project', so the deploy cannot authenticate to GCP project $project. Run: gapp ci project setup $project"
+            exit 1
+          fi
           # A public solution repo is cloned with the run's own token. Anything
           # the token cannot read (private, or missing) needs the hosting app.
           app_id=""
           if [ "$(gh api "repos/$repo" --jq .private 2>/dev/null || echo unreadable)" != "false" ]; then
             if [ -z "$APP_ID" ]; then
-              echo "gapp-deploy: $repo is not readable with the run's token (private, or does not exist) and the variable HOSTING_GITHUB_APP_ID is not set in this repository."
+              echo "gapp-deploy: $repo is not readable with the run's token (private, or it does not exist), and the hosting app's HOSTING_GITHUB_APP_ID variable is not set in this CI repo. For a private repo, store HOSTING_GITHUB_APP_ID and HOSTING_GITHUB_APP_PRIVATE_KEY (docs/CI.md, Private solution repos); otherwise check the repo name in $DATA_FILE."
               exit 1
             fi
             app_id="$APP_ID"

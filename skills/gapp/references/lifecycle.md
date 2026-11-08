@@ -79,9 +79,14 @@ Terraform in one blocking call, then returns the service URL. Use
 `--project <id>` to be explicit. The build is skipped when an image
 for the current commit already exists.
 
-**CI, recommended for ongoing use.** Set up once, then deploy from
-anywhere with GitHub access: the GitHub UI, a phone, a cloud agent.
-No terraform or gcloud on the deploying machine.
+**CI, recommended for ongoing use.** The CI system is the other
+fleet system: it needs GitHub, never a Google Cloud identity (one
+command excepted), and its record is the CI repo, not the project
+label. A solution is deployed by one system or the other; never mix
+them for one solution, and never expect `gapp status` to know about
+CI or `gapp ci status` to know about GCP. Set up once, then deploy
+from anywhere with GitHub access: the GitHub UI, a phone, a cloud
+agent. No terraform or gcloud on the deploying machine.
 
 1. `gapp ci init owner/ci-repo` designates a private CI repo (an
    address book of solution to project, not a product) and installs
@@ -89,34 +94,38 @@ No terraform or gcloud on the deploying machine.
    deploy workflow `gapp-deploy.yml`, the register workflow
    `gapp-register.yml`, and the data file `gapp/solutions.yaml`. Once
    per operator, from a machine whose `gh` can write to the repo;
-   re-run after a gapp upgrade to update the workflows. It also
-   reports the CI repo variable `GAPP_ALLOWED_OWNERS` (the GitHub
-   owners whose repos may be registered; the user sets it with the
-   printed `gh variable set` command) and the hosting app's pair
-   (below). Never hand-edit gapp's files.
-2. `gapp ci setup --solution <s> --solution-repo <owner>/<repo>
+   re-run after a gapp upgrade to update the workflows. Never
+   hand-edit gapp's files.
+2. `gapp ci project setup <project-id>` makes the CI repo trusted to
+   deploy to the project: it creates or confirms the Workload
+   Identity pool and provider and the `gapp-deploy` service account
+   (shared by every solution on the project), binds the pool to the
+   CI repo, and records them in the CI repo as a GitHub Environment
+   named after the project (`GAPP_WIF_PROVIDER`,
+   `GAPP_DEPLOY_SERVICE_ACCOUNT`), which the deploy job runs in. Once
+   per project, idempotent. **This is the one `ci` command that
+   touches GCP**: it needs gcloud signed in as an Owner of the project
+   and `gh` signed in as an admin of the CI repo, and it is the one
+   human step to hand off when this machine lacks them.
+3. `gapp ci sources add <owner>` allows repos owned by a GitHub owner
+   to deploy through the CI repo (the variable `GAPP_ALLOWED_SOURCES`).
+   Once per owner; needs `gh` with write access to the CI repo.
+4. `gapp ci setup --solution <s> --solution-repo <owner>/<repo>
    --project <project-id> [--domain mcp.example.com]` registers the
    solution: it dispatches the register workflow, which checks the
-   project's Environment, the owner allowlist, the repo's
+   project's Environment, the source allowlist, the repo's
    reachability and that no other project holds the solution, then
    writes the entry in `gapp/solutions.yaml` with its own token. So
-   **this needs only a `gh` that can dispatch workflows**: no gcloud,
-   no GitHub API write, from any machine, including this one.
+   **this needs only a `gh` that can dispatch workflows, and never
+   gcloud**: from any machine, including this one. `--project` is
+   required; the CI system never looks a project up in GCP. When the
+   project is not yet trusted, or the owner not yet allowed, the
+   command stops with a verbatim one-time message naming step 2 or
+   step 3 and repeating the command to run again; relay it as is.
    Deployment values go into the entry, never into the solution repo:
    `--domain` overrides `gapp.yaml` at deploy time, a re-run without
-   `--domain` keeps it, `--domain ""` removes it. The command reports
-   the run's conclusion and messages; a refusal names its reason.
-   The **first setup on a project** is the one exception: it needs
-   gcloud logged in as a project admin to create the Workload
-   Identity pool and provider and the `gapp-deploy` service account
-   (shared by every solution on the project), bind the pool to the CI
-   repo, and record them in the CI repo as a GitHub Environment named
-   after the project id (`GAPP_WIF_PROVIDER`,
-   `GAPP_DEPLOY_SERVICE_ACCOUNT`), which the deploy job runs in. On a
-   machine without gcloud that case stops and says which machine to
-   run it from; `gapp ci status` shows whether a project's Environment
-   exists.
-3. **Private solution repo.** The runner's built-in token can read
+   `--domain` keeps it, `--domain ""` removes it.
+5. **Private solution repo.** The runner's built-in token can read
    only the CI repo, so a private solution repo is cloned with a
    one-hour token from a GitHub App the user installs on the repo's
    owner (a browser step, `references/environment.md`). The deploy
@@ -124,33 +133,33 @@ No terraform or gcloud on the deploying machine.
    variable `HOSTING_GITHUB_APP_ID` and secret
    `HOSTING_GITHUB_APP_PRIVATE_KEY` (fixed names, one pair per CI
    repo, never renamed per solution). `gapp ci init` and `gapp ci
-   status` report them and print the commands to store them; `gapp ci
-   setup` and `gapp ci trigger` refuse while one is known to be
-   missing. A public solution repo needs none of this.
-4. `gapp ci trigger` dispatches the deploy workflow with the
+   status` report them and print the commands to store them; the
+   register and deploy runs name them in words when missing. A public
+   solution repo needs none of this.
+6. `gapp ci deploy` dispatches the deploy workflow with the
    solution's name and streams the run; it needs `gh` logged in. Any
    GitHub tool that can dispatch `gapp-deploy.yml` with `solution`
-   and `ref` and read the run does the same job.
+   and `ref` and read the run does the same job. An unregistered
+   solution is not deployed; the outcome names step 4.
 
 When you explain this to the user, say explicitly which parts are
-per operator, per project, and per solution, because it decides how
-much work a second solution is: `ci init` is once per operator; the
-pool, provider, `gapp-deploy` service account and Environment are
-per project and shared by every solution on it; only the entry in
-`gapp/solutions.yaml` is per solution. A second solution on an
-already-wired project costs one `ci setup` from any machine.
+per operator, per project, per source owner and per solution,
+because it decides how much work a second solution is: `ci init` is
+once per operator; `ci project setup` (pool, provider, `gapp-deploy`
+service account, Environment) is once per project and shared by
+every solution on it; `ci sources add` is once per GitHub owner;
+only `ci setup` is per solution, and it runs from any machine.
 
-`ci init` needs write access to the CI repo and the first `ci setup`
-on a project needs a project-admin identity, so those usually happen
-on the workstation once; everything else needs only a `gh` that can
-dispatch workflows. Every gcloud call these commands make runs as
+Every `gapp ci` command ends in a plain outcome: it did the thing, or
+`ok` is false and `next_step` says what stands in the way and the
+exact command. There are no stack traces or raw errors to interpret;
+relay the step. Every gcloud call `ci project setup` makes runs as
 the account from `gapp config account` when one is set; if that
-account has no login, they stop and name it rather than fall back
-to whatever account gcloud has active.
-Everything after is credential-free for the operator. A solution
-that still has its own per-solution workflow in the CI repo keeps
-deploying through it; `gapp ci status` lists such solutions, and
-registering one lets the user delete the old file.
+account has no login, it stops and names it rather than fall back to
+whatever account gcloud has active. A solution that still has its
+own per-solution workflow in the CI repo runs from the Actions tab;
+`gapp ci status` lists such solutions, and registering one lets the
+user delete the old file.
 
 Recommend CI whenever the user deploys from more than one machine,
 wants agents to deploy, does not want terraform locally, or wants

@@ -41,6 +41,7 @@ class FakeGitHub:
 
     def __init__(self):
         self.private = {}       # "owner/repo" -> bool
+        self.admin = {}         # "owner/repo" -> bool (gh login's admin permission; default True)
         self.files = {}         # ("owner/repo", path) -> content
         self.variables = {}     # ("owner/repo", NAME) -> value
         self.secrets = set()    # ("owner/repo", NAME)
@@ -60,6 +61,8 @@ class FakeGitHub:
         # inputs and returning (conclusion, log lines); the default behaves
         # like the real workflow on a repo whose checks all pass.
         self.register_outcome = None
+        # When set, every `gh workflow run` fails with this stderr.
+        self.dispatch_refusal = None
 
     # -- entry point --
 
@@ -84,6 +87,8 @@ class FakeGitHub:
             payload = json.loads(kwargs["input"]) if kwargs.get("input") else None
             if "/environments/" in endpoint:
                 return self._environment_write(method, endpoint, payload)
+            if "/actions/variables" in endpoint:
+                return self._variable_write(method, endpoint, payload)
             assert method == "PUT", f"unexpected method {method} for {endpoint}"
             return self._put(endpoint, payload)
         endpoint = cmd[2]
@@ -105,6 +110,8 @@ class FakeGitHub:
             if arg == "-f":
                 key, _, value = cmd[i + 1].partition("=")
                 inputs[key] = value
+        if self.dispatch_refusal:
+            return _Result(1, "", self.dispatch_refusal)
         if (repo, f".github/workflows/{workflow}") not in self.files:
             return _Result(1, "", f"could not find any workflows named {workflow}")
         self.dispatched.append((repo, workflow, inputs))
@@ -121,7 +128,7 @@ class FakeGitHub:
         if self.register_outcome is not None:
             conclusion, lines = self.register_outcome(inputs)
         else:
-            conclusion, lines = "success", [f"added '{inputs['solution']}' -> {inputs['solution-repo']} on project '{inputs['project']}'"]
+            conclusion, lines = "success", ["result=added", f"added '{inputs['solution']}' -> {inputs['solution-repo']} on project '{inputs['project']}'."]
             key = (repo, "gapp/solutions.yaml")
             self.files[key] = _registration(inputs, self.files.get(key, "solutions: []\n"))
         log = "\n".join(f"register\tWrite the entry\t2026-01-01T00:00:00Z gapp-register: {line}" for line in lines)
@@ -137,6 +144,27 @@ class FakeGitHub:
         if ".conclusion" in jq:
             return _Result(0, f"{run['conclusion']}\n")
         return _Result(0, json.dumps(run))
+
+    # -- repository variables --
+
+    def _variable_write(self, method, endpoint, payload):
+        parts = endpoint.split("/")
+        repo = "/".join(parts[1:3])
+        name = parts[5] if len(parts) > 5 else (payload or {}).get("name")
+        if method == "POST":
+            if (repo, name) in self.variables:
+                return _Result(1, "", "gh: Variable already exists (HTTP 409)")
+            self.variables[(repo, name)] = payload["value"]
+            return _Result(0, "")
+        if (repo, name) not in self.variables:
+            return _Result(1, "", "gh: Not Found (HTTP 404)")
+        if method == "PATCH":
+            self.variables[(repo, name)] = payload["value"]
+            return _Result(0, "")
+        if method == "DELETE":
+            del self.variables[(repo, name)]
+            return _Result(0, "")
+        raise AssertionError(f"unexpected method {method} for {endpoint}")
 
     # -- GitHub Environments and their variables --
 
@@ -189,6 +217,8 @@ class FakeGitHub:
         repo = "/".join(parts[1:3])
         rest = parts[3:]
         if not rest:
+            if "--jq" in cmd and cmd[cmd.index("--jq") + 1] == ".permissions.admin":
+                return _Result(0, "true\n" if self.admin.get(repo, True) else "false\n")
             if repo not in self.private:
                 return _Result(1, "", "gh: Not Found (HTTP 404)")
             if "--jq" in cmd and cmd[cmd.index("--jq") + 1] == ".private":

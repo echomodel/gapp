@@ -18,8 +18,8 @@
 #         ref: ${{ inputs.ref }}
 #         # The usual form: the job runs in the CI repo's GitHub Environment
 #         # named after the project id and reads GAPP_WIF_PROVIDER and
-#         # GAPP_DEPLOY_SERVICE_ACCOUNT from it (recorded by the first
-#         # `gapp ci setup` on the project).
+#         # GAPP_DEPLOY_SERVICE_ACCOUNT from it (recorded by
+#         # `gapp ci project setup <project>`).
 #         environment: my-gcp-project
 #         # Or spell the identity out (no Environment):
 #         project-id: my-gcp-project
@@ -54,8 +54,8 @@ on:
       environment:
         description: >-
           Name of a GitHub Environment in the caller (CI) repo, normally
-          the GCP project id. The first `gapp ci setup` on a project
-          records its deploy identity there as the Environment variables
+          the GCP project id. `gapp ci project setup <project>` records
+          the project's deploy identity there as the Environment variables
           `GAPP_WIF_PROVIDER` and `GAPP_DEPLOY_SERVICE_ACCOUNT`; when this
           input is set the job runs in that Environment and uses those
           two values, so the caller carries no per-project literals.
@@ -180,6 +180,24 @@ jobs:
       contents: read
 
     steps:
+      # When the caller names an Environment, the deploy identity must be in
+      # it. Say so in words before anything else runs, rather than letting
+      # the auth step fail on an empty value.
+      - name: Check the deploy identity
+        if: inputs.environment != '' && inputs.workload-identity-provider == '' && inputs.service-account == ''
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          WIF_PROVIDER: ${{ vars.GAPP_WIF_PROVIDER }}
+          DEPLOY_SA: ${{ vars.GAPP_DEPLOY_SERVICE_ACCOUNT }}
+        run: |
+          missing=""
+          [ -n "$WIF_PROVIDER" ] || missing="GAPP_WIF_PROVIDER"
+          [ -n "$DEPLOY_SA" ] || missing="${missing:+$missing and }GAPP_DEPLOY_SERVICE_ACCOUNT"
+          if [ -n "$missing" ]; then
+            echo "::error::The Environment '$ENVIRONMENT' of the CI repo has no $missing variable, so this run cannot authenticate to GCP. Run: gapp ci project setup $ENVIRONMENT"
+            exit 1
+          fi
+
       # Private solution repos: the run's GITHUB_TOKEN can read only the
       # CI repo, so a private solution repo fails at checkout with
       # "Repository not found". When the caller passes the hosting app's
@@ -248,10 +266,10 @@ jobs:
         uses: google-github-actions/auth@v2
         with:
           # Resolution order: the explicit DEPRECATED input (v3 back-compat);
-          # then the Environment variable recorded by the first `gapp ci
-          # setup` on the project (set when `environment` names a CI-repo
-          # Environment); then the value derived from `project-number` by
-          # gapp's convention.
+          # then the Environment variable recorded by `gapp ci project
+          # setup` (set when `environment` names a CI-repo Environment);
+          # then the value derived from `project-number` by gapp's
+          # convention.
           workload_identity_provider: ${{ inputs.workload-identity-provider || vars.GAPP_WIF_PROVIDER || format('projects/{0}/locations/global/workloadIdentityPools/github/providers/github', inputs.project-number) }}
           # Same order: explicit DEPRECATED input, then the Environment
           # variable, then derived from `project-id`.
