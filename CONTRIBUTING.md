@@ -544,12 +544,19 @@ names the version.
 #### 1. Local prep (one command)
 
 ```bash
-scripts/release.py X.Y.Z
+scripts/release.py X.Y.Z          # a release
+scripts/release.py X.Y.ZrcN       # a release candidate (PEP 440; tags as vX.Y.ZrcN)
 ```
 
+A release candidate is spelled the PEP 440 way, `X.Y.ZrcN`, because the
+tag is `v` plus the version string and `gapp ci init` pins the operator
+repo's workflows to exactly that tag; a tag spelled differently from
+`__version__` would leave the pin dangling. The changelog section for an
+rc is headed `## X.Y.ZrcN (pre-release of X.Y.Z)`.
+
 This script:
-- validates that `X.Y.Z` is strictly greater than the current
-  `__version__`,
+- validates that the new version is strictly greater than the current
+  `__version__` (an rc orders before its final release),
 - requires a clean working tree,
 - updates `gapp/__init__.py` (`pyproject.toml` auto-tracks via dynamic
   version),
