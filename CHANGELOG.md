@@ -5,38 +5,48 @@ source is `gapp/__init__.py`.
 
 ## Unreleased
 
-- `gapp ci setup` records each project's deploy identity in the CI repo as
-  a GitHub Environment named after the project id (`GAPP_WIF_PROVIDER`,
-  `GAPP_DEPLOY_SERVICE_ACCOUNT`), and every generated workflow deploys
-  through that Environment instead of carrying the two values as literals.
-  New `--project <id>` (`project=` on the MCP tool): with the Environment
-  already recorded, setup makes no GCP call, so a new solution on an
-  already-set-up project needs `gh` only. The reusable deploy workflow
-  gains an `environment` input and reads the two variables from it.
-  `--project` is refused when the CI repo already binds the solution to
-  a different project.
-- `gapp ci setup --out <path>` (`out=` on the MCP tool) writes the rendered
-  workflow to a file instead of through the GitHub API; the same happens
-  automatically, under gapp's cache directory, when the API refuses the
-  write, and `next_step` names the path to commit it to in the CI repo.
-  Checks a machine cannot perform (the Actions variables and secrets API
-  behind a restrictive proxy) are reported as not checked rather than
-  failed; the Environment's existence is read through the repo
-  environments endpoint.
-- `gapp ci status` reports the Environment a workflow deploys through and
-  whether its two variables exist; `gapp ci trigger` refuses when one is
-  missing.
-- The hosting GitHub App's credentials have fixed names in the CI repo:
-  Actions variable `HOSTING_GITHUB_APP_ID` and secret
-  `HOSTING_GITHUB_APP_PRIVATE_KEY`. The `--app-id-var` and
-  `--app-key-secret` options of `gapp ci setup` (and the matching MCP
-  parameters) are removed. `gapp ci init` reports whether the CI repo
-  holds them and prints the two commands to store them; it never sets
-  them.
+- The CI repo holds one generic deploy workflow
+  (`.github/workflows/gapp-deploy.yml`), one register workflow
+  (`.github/workflows/gapp-register.yml`) and the data file
+  `gapp/solutions.yaml`, all gapp-owned. `gapp ci init` installs them
+  through the GitHub API and updates the workflows when a new gapp release
+  changes them; the data file is created once and never overwritten. It
+  also reports whether the repo holds `GAPP_ALLOWED_OWNERS`,
+  `HOSTING_GITHUB_APP_ID` and `HOSTING_GITHUB_APP_PRIVATE_KEY`, with the
+  `gh` commands to set them; it never sets them.
+- `gapp ci setup --project <id> [--domain <d>]` registers a solution by
+  dispatching the register workflow and reporting the run's result
+  (`--no-watch` / `watch=False` returns after the dispatch). The run checks
+  the project's Environment, the owner allowlist, the repo's reachability
+  and that no other project holds the solution, then writes the entry
+  with its own token, SHA-checked. The machine running `ci setup` needs
+  neither gcloud nor a GitHub API write. Without `--project` the project
+  is found by label when gcloud is present; otherwise the command stops
+  and names the flag. `--out` is gone: nothing is rendered per solution
+  any more.
+- The first `gapp ci setup` on a project still needs gcloud: it creates
+  the Workload Identity pool, provider, deploy service account and binding
+  and records them in the CI repo as a GitHub Environment named after the
+  project id (`GAPP_WIF_PROVIDER`, `GAPP_DEPLOY_SERVICE_ACCOUNT`). The
+  deploy job runs in that Environment; the reusable deploy workflow gains
+  an `environment` input and reads the two variables from it. This never
+  runs from a machine without gcloud.
+- `gapp ci trigger` dispatches the generic deploy workflow with the
+  solution's name; a solution that still has its own per-solution
+  workflow is dispatched through that file, with a note to register it.
+- `gapp ci status` lists the registered solutions with project, domain
+  and whether each project's Environment exists, the three variables, the
+  gapp files, and solutions still on their own workflow; it names the gap.
+- The hosting GitHub App's credentials have fixed names in the CI repo.
+  The `--app-id-var` and `--app-key-secret` options of `gapp ci setup`
+  (and the matching MCP parameters) are removed.
 - Every gcloud call honours `gapp config account`: the provider, `gapp ci`
   and the secrets commands all run gcloud as the configured account, and
   the gcloud path of `gapp ci setup` stops by name when that account has
   no login instead of falling back to gcloud's active account.
+- Checks a machine cannot perform (the Actions variables and secrets API
+  behind a restrictive proxy) are reported as not checked rather than
+  failed; the register and deploy runs perform them.
 
 ## 3.8.0
 

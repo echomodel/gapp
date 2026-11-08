@@ -388,27 +388,28 @@ def ci_group():
     GitHub UI, a phone, a CI runner, an agent session):
 
     \b
-      gapp ci init <owner/repo>   once per operator: the private repo for workflows
-      gapp ci setup               once per solution: WIF pool, service account, workflow
-      gapp ci trigger             any time: dispatch the workflow at a ref
+      gapp ci init <owner/repo>   once per operator: installs gapp's workflows in the CI repo
+      gapp ci setup --project p   once per solution: registers it (dispatches the register workflow)
+      gapp ci trigger             any time: dispatch the deploy workflow at a ref
       gapp ci status              where you are in the above
 
-    Scope: the WIF pool, provider, and gapp-deploy service account are per
-    project and shared by every solution on it; the workflow file is per
-    solution. The runner authenticates with Workload Identity Federation,
-    so no key is stored anywhere. `ci init` and `ci setup` need a gcloud
-    login with project-admin rights and `gh` write access to the CI repo;
-    `ci trigger` needs only `gh`.
+    The CI repo holds one generic deploy workflow, one register workflow and
+    the data file gapp/solutions.yaml, all written by gapp. The runner
+    authenticates with Workload Identity Federation, so no key is stored
+    anywhere. `ci init` needs `gh` write access to the CI repo; the first
+    `ci setup` on a project needs a gcloud login with project-admin rights;
+    every other `ci setup` and every `ci trigger` needs only a `gh` that can
+    dispatch workflows.
     """
 
 
 @ci_group.command("status")
 @click.option("--solution", "-s", default=None, help="Solution name. Defaults to current directory.")
 def ci_status_cmd(solution):
-    """Show the CI repo and whether this solution has a deploy workflow.
+    """Show the CI repo, its gapp files and variables, the registered
+    solutions, and where this solution stands.
 
-    Both must be present before `gapp ci trigger` works; the output names
-    the next step.
+    The output names the next step when `gapp ci trigger` would fail.
     """
     from gapp.admin.sdk.ci import get_ci_status
     try:
@@ -416,8 +417,30 @@ def ci_status_cmd(solution):
     except RuntimeError as e:
         click.echo(f"  Error: {e}", err=True)
         raise SystemExit(1)
+
+    def _state(present):
+        return "present" if present else "missing" if present is False else "unverified"
+
     click.echo(f"CI repo:   {result['repo'] or '(none — run gapp ci init <repo>)'}")
-    click.echo(f"Workflow:  {'present' if result['workflow'] else 'missing'}")
+    if files := result.get("files"):
+        click.echo("Files:     " + ", ".join(f"{p.rsplit('/', 1)[-1]} {'present' if ok else 'missing'}" for p, ok in files.items()))
+    if result.get("variables") is not None:
+        if result.get("variables_checked") is False:
+            click.echo(f"Variables: {result['variables_note']}")
+        else:
+            click.echo("Variables: " + ", ".join(f"{n} {_state(ok)}" for n, ok in result["variables"].items()))
+    if result.get("solutions"):
+        click.echo("Solutions:")
+        for s in result["solutions"]:
+            env = "Environment present" if s["environment_exists"] else "Environment missing"
+            domain = f", domain {s['domain']}" if s.get("domain") else ""
+            click.echo(f"  {s['name']}: {s['repo']} → {s['project']} ({env}{domain})")
+    elif result.get("files"):
+        click.echo("Solutions: none registered")
+    if result.get("legacy_workflows"):
+        click.echo(f"Own workflows (register, then delete): {', '.join(result['legacy_workflows'])}")
+    if result.get("solution"):
+        click.echo(f"\nSolution:  {result['solution']} ({'registered' if result['registered'] else 'not registered'})")
     if result.get("solution_repo"):
         private = result.get("solution_repo_private")
         visibility = "private" if private else "public" if private is False else "visibility unknown"
@@ -431,30 +454,22 @@ def ci_status_cmd(solution):
         elif record.get("checked") is False:
             click.echo(f"Environment: {result['environment']} (exists; variables {record.get('note') or 'not checked'})")
         else:
-            def _rec(present):
-                return "present" if present else "missing"
             click.echo(
                 f"Environment: {result['environment']} (GAPP_WIF_PROVIDER "
-                f"{_rec(record.get('wif_provider_present'))}, GAPP_DEPLOY_SERVICE_ACCOUNT "
-                f"{_rec(record.get('service_account_present'))})"
+                f"{_state(record.get('wif_provider_present'))}, GAPP_DEPLOY_SERVICE_ACCOUNT "
+                f"{_state(record.get('service_account_present'))})"
             )
     if (creds := result.get("app_credentials")) and creds.get("checked") is False:
         click.echo(f"Hosting app: {creds['note']}")
     elif creds := result.get("app_credentials"):
-        def _state(present):
-            return "present" if present else "missing" if present is False else "unverified"
         click.echo(
             f"Hosting app: variable {creds['app_id_var']} {_state(creds['app_id_present'])}, "
             f"secret {creds['app_key_secret']} {_state(creds['private_key_present'])}"
         )
-    if not result["repo"]:
-        click.echo("\nNext Step: ci init")
-    elif not result["workflow"]:
-        click.echo("\nNext Step: ci setup")
-    elif next_step := result.get("next_step"):
+    if next_step := result.get("next_step"):
         click.echo(f"\nNext Step: {next_step['action']}")
         click.echo(f"  {next_step['hint']}")
-    else:
+    elif result.get("registered"):
         click.echo("\nReady: gapp ci trigger")
 
 
@@ -462,11 +477,15 @@ def ci_status_cmd(solution):
 @click.argument("repo")
 @click.option("--local-only", is_flag=True, help="Write local config only; skip the GitHub topic.")
 def ci_init_cmd(repo, local_only):
-    """Designate the private CI repo that holds deploy workflows (once per operator).
+    """Designate the private CI repo and install gapp's files in it (once per operator).
 
     REPO is owner/name or a bare name under your GitHub account; it is
     created private if missing and tagged so other machines can find it.
-    This is not the solution repo.
+    This is not the solution repo. Installs or updates the generic deploy
+    workflow, the register workflow and gapp/solutions.yaml through the
+    GitHub API, and reports whether the repo holds GAPP_ALLOWED_OWNERS,
+    HOSTING_GITHUB_APP_ID and HOSTING_GITHUB_APP_PRIVATE_KEY (never sets them).
+    Re-running is safe: unchanged files are left alone.
     """
     from gapp.admin.sdk.ci import init_ci
     try:
@@ -479,19 +498,20 @@ def ci_init_cmd(repo, local_only):
     if result.get("repo_created"):
         click.echo("    repo created (private) ✓")
     click.echo(f"    topic {result['topic_status']} ✓")
-    if (app := result.get("hosting_app")) and app.get("checked") is False:
-        click.echo(f"    Hosting app (private solution repos only): {app['note']}")
-    elif app := result.get("hosting_app"):
-        def _state(present):
-            return "present" if present else "missing" if present is False else "unverified"
-        click.echo(
-            f"    Hosting app (private solution repos only): variable {app['app_id_var']} "
-            f"{_state(app['app_id_present'])}, secret {app['app_key_secret']} "
-            f"{_state(app['private_key_present'])}"
-        )
+    for path, status in (result.get("files") or {}).items():
+        click.echo(f"    {path} {status} ✓")
+    if result.get("variables") is not None:
+        if result.get("variables_checked") is False:
+            click.echo(f"    Variables: {result['variables_note']}")
+        else:
+            def _state(present):
+                return "present" if present else "missing" if present is False else "unverified"
+            click.echo("    Variables: " + ", ".join(f"{n} {_state(ok)}" for n, ok in result["variables"].items()))
     if next_step := result.get("next_step"):
-        click.echo(f"\n  {next_step['hint']}")
-    click.echo("\nNext Step: gapp ci setup\n")
+        click.echo(f"\nNext Step: {next_step['action']}")
+        click.echo(f"  {next_step['hint']}\n")
+    else:
+        click.echo("\nNext Step: gapp ci setup --project <project-id>\n")
 
 
 @ci_group.command("setup")
@@ -503,55 +523,48 @@ def ci_init_cmd(repo, local_only):
 @click.option(
     "--domain", default=None,
     help="Custom domain the CI deploy maps (overrides gapp.yaml). Omit to keep the "
-         "domain already in the workflow; pass an empty string to remove it.",
+         "domain the solution's entry already has; pass an empty string to remove it.",
 )
 @click.option(
     "--project", default=None, metavar="PROJECT_ID",
-    help="GCP project id. When the CI repo already records this project's deploy "
-         "identity (its GitHub Environment), setup needs gh only, no gcloud.",
+    help="GCP project id. Required on a machine without gcloud; found by label otherwise.",
 )
-@click.option(
-    "--out", default=None, metavar="PATH", type=click.Path(dir_okay=False),
-    help="Write the rendered workflow to this file instead of through the GitHub API; "
-         "the output names where to commit it in the CI repo.",
-)
-def ci_setup_cmd(solution, solution_repo, domain, project, out):
-    """Wire one solution for CI deploys (once per solution, idempotent).
+@click.option("--no-watch", is_flag=True, help="Return after dispatching the register run instead of waiting for it.")
+def ci_setup_cmd(solution, solution_repo, domain, project, no_watch):
+    """Register one solution for CI deploys (once per solution, idempotent).
 
-    The first run on a project needs gcloud with project-admin rights: it
-    creates the Workload Identity pool and provider and the gapp-deploy
-    service account if missing (shared by every solution on the project),
-    binds the pool to the CI repo, and records the deploy identity in the
-    CI repo as a GitHub Environment named after the project id. Every run
-    writes this solution's workflow file into the CI repo through the
-    GitHub API (no clone, commit, or push on this machine); the workflow
-    deploys through that Environment. With --project and the Environment
-    already recorded, setup makes no GCP call at all.
+    Dispatches the register workflow in the CI repo with the solution's
+    name, repo, project and domain, waits for the run, and prints what it
+    did. The run checks that the project's Environment exists, that the
+    repo's owner is listed in GAPP_ALLOWED_OWNERS, that the repo is
+    reachable (public, or private with the hosting app's credential in the
+    CI repo), and that no other project already holds the solution, then
+    writes the entry in gapp/solutions.yaml. This machine needs only `gh`
+    that can dispatch workflows: no gcloud, no GitHub API write.
 
-    A private solution repo gets the hosting GitHub App's credentials
-    wired into its workflow from the CI repo's HOSTING_GITHUB_APP_ID
-    variable and HOSTING_GITHUB_APP_PRIVATE_KEY secret; the output names
-    whichever is missing. Re-running keeps an existing domain unless
-    --domain is passed. Requires `gapp ci init` and `gapp setup` first.
+    The first setup on a project is the exception: it needs gcloud logged
+    in as a project admin to create the Workload Identity pool and
+    provider and the gapp-deploy service account (shared by every solution
+    on the project), bind the pool to the CI repo, and record them in the
+    CI repo as a GitHub Environment named after the project id. Without
+    gcloud the command stops and says so.
 
-    Checks this machine cannot perform (the Actions variables and secrets
-    API behind a restrictive proxy) are reported as not checked, not as
-    failures. When the GitHub API refuses the workflow write, or --out is
-    given, the rendered workflow is written to a file and the output names
-    the path to commit it to in the CI repo.
+    Re-running keeps the entry's domain unless --domain is passed; an
+    empty --domain removes it. Requires `gapp ci init` and `gapp setup`.
     """
     from gapp.admin.sdk.ci import setup_ci
     try:
         result = setup_ci(
             solution=solution, solution_repo=solution_repo, domain=domain, project=project,
-            out=out,
+            watch=not no_watch,
         )
     except (RuntimeError, ValueError) as e:
         click.echo(f"  Error: {e}", err=True)
         raise SystemExit(1)
-    visibility = "private" if result.get("solution_repo_private") else "public"
+    private = result.get("solution_repo_private")
+    visibility = "private" if private else "public" if private is False else "visibility not checked"
     click.echo()
-    click.echo(f"  {result['solution']} ({result['solution_repo']}, {visibility}) → {result['project_id']} via {result['ci_repo']}")
+    click.echo(f"  {result['solution']} ({result['solution_repo']}, {visibility}) → {result['project_id'] or '?'} via {result['ci_repo']}")
     click.echo()
     if result.get("gcloud_used"):
         click.echo(f"    WIF pool {result['wif_pool']} ✓")
@@ -559,13 +572,10 @@ def ci_setup_cmd(solution, solution_repo, domain, project, out):
         click.echo(f"    Service account {result['service_account']} ✓")
         click.echo(f"    Binding {result['binding']} ✓")
         click.echo(f"    Environment {result['environment']} {result['environment_record']} ✓")
-    else:
-        click.echo(f"    Environment {result['environment']} recorded; no gcloud call made ✓")
-    click.echo(f"    Workflow {result['workflow']} ✓")
-    if result.get("workflow_path"):
-        click.echo(f"    File {result['workflow_path']}")
+    elif result.get("environment_record"):
+        click.echo(f"    Environment {result['environment']} {result['environment_record']}; no gcloud call made ✓")
     if result.get("domain"):
-        click.echo(f"    Domain {result['domain']} ✓")
+        click.echo(f"    Domain {result['domain']}")
     if creds := result.get("app_credentials"):
         if creds.get("checked") is False:
             click.echo(f"    Hosting app: {creds['note']}")
@@ -576,11 +586,22 @@ def ci_setup_cmd(solution, solution_repo, domain, project, out):
                 f"    Hosting app: variable {creds['app_id_var']} {_state(creds['app_id_present'])}, "
                 f"secret {creds['app_key_secret']} {_state(creds['private_key_present'])}"
             )
+    if result.get("dispatched"):
+        click.echo(f"    Register run dispatched: {result['workflow']} in {result['ci_repo']}")
+        if result.get("run_url"):
+            click.echo(f"      Run: {result['run_url']}")
+        if result.get("conclusion"):
+            click.echo(f"      Conclusion: {result['conclusion']}")
+        for message in result.get("messages") or []:
+            click.echo(f"      {message}")
     if next_step := result.get("next_step"):
         click.echo(f"\nNext Step: {next_step['action']}")
         click.echo(f"  {next_step['hint']}\n")
-    else:
+        raise SystemExit(1)
+    if result.get("registered"):
         click.echo("\nNext Step: gapp ci trigger\n")
+    else:
+        click.echo("\nNext Step: watch the run, then gapp ci trigger\n")
 
 
 @ci_group.command("trigger")
@@ -588,11 +609,12 @@ def ci_setup_cmd(solution, solution_repo, domain, project, out):
 @click.option("--ref", default="main", show_default=True, help="Git ref to deploy.")
 @click.option("--no-watch", is_flag=True, help="Return after dispatch instead of streaming the run.")
 def ci_trigger_cmd(solution, ref, no_watch):
-    """Dispatch the solution's deploy workflow in the CI repo.
+    """Dispatch the deploy workflow in the CI repo for a registered solution.
 
-    Equivalent to pressing "Run workflow" on the CI repo's Actions tab.
-    Streams the run until it finishes unless --no-watch is given. Needs
-    only `gh` logged in; no gcloud or terraform on this machine.
+    Equivalent to pressing "Run workflow" on the CI repo's Actions tab
+    with the solution's name. Streams the run until it finishes unless
+    --no-watch is given. Needs only `gh` logged in; no gcloud or terraform
+    on this machine.
     """
     from gapp.admin.sdk.ci import trigger_ci
     try:
@@ -600,11 +622,14 @@ def ci_trigger_cmd(solution, ref, no_watch):
     except RuntimeError as e:
         click.echo(f"  Error: {e}", err=True)
         raise SystemExit(1)
-    click.echo(f"\n  Dispatched {result['workflow']} in {result['ci_repo']} (ref {result['ref']})")
+    click.echo(f"\n  Dispatched {result['workflow']} in {result['ci_repo']} for {result['solution']} (ref {result['ref']})")
     if result["run_url"]:
         click.echo(f"    Run: {result['run_url']}")
     if result["watched"]:
         click.echo(f"    Conclusion: {result['conclusion'] or 'unknown'}")
+    if next_step := result.get("next_step"):
+        click.echo(f"\nNext Step: {next_step['action']}")
+        click.echo(f"  {next_step['hint']}")
     click.echo()
 
 

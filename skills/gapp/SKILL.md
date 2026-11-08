@@ -77,7 +77,7 @@ already know.
 | GitHub write access | `gh auth status`; or GitHub tools in this agent that can read repos and dispatch workflows | CI wiring, CI deploys |
 | Interactive login possible | a hint, not a verdict: `CLAUDE_CODE_REMOTE`, `CI`, or `CODESPACES` set usually means no browser; when unsure, ask the user | preparing this machine versus handing off |
 | Solution state | `gapp.yaml` exists; then `gapp status` when an identity exists, else read the file | which phase is next |
-| CI wired | `gapp ci status`, or the solution's workflow file present in the CI repo | whether deploys can go through Actions |
+| CI wired | `gapp ci status`, or the solution's entry present in the CI repo's `gapp/solutions.yaml` | whether deploys can go through Actions |
 
 Then match what the next step needs against what you found. The
 needs table and the three outcomes (proceed; install missing tooling
