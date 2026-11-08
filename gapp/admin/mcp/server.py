@@ -129,10 +129,17 @@ def gapp_deploy(
     dry_run: bool = False,
     project_id: str | None = None,
     rebuild: bool = False,
+    replace_domain: bool = False,
 ) -> dict:
     """Deploy a gapp solution to Cloud Run (build + terraform apply).
 
     Prerequisites: gapp_init and gapp_setup must have been run first.
+
+    Custom domains are guarded. The deploy stops before Terraform when
+    the domain in gapp.yaml is not verified by the deploying identity
+    (the error lists the verification steps), and when it would replace
+    or remove a live domain mapping unless replace_domain is True. A
+    redeploy that keeps the same domain is unaffected.
 
     Args:
         ref: Git ref to build from (commit, tag, branch). Defaults to HEAD.
@@ -145,11 +152,16 @@ def gapp_deploy(
         rebuild: Force docker build even if an image already exists in
                  Artifact Registry for the resolved SHA. Default False —
                  existing images are reused for speed.
+        replace_domain: Allow the deploy to replace or remove the live
+                 custom domain mapping. Terraform destroys the old mapping
+                 before creating the new one, so the old domain stops
+                 serving. Default False — such a deploy is refused and the
+                 error names the live domain.
     """
     from gapp.admin.sdk.core import GappSDK
     return GappSDK().deploy(
         ref=ref, solution=solution, env=env, dry_run=dry_run, project_id=project_id,
-        rebuild=rebuild,
+        rebuild=rebuild, replace_domain=replace_domain,
     )
 
 
@@ -256,8 +268,19 @@ def gapp_ci_status(solution: str | None = None) -> dict:
         workflow: true if this solution has a GitHub Actions workflow
                   in the CI repo (gapp_ci_setup was run for it),
                   false otherwise.
+        solution_repo, solution_repo_private: the repo the workflow
+                  deploys and whether it is private.
+        domain: the custom domain the workflow passes, if any.
+        app_credentials: for a private solution repo, the CI repo's
+                  Actions variable and secret that hold the hosting
+                  GitHub App's id and private key, and whether each
+                  exists. null for a public repo.
+        next_step: {action, hint} when a CI deploy would fail as things
+                  stand (for example a private repo whose credentials
+                  are not in the CI repo); null when ready.
 
-    Both must be true before gapp_ci_trigger will work.
+    repo and workflow must be set and next_step null before
+    gapp_ci_trigger will work.
 
     The CI/CD setup sequence is:
     1. gapp_ci_init — designate the CI repo (once)
@@ -290,11 +313,25 @@ def gapp_ci_init(repo: str, local_only: bool = False) -> dict:
 
 
 @_tool()
-def gapp_ci_setup(solution: str | None = None, solution_repo: str | None = None) -> dict:
+def gapp_ci_setup(
+    solution: str | None = None,
+    solution_repo: str | None = None,
+    domain: str | None = None,
+    app_id_var: str | None = None,
+    app_key_secret: str | None = None,
+) -> dict:
     """Wire a solution for CI/CD deployment.
 
     Creates Workload Identity Federation, service account, IAM bindings,
-    and pushes the GitHub Actions workflow to the CI repo.
+    and pushes the GitHub Actions workflow to the CI repo. Idempotent;
+    re-running keeps the workflow's existing domain unless `domain` is
+    passed.
+
+    A private solution repo is detected automatically. Its workflow then
+    passes the hosting GitHub App's credentials from the CI repo's Actions
+    variable and secret; the result's `next_step` names them when they
+    are missing from the CI repo (gapp_ci_trigger refuses until they
+    exist).
 
     Prerequisites: gapp_ci_init must have been called first to designate
     the CI repo. The solution must also have been initialized (gapp_init)
@@ -309,9 +346,21 @@ def gapp_ci_setup(solution: str | None = None, solution_repo: str | None = None)
             from anywhere — no local checkout required. Omit it only when
             running from inside the solution repo, where it is read from
             the ``origin`` remote.
+        domain: Custom domain the CI deploy maps; it overrides gapp.yaml
+            at deploy time, so a public solution repo can keep a
+            placeholder there. None keeps the domain already in the
+            workflow; "" removes it.
+        app_id_var: Private repo only. CI repo Actions variable holding the
+            hosting GitHub App's id. Default HOSTING_GITHUB_APP_ID.
+        app_key_secret: Private repo only. CI repo Actions secret holding
+            the hosting GitHub App's private key. Default
+            HOSTING_GITHUB_APP_PRIVATE_KEY.
     """
     from gapp.admin.sdk.ci import setup_ci
-    return setup_ci(solution=solution, solution_repo=solution_repo)
+    return setup_ci(
+        solution=solution, solution_repo=solution_repo, domain=domain,
+        app_id_var=app_id_var, app_key_secret=app_key_secret,
+    )
 
 
 @_tool()
@@ -325,7 +374,9 @@ def gapp_ci_trigger(
     Prerequisites: gapp_ci_init and gapp_ci_setup must have been
     completed first. Check readiness with gapp_ci_status. This
     dispatches the workflow created by gapp_ci_setup. Does not
-    require terraform locally.
+    require terraform locally. For a private solution repo it refuses
+    up front, with the next step, when the CI repo lacks the hosting
+    GitHub App's variable or secret.
 
     Args:
         solution: Solution name. Defaults to current directory's solution.
@@ -341,7 +392,9 @@ def gapp_status(solution: str | None = None, env: str | None = None) -> dict:
     """Infrastructure health check for a gapp solution.
 
     Returns initialized, deployment.project, deployment.pending,
-    deployment.services, and next_step with the recommended action.
+    deployment.services, domain (the live custom domain mapping's
+    state: pending_dns, pending_cert, active, or error, with the CNAME
+    target to set), and next_step with the recommended action.
 
     Args:
         solution: Solution name. Defaults to current directory's solution.

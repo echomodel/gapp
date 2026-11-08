@@ -234,8 +234,13 @@ def setup_cmd(sdk: GappSDK, project_id, solution, env, project_arg, force):
 @click.option("--project", help="Explicit GCP Project ID override.")
 @click.option("--dry-run", is_flag=True, help="Preview deployment.")
 @click.option("--rebuild", is_flag=True, help="Force docker build even if an image already exists for the resolved SHA.")
+@click.option(
+    "--replace-domain", is_flag=True,
+    help="Allow this deploy to replace or remove the live custom domain mapping. "
+         "Without it, a deploy whose domain differs from the mapped one is refused.",
+)
 @click.pass_obj
-def deploy(sdk: GappSDK, ref, solution, env, project, dry_run, rebuild):
+def deploy(sdk: GappSDK, ref, solution, env, project, dry_run, rebuild, replace_domain):
     """Build the image with Cloud Build and apply Terraform; prints the service URL.
 
     Needs a gcloud login, terraform on PATH, and a clean git tree: the
@@ -243,9 +248,16 @@ def deploy(sdk: GappSDK, ref, solution, env, project, dry_run, rebuild):
     An image already built for this commit is reused. To deploy without
     gcloud or terraform on this machine, wire CI once (`gapp ci setup`)
     and use `gapp ci trigger` or GitHub's "Run workflow" button.
+
+    A custom domain is guarded: the deploy stops before Terraform when the
+    domain is not verified by the deploying identity, or when it would
+    replace or remove a live mapping and --replace-domain is not given.
     """
     try:
-        result = sdk.deploy(ref=ref, solution=solution, env=env, dry_run=dry_run, project_id=project, rebuild=rebuild)
+        result = sdk.deploy(
+            ref=ref, solution=solution, env=env, dry_run=dry_run, project_id=project,
+            rebuild=rebuild, replace_domain=replace_domain,
+        )
     except (RuntimeError, ValueError) as e:
         click.echo(f"  Error: {e}", err=True)
         raise SystemExit(1)
@@ -304,6 +316,12 @@ def status(sdk: GappSDK, solution, env):
                 click.echo(f"  Service: {s.name}")
                 click.echo(f"  URL:     {s.url}")
                 click.echo(f"  Healthy: {'✓' if s.healthy else 'X'}")
+        if result.domain:
+            click.echo(f"Domain:   {result.domain.name} ({result.domain.status})")
+            if result.domain.status == "pending_dns":
+                click.echo(f"  CNAME:   {result.domain.name} -> {result.domain.cname_target}")
+            if result.domain.detail:
+                click.echo(f"  {result.domain.detail}")
         if result.next_step:
             click.echo(f"\nNext Step: {result.next_step.action}")
             if result.next_step.hint:
@@ -400,10 +418,26 @@ def ci_status_cmd(solution):
         raise SystemExit(1)
     click.echo(f"CI repo:   {result['repo'] or '(none — run gapp ci init <repo>)'}")
     click.echo(f"Workflow:  {'present' if result['workflow'] else 'missing'}")
+    if result.get("solution_repo"):
+        private = result.get("solution_repo_private")
+        visibility = "private" if private else "public" if private is False else "visibility unknown"
+        click.echo(f"Source:    {result['solution_repo']} ({visibility})")
+    if result.get("domain"):
+        click.echo(f"Domain:    {result['domain']}")
+    if creds := result.get("app_credentials"):
+        def _state(present):
+            return "present" if present else "missing" if present is False else "unverified"
+        click.echo(
+            f"Hosting app: variable {creds['app_id_var']} {_state(creds['app_id_present'])}, "
+            f"secret {creds['app_key_secret']} {_state(creds['private_key_present'])}"
+        )
     if not result["repo"]:
         click.echo("\nNext Step: ci init")
     elif not result["workflow"]:
         click.echo("\nNext Step: ci setup")
+    elif next_step := result.get("next_step"):
+        click.echo(f"\nNext Step: {next_step['action']}")
+        click.echo(f"  {next_step['hint']}")
     else:
         click.echo("\nReady: gapp ci trigger")
 
@@ -438,7 +472,22 @@ def ci_init_cmd(repo, local_only):
     "--solution-repo", default=None,
     help="GitHub repo the pipeline deploys (owner/name or URL). Defaults to this checkout's origin.",
 )
-def ci_setup_cmd(solution, solution_repo):
+@click.option(
+    "--domain", default=None,
+    help="Custom domain the CI deploy maps (overrides gapp.yaml). Omit to keep the "
+         "domain already in the workflow; pass an empty string to remove it.",
+)
+@click.option(
+    "--app-id-var", default=None, metavar="NAME",
+    help="Private solution repo: CI repo Actions variable holding the hosting GitHub "
+         "App's id. Default HOSTING_GITHUB_APP_ID.",
+)
+@click.option(
+    "--app-key-secret", default=None, metavar="NAME",
+    help="Private solution repo: CI repo Actions secret holding the hosting GitHub "
+         "App's private key. Default HOSTING_GITHUB_APP_PRIVATE_KEY.",
+)
+def ci_setup_cmd(solution, solution_repo, domain, app_id_var, app_key_secret):
     """Wire one solution for CI deploys (once per solution, idempotent).
 
     Creates the project's Workload Identity pool and provider and the
@@ -447,22 +496,44 @@ def ci_setup_cmd(solution, solution_repo):
     solution's workflow file into the CI repo through the GitHub API
     (no clone, commit, or push on this machine). Requires `gapp ci init`
     and `gapp setup` first.
+
+    A private solution repo gets the hosting GitHub App's credentials
+    wired into its workflow; the output names the Actions variable and
+    secret the CI repo must hold. Re-running keeps an existing domain
+    unless --domain is passed.
     """
     from gapp.admin.sdk.ci import setup_ci
     try:
-        result = setup_ci(solution=solution, solution_repo=solution_repo)
+        result = setup_ci(
+            solution=solution, solution_repo=solution_repo, domain=domain,
+            app_id_var=app_id_var, app_key_secret=app_key_secret,
+        )
     except (RuntimeError, ValueError) as e:
         click.echo(f"  Error: {e}", err=True)
         raise SystemExit(1)
+    visibility = "private" if result.get("solution_repo_private") else "public"
     click.echo()
-    click.echo(f"  {result['solution']} ({result['solution_repo']}) → {result['project_id']} via {result['ci_repo']}")
+    click.echo(f"  {result['solution']} ({result['solution_repo']}, {visibility}) → {result['project_id']} via {result['ci_repo']}")
     click.echo()
     click.echo(f"    WIF pool {result['wif_pool']} ✓")
     click.echo(f"    WIF provider {result['wif_provider']} ✓")
     click.echo(f"    Service account {result['service_account']} ✓")
     click.echo(f"    Binding {result['binding']} ✓")
     click.echo(f"    Workflow {result['workflow']} ✓")
-    click.echo("\nNext Step: gapp ci trigger\n")
+    if result.get("domain"):
+        click.echo(f"    Domain {result['domain']} ✓")
+    if creds := result.get("app_credentials"):
+        def _state(present):
+            return "present" if present else "missing" if present is False else "unverified"
+        click.echo(
+            f"    Hosting app: variable {creds['app_id_var']} {_state(creds['app_id_present'])}, "
+            f"secret {creds['app_key_secret']} {_state(creds['private_key_present'])}"
+        )
+    if next_step := result.get("next_step"):
+        click.echo(f"\nNext Step: {next_step['action']}")
+        click.echo(f"  {next_step['hint']}\n")
+    else:
+        click.echo("\nNext Step: gapp ci trigger\n")
 
 
 @ci_group.command("trigger")

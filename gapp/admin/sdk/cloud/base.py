@@ -5,9 +5,23 @@ from pathlib import Path
 from typing import Optional, List, Dict
 
 
+class CloudAccessError(RuntimeError):
+    """The cloud refused or could not answer a read or write.
+
+    Raised for an expired or missing login, a wrong account, a denied
+    permission, or an API failure. Distinct from the plain RuntimeError
+    the resolver raises for "this solution is not deployed here", so that
+    callers never report an auth failure as a missing deployment.
+    """
+
+
+class ProjectNotFoundError(CloudAccessError):
+    """The project does not exist, or the current identity cannot see it."""
+
+
 class CloudProvider(ABC):
     """Abstract interface for cloud and infrastructure operations.
-    
+
     Decouples business logic from gcloud, terraform, and other external CLI tools.
     """
 
@@ -35,7 +49,14 @@ class CloudProvider(ABC):
 
     @abstractmethod
     def get_project_labels(self, project_id: str) -> Dict[str, str]:
-        """Retrieve labels for a GCP project."""
+        """Retrieve labels for a GCP project.
+
+        Returns the labels, possibly empty, of a project the identity can
+        read. Raises ProjectNotFoundError when the project does not exist
+        or is invisible to this identity, and CloudAccessError for any
+        other failure (expired login, wrong account, denied permission).
+        Never returns an empty dict to paper over a failure.
+        """
         pass
 
     @abstractmethod
@@ -46,8 +67,31 @@ class CloudProvider(ABC):
     @abstractmethod
     def list_projects(self, filter_query: Optional[str] = None, limit: Optional[int] = None) -> List[Dict]:
         """Find projects matching a filter.
-        
-        Returns a list of dicts with 'projectId' and 'labels' keys.
+
+        Returns a list of dicts with 'projectId' and 'labels' keys. An
+        empty list means no project matched; a failed listing raises
+        CloudAccessError instead.
+        """
+        pass
+
+    # -- Custom domains --
+
+    @abstractmethod
+    def list_verified_domains(self) -> List[str]:
+        """Domains whose ownership the current identity has verified.
+
+        Cloud Run only maps a custom domain for an identity that verified
+        the domain or one of its parents. Raises CloudAccessError when the
+        list cannot be read.
+        """
+        pass
+
+    @abstractmethod
+    def get_domain_mapping(self, project_id: str, region: str, domain: str) -> Optional[Dict]:
+        """Describe the Cloud Run domain mapping for `domain`.
+
+        Returns the mapping resource as a dict (with `status.conditions`
+        and `status.resourceRecords`), or None when no mapping exists.
         """
         pass
 

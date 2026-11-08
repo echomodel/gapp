@@ -11,6 +11,12 @@ import yaml
 
 _CI_TOPIC = "gapp-ci"
 
+# Where the caller workflow of a private solution repo finds the hosting
+# GitHub App's credentials: an Actions variable and an Actions secret in
+# the CI repo. Defaults; `gapp ci setup` accepts overrides.
+DEFAULT_APP_ID_VAR = "HOSTING_GITHUB_APP_ID"
+DEFAULT_APP_KEY_SECRET = "HOSTING_GITHUB_APP_PRIVATE_KEY"
+
 
 def _load_ci_config() -> dict:
     """Load CI config from XDG config dir."""
@@ -153,6 +159,149 @@ def init_ci(repo: str, local_only: bool = False) -> dict:
     return result
 
 
+def _resolve_ci_repo() -> str | None:
+    """CI repo from local config, else from the GitHub topic, else None."""
+    config = _load_ci_config()
+    local_repo = config.get("repo")
+    if local_repo:
+        return local_repo
+    try:
+        return _find_ci_repo_by_topic()
+    except Exception:
+        return None
+
+
+def _is_repo_private(repo: str) -> bool:
+    """Whether a GitHub repo is private, from the API (`.private`)."""
+    res = subprocess.run(
+        ["gh", "api", f"repos/{repo}", "--jq", ".private"],
+        capture_output=True, text=True,
+    )
+    if res.returncode != 0:
+        raise RuntimeError(
+            f"Could not read the visibility of {repo}: {res.stderr.strip()}\n"
+            f"  The gh login needs read access to the solution repo."
+        )
+    return res.stdout.strip().lower() == "true"
+
+
+def _actions_item_present(ci_repo: str, kind: str, name: str) -> bool | None:
+    """Whether an Actions variable or secret exists in the CI repo.
+
+    `kind` is "variables" or "secrets". GitHub returns metadata only, never
+    a secret's value. Returns True, False (404), or None when the check
+    itself failed (for example the gh login cannot read repo secrets).
+    """
+    res = subprocess.run(
+        ["gh", "api", f"repos/{ci_repo}/actions/{kind}/{name}"],
+        capture_output=True, text=True,
+    )
+    if res.returncode == 0:
+        return True
+    if "404" in (res.stderr or ""):
+        return False
+    return None
+
+
+def _read_workflow_file(ci_repo: str, solution_name: str) -> tuple[str | None, str | None]:
+    """Fetch the solution's caller workflow from the CI repo.
+
+    Returns (sha, content), or (None, None) when the file does not exist.
+    """
+    import base64
+
+    endpoint = f"repos/{ci_repo}/contents/.github/workflows/{solution_name}.yml"
+    existing = subprocess.run(["gh", "api", endpoint], capture_output=True, text=True)
+    if existing.returncode != 0 or not existing.stdout.strip():
+        return None, None
+    data = json.loads(existing.stdout)
+    content = base64.b64decode(data.get("content", "")).decode()
+    return data.get("sha"), content
+
+
+def _parse_workflow(content: str | None) -> dict:
+    """Read the values gapp cares about back out of a caller workflow.
+
+    Returns solution_repo, domain, app_id_var, app_key_secret (each None
+    when absent). The variable and secret names are recovered from the
+    `${{ vars.NAME }}` / `${{ secrets.NAME }}` expressions gapp wrote.
+    """
+    info = {"solution_repo": None, "domain": None, "app_id_var": None, "app_key_secret": None}
+    if not content:
+        return info
+    try:
+        doc = yaml.safe_load(content) or {}
+    except yaml.YAMLError:
+        return info
+    job = ((doc.get("jobs") or {}).get("deploy") or {})
+    with_block = job.get("with") or {}
+    info["solution_repo"] = with_block.get("solution-repo") or None
+    domain = with_block.get("domain")
+    if domain is not None:
+        info["domain"] = str(domain).strip() or None
+    m = re.search(r"vars\.([A-Za-z_][A-Za-z0-9_]*)", str(with_block.get("solution-repo-app-id") or ""))
+    info["app_id_var"] = m.group(1) if m else None
+    secrets_block = job.get("secrets") or {}
+    m = re.search(r"secrets\.([A-Za-z_][A-Za-z0-9_]*)",
+                  str(secrets_block.get("solution-repo-app-private-key") or "")
+                  if isinstance(secrets_block, dict) else "")
+    info["app_key_secret"] = m.group(1) if m else None
+    return info
+
+
+def _assess_private_readiness(ci_repo: str, solution_name: str, solution_repo: str,
+                              private: bool, workflow_info: dict) -> dict:
+    """Can a CI deploy of this solution clone its repo?
+
+    Public repo: always. Private repo: only when the caller workflow passes
+    the hosting app's credentials and both the Actions variable and secret
+    it names exist in the CI repo. Returns ready, app_credentials, next_step.
+    """
+    if not private:
+        return {"ready": True, "app_credentials": None, "next_step": None}
+
+    id_var = workflow_info.get("app_id_var")
+    key_secret = workflow_info.get("app_key_secret")
+    if not id_var or not key_secret:
+        return {
+            "ready": False,
+            "app_credentials": None,
+            "next_step": {
+                "action": "ci setup",
+                "hint": (
+                    f"{solution_repo} is private, but the workflow for '{solution_name}' "
+                    f"passes no hosting-app credentials, so the runner cannot clone it. "
+                    f"Re-run `gapp ci setup --solution {solution_name}` to add them."
+                ),
+            },
+        }
+
+    creds = {
+        "app_id_var": id_var,
+        "app_key_secret": key_secret,
+        "app_id_present": _actions_item_present(ci_repo, "variables", id_var),
+        "private_key_present": _actions_item_present(ci_repo, "secrets", key_secret),
+    }
+    missing = []
+    if creds["app_id_present"] is not True:
+        missing.append(f"Actions variable {id_var}")
+    if creds["private_key_present"] is not True:
+        missing.append(f"Actions secret {key_secret}")
+    if not missing:
+        return {"ready": True, "app_credentials": creds, "next_step": None}
+    unverified = creds["app_id_present"] is None or creds["private_key_present"] is None
+    hint = (
+        f"{solution_repo} is private; CI clones it with a GitHub App installed on "
+        f"its owner. {'Could not verify' if unverified else 'Missing'} in {ci_repo}: "
+        f"{', '.join(missing)}. Store the app's id and private key there:\n"
+        f"  gh variable set {id_var} --repo {ci_repo} --body <app-id>\n"
+        f"  gh secret set {key_secret} --repo {ci_repo} < <private-key.pem>\n"
+        f"See docs/CI.md, \"Private solution repos\"."
+    )
+    return {"ready": False, "app_credentials": creds,
+            "next_step": {"action": "configure hosting app", "hint": hint}}
+
+
 def get_ci_status(solution: str | None = None) -> dict:
     """Check CI readiness for the current solution.
 
@@ -166,27 +315,29 @@ def get_ci_status(solution: str | None = None) -> dict:
                   missing or the CI repo is not configured. Only
                   checked when repo is set and a solution can be
                   resolved.
+        solution_repo: the GitHub repo the workflow deploys, when the
+                  workflow exists.
+        solution_repo_private: visibility of that repo (None when unknown).
+        domain: the `domain:` input the workflow passes, if any.
+        app_credentials: for a private repo, the Actions variable and
+                  secret the workflow names and whether each exists in
+                  the CI repo. None for a public repo.
+        next_step: {action, hint} when a CI deploy would fail as things
+                  stand; None when `gapp ci trigger` can run.
     """
     from gapp.admin.sdk.core import GappSDK
 
     result = {
         "repo": None,
         "workflow": False,
+        "solution_repo": None,
+        "solution_repo_private": None,
+        "domain": None,
+        "app_credentials": None,
+        "next_step": None,
     }
 
-    # Resolve CI repo: local config → GitHub topic
-    config = _load_ci_config()
-    local_repo = config.get("repo")
-    if local_repo:
-        result["repo"] = local_repo
-    else:
-        try:
-            remote_repo = _find_ci_repo_by_topic()
-            if remote_repo:
-                result["repo"] = remote_repo
-        except Exception:
-            pass
-
+    result["repo"] = _resolve_ci_repo()
     if not result["repo"]:
         return result
 
@@ -196,25 +347,36 @@ def get_ci_status(solution: str | None = None) -> dict:
         return result
 
     solution_name = ctx["name"]
-    workflow_file = f"{solution_name}.yml"
     try:
-        check = subprocess.run(
-            ["gh", "api",
-             f"repos/{result['repo']}/contents/.github/workflows/{workflow_file}",
-             "--jq", ".name"],
-            capture_output=True, text=True,
-        )
-        result["workflow"] = check.returncode == 0 and bool(check.stdout.strip())
+        _, content = _read_workflow_file(result["repo"], solution_name)
     except FileNotFoundError:
-        pass
+        return result
+    if not content:
+        return result
+    result["workflow"] = True
 
+    info = _parse_workflow(content)
+    result["solution_repo"] = info["solution_repo"]
+    result["domain"] = info["domain"]
+    if not info["solution_repo"]:
+        return result
+    try:
+        private = _is_repo_private(info["solution_repo"])
+    except RuntimeError as e:
+        result["next_step"] = {"action": "check solution repo", "hint": str(e)}
+        return result
+    result["solution_repo_private"] = private
+    readiness = _assess_private_readiness(
+        result["repo"], solution_name, info["solution_repo"], private, info,
+    )
+    result["app_credentials"] = readiness["app_credentials"]
+    result["next_step"] = readiness["next_step"]
     return result
 
 
 def get_ci_repo() -> str | None:
     """Get the CI repo name. Local config takes priority over remote."""
-    status = get_ci_status()
-    return status.get("repo")
+    return _resolve_ci_repo()
 
 
 def trigger_ci(solution: str | None = None, *, ref: str = "main", watch: bool = True) -> dict:
@@ -245,16 +407,23 @@ def trigger_ci(solution: str | None = None, *, ref: str = "main", watch: bool = 
     workflow_file = f"{solution_name}.yml"
 
     # Verify the workflow exists in the CI repo
-    check = subprocess.run(
-        ["gh", "api", f"repos/{ci_repo}/contents/.github/workflows/{workflow_file}",
-         "--jq", ".name"],
-        capture_output=True, text=True,
-    )
-    if check.returncode != 0 or not check.stdout.strip():
+    _, content = _read_workflow_file(ci_repo, solution_name)
+    if not content:
         raise RuntimeError(
             f"No CI workflow found for '{solution_name}'.\n"
             f"  Run 'gapp ci setup {solution_name}' first to create the workflow."
         )
+
+    # A private solution repo needs the hosting app's credentials in place,
+    # or the run fails at checkout with "Repository not found". Refuse now.
+    info = _parse_workflow(content)
+    if info["solution_repo"]:
+        private = _is_repo_private(info["solution_repo"])
+        readiness = _assess_private_readiness(
+            ci_repo, solution_name, info["solution_repo"], private, info,
+        )
+        if not readiness["ready"]:
+            raise RuntimeError(readiness["next_step"]["hint"])
 
     result = subprocess.run(
         ["gh", "workflow", "run", workflow_file,
@@ -525,8 +694,20 @@ def _resolve_gapp_ref(gapp_repo: str) -> str:
 
 
 def _generate_workflow(solution_name: str, solution_repo: str,
-                       project_id: str, gapp_repo: str) -> str:
-    """Generate the caller workflow YAML for the operator's CI repo."""
+                       project_id: str, gapp_repo: str, *,
+                       domain: str | None = None,
+                       app_id_var: str | None = None,
+                       app_key_secret: str | None = None) -> str:
+    """Generate the caller workflow YAML for the operator's CI repo.
+
+    domain: written as the reusable workflow's `domain:` input, which
+        overrides the solution's gapp.yaml at deploy time.
+    app_id_var / app_key_secret: for a private solution repo, the CI repo's
+        Actions variable holding the hosting GitHub App's id and the Actions
+        secret holding its private key. Both or neither.
+    """
+    if bool(app_id_var) != bool(app_key_secret):
+        raise ValueError("app_id_var and app_key_secret must be given together.")
     project_number = _get_project_number(project_id)
     sa_email = f"{_DEPLOY_SA_NAME}@{project_id}.iam.gserviceaccount.com"
     wif_provider = (
@@ -569,6 +750,14 @@ def _generate_workflow(solution_name: str, solution_repo: str,
             }
         },
     }
+    with_block = workflow["jobs"]["deploy"]["with"]
+    if domain:
+        with_block["domain"] = domain
+    if app_id_var:
+        with_block["solution-repo-app-id"] = f"${{{{ vars.{app_id_var} }}}}"
+        workflow["jobs"]["deploy"]["secrets"] = {
+            "solution-repo-app-private-key": f"${{{{ secrets.{app_key_secret} }}}}",
+        }
     return yaml.dump(workflow, default_flow_style=False, sort_keys=False)
 
 
@@ -620,7 +809,10 @@ def _write_workflow_to_ci_repo(ci_repo: str, solution_name: str,
     return "updated" if sha else "pushed"
 
 
-def setup_ci(solution: str | None = None, solution_repo: str | None = None) -> dict:
+def setup_ci(solution: str | None = None, solution_repo: str | None = None, *,
+             domain: str | None = None,
+             app_id_var: str | None = None,
+             app_key_secret: str | None = None) -> dict:
     """Wire a solution for CI/CD deployment.
 
     No local clone of the solution repo is required when ``solution`` and
@@ -632,6 +824,17 @@ def setup_ci(solution: str | None = None, solution_repo: str | None = None) -> d
     back to discovering the repo from the current checkout's ``origin``
     remote — convenient for a human running this from inside the repo, but
     cwd-dependent. Prefer the explicit form for standing pipelines.
+
+    ``domain`` is written into the workflow as the reusable workflow's
+    ``domain:`` input, which overrides gapp.yaml at deploy time. ``None``
+    (the default) keeps whatever ``domain:`` the existing workflow already
+    carries, so re-running setup never drops a domain; ``""`` removes it.
+
+    A private solution repo cannot be cloned with the run's built-in token,
+    so its workflow passes the hosting GitHub App's credentials from the CI
+    repo's Actions variable ``app_id_var`` and secret ``app_key_secret``
+    (defaults: ``HOSTING_GITHUB_APP_ID`` and ``HOSTING_GITHUB_APP_PRIVATE_KEY``).
+    Setup checks that both exist and names them in ``next_step`` when not.
     """
     from gapp.admin.sdk.core import GappSDK
 
@@ -678,16 +881,35 @@ def setup_ci(solution: str | None = None, solution_repo: str | None = None) -> d
 
     gapp_repo = _get_gapp_repo()
 
+    # Private repos need the hosting app; decide that before touching GCP.
+    private = _is_repo_private(full_solution_repo)
+    id_var = key_secret = None
+    if private:
+        id_var = app_id_var or DEFAULT_APP_ID_VAR
+        key_secret = app_key_secret or DEFAULT_APP_KEY_SECRET
+
+    # Keep an existing `domain:` unless the caller said otherwise.
+    _, existing_content = _read_workflow_file(ci_repo, solution_name)
+    existing = _parse_workflow(existing_content)
+    if domain is None:
+        effective_domain = existing["domain"]
+    else:
+        effective_domain = domain.strip() or None
+
     result = {
         "solution": solution_name,
         "solution_repo": full_solution_repo,
+        "solution_repo_private": private,
         "project_id": project_id,
         "ci_repo": ci_repo,
+        "domain": effective_domain,
+        "app_credentials": None,
         "wif_pool": None,
         "wif_provider": None,
         "service_account": None,
         "binding": None,
         "workflow": None,
+        "next_step": None,
     }
 
     # 3. WIF pool
@@ -706,8 +928,17 @@ def setup_ci(solution: str | None = None, solution_repo: str | None = None) -> d
     # 7. Generate and push workflow
     workflow_content = _generate_workflow(
         solution_name, full_solution_repo, project_id, gapp_repo,
+        domain=effective_domain, app_id_var=id_var, app_key_secret=key_secret,
     )
     result["workflow"] = _write_workflow_to_ci_repo(ci_repo, solution_name, workflow_content)
+
+    # 8. For a private repo, confirm the CI repo holds the app's credentials.
+    readiness = _assess_private_readiness(
+        ci_repo, solution_name, full_solution_repo, private,
+        {"app_id_var": id_var, "app_key_secret": key_secret},
+    )
+    result["app_credentials"] = readiness["app_credentials"]
+    result["next_step"] = readiness["next_step"]
 
     return result
 

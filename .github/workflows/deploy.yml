@@ -24,12 +24,40 @@
 #         # specific values out of the solution repo's gapp.yaml — useful
 #         # when the solution repo is public:
 #         domain: example.subdomain.example.com
+#         # Private solution repo only: the GitHub App installed on the
+#         # solution repo's owner, whose one-hour token clones the repo.
+#         # The id is an Actions variable and the key an Actions secret
+#         # of the CI repo; `gapp ci setup` writes both lines.
+#         solution-repo-app-id: ${{ vars.HOSTING_GITHUB_APP_ID }}
+#       secrets:
+#         solution-repo-app-private-key: ${{ secrets.HOSTING_GITHUB_APP_PRIVATE_KEY }}
 
 name: Deploy gapp solution
 
 on:
   workflow_call:
+    secrets:
+      solution-repo-app-private-key:
+        description: >-
+          Private key of the GitHub App that may read the solution repo.
+          Needed only when the solution repo is private; set together
+          with the `solution-repo-app-id` input. Used once per run to
+          mint an installation token limited to that one repo, read-only
+          Contents, valid for an hour; the key itself never reaches the
+          checkout.
+        required: false
     inputs:
+      solution-repo-app-id:
+        description: >-
+          Id of the GitHub App that may read the solution repo. When
+          non-empty (together with the `solution-repo-app-private-key`
+          secret), the checkout uses a token minted from that app instead
+          of the run's built-in token, which can read only the CI repo
+          itself. Leave empty for a public solution repo: the workflow
+          then behaves exactly as before this input existed.
+        required: false
+        default: ''
+        type: string
       solution-repo:
         description: 'Solution repo (owner/name)'
         required: true
@@ -130,11 +158,48 @@ jobs:
       contents: read
 
     steps:
+      # Private solution repos: the run's GITHUB_TOKEN can read only the
+      # CI repo, so a private solution repo fails at checkout with
+      # "Repository not found". When the caller passes the hosting app's
+      # id and private key, mint a token scoped to the one solution repo
+      # (owner + name), read-only Contents, one hour. Both steps are
+      # skipped for a public repo, and the checkout falls back to the
+      # built-in token.
+      - name: Check the solution repo credential
+        if: inputs.solution-repo-app-id != ''
+        env:
+          APP_PRIVATE_KEY: ${{ secrets.solution-repo-app-private-key }}
+          SOLUTION_REPO: ${{ inputs.solution-repo }}
+        id: solution-repo
+        run: |
+          if [ -z "$APP_PRIVATE_KEY" ]; then
+            echo "::error::solution-repo-app-id is set but the solution-repo-app-private-key secret is empty. Pass both, or neither for a public solution repo."
+            exit 1
+          fi
+          echo "owner=${SOLUTION_REPO%%/*}" >> "$GITHUB_OUTPUT"
+          echo "name=${SOLUTION_REPO#*/}" >> "$GITHUB_OUTPUT"
+
+      - name: Mint a read-only token for the solution repo
+        if: inputs.solution-repo-app-id != ''
+        id: solution-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ inputs.solution-repo-app-id }}
+          private-key: ${{ secrets.solution-repo-app-private-key }}
+          owner: ${{ steps.solution-repo.outputs.owner }}
+          repositories: ${{ steps.solution-repo.outputs.name }}
+          permission-contents: read
+
       - name: Clone solution repo
         uses: actions/checkout@v4
         with:
           repository: ${{ inputs.solution-repo }}
           ref: ${{ inputs.ref }}
+          # The app token when minted above; otherwise the run's own token.
+          token: ${{ steps.solution-token.outputs.token || github.token }}
+          # The token is needed only for the clone; do not leave it in the
+          # checkout's git config for the later steps.
+          persist-credentials: false
           # Check out into a subdirectory named after the solution so
           # gapp's folder-name fallback (used when gapp.yaml omits a
           # top-level `name:`) resolves to the right solution. Without

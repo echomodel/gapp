@@ -91,7 +91,21 @@ No terraform or gcloud on the deploying machine.
    project, shared by every solution there), binds the pool to the
    CI repo, and writes one workflow per solution into the CI repo through
    the GitHub API (no clone, commit, or push on the operator's machine).
-3. `gapp ci trigger` dispatches that workflow and streams the run;
+   Deployment values go into that workflow, never into the solution
+   repo: `gapp ci setup --domain mcp.example.com` writes the custom
+   domain, which overrides `gapp.yaml` at deploy time, and a re-run
+   without `--domain` keeps it. Never hand-edit the workflow file.
+3. **Private solution repo.** The runner's built-in token can read
+   only the CI repo, so a private solution repo is cloned with a
+   one-hour token from a GitHub App the user installs on the repo's
+   owner (a browser step, `references/environment.md`). `gapp ci
+   setup` detects the private repo, wires the app's id and key into
+   the workflow from the CI repo's Actions variable
+   `HOSTING_GITHUB_APP_ID` and secret `HOSTING_GITHUB_APP_PRIVATE_KEY`,
+   and names whichever is missing in `next_step`. `gapp ci status`
+   shows the same; `gapp ci trigger` refuses until both exist. A
+   public solution repo needs none of this.
+4. `gapp ci trigger` dispatches that workflow and streams the run;
    it needs `gh` logged in. Any GitHub tool that can dispatch a
    workflow and read the run does the same job.
 
@@ -129,19 +143,50 @@ deploys on push.
 Subdomains only (`mcp.example.com`); apex domains need A records,
 which Cloud Run domain mapping does not handle cleanly.
 
-1. Set it: `domain:` in `gapp.yaml`, or init with `domain=`.
-2. Deploy. The next deploy creates the domain mapping; the
+1. **Verify ownership first.** Cloud Run maps a domain only for an
+   identity that has verified it or a parent, and a verification
+   belongs to the account that did it, not to the project. Check
+   with `gcloud domains list-user-verified`; if the domain or a parent
+   is not listed, the user runs `gcloud domains verify <parent>`,
+   which opens Search Console, and finishes there. Verify at the
+   narrowest parent that is useful: one verification of
+   `example.com` covers every `*.example.com` the user will map, and
+   it keeps the verification record off the mapped name itself,
+   because a TXT record and a CNAME cannot share a name. If the user
+   must verify the exact host that will carry the CNAME, point them
+   at Search Console's CNAME verification method instead of TXT.
+   For CI deploys, the user also adds the deploy service account
+   (`gapp-deploy@<project-id>.iam.gserviceaccount.com`) as a verified
+   owner of that Search Console property (Settings, Verified owners,
+   Add an owner); otherwise the runner cannot create or recreate the
+   mapping. `gapp deploy` checks all this before terraform and stops
+   with these steps when the identity has not verified the domain.
+2. **Set it.** Local deploys: `domain:` in `gapp.yaml`, or init with
+   `domain=`. CI deploys: `gapp ci setup --domain mcp.example.com`;
+   the workflow's `domain:` input wins over `gapp.yaml`, so a public
+   solution repo can carry a placeholder such as `app.example.com`
+   or no domain at all.
+3. **Deploy.** The next deploy creates the domain mapping; the
    `.run.app` URL keeps working throughout.
-3. DNS: the user adds `CNAME mcp.example.com -> ghs.googlehosted.com`
+4. **DNS.** The user adds `CNAME mcp.example.com -> ghs.googlehosted.com`
    at their registrar. Ask which registrar they use and walk them to
    its DNS page; this is the one step gapp cannot automate.
-4. Watch `gapp status`: `pending_dns` (CNAME missing or not
-   propagated), `pending_cert` (DNS right, certificate provisioning),
-   `active`.
+5. **Watch `gapp status`.** Its `domain` block reports `pending_dns`
+   (CNAME missing or not propagated; the CNAME target is included),
+   `pending_cert` (DNS right, certificate provisioning, usually
+   minutes), `active`, or `error` with Cloud Run's message.
 
-Remove a domain by clearing the field (or `domain=""`) and
-redeploying; change one by editing the field, redeploying, and
-updating the CNAME.
+**Changing or removing a domain destroys the old mapping first.**
+Terraform replaces a changed mapping by deleting the live one before
+creating the new one, so a typo, a placeholder, or an omitted field
+takes the domain down. `gapp deploy` reads the live mapping from
+Terraform state before building and refuses, naming the live domain,
+when the deploy would map a different domain or none. If the change
+is intended, re-run with `--replace-domain` (`replace_domain=True`
+on the SDK and MCP tool), then update the CNAME. If it is not, fix
+`domain:` in `gapp.yaml` or re-run `gapp ci setup --domain` with the
+right value. A redeploy that keeps the same domain is never blocked,
+even by an identity that did not verify the domain.
 
 ## Ongoing operations
 
@@ -160,9 +205,12 @@ bucket path from a logged-in machine, for example
 the running service sees it on its next read. The solution's own
 skill or README says what belongs there and how it finds out.
 
-**Status and discovery.** `gapp status` for health, URL, and next
-step. `gapp list` for the active owner namespace, `gapp list --all`
-for every namespace, `gapp projects list` for env bindings.
+**Status and discovery.** `gapp status` for health, URL, custom
+domain state, and next step. `gapp list` for the active owner
+namespace, `gapp list --all` for every namespace, `gapp projects list`
+for env bindings. An expired or wrong gcloud login surfaces from these
+as an authorization error naming the account; it is never reported as
+"not deployed", so take such an error at face value and fix the login.
 
 **Env bindings.** `gapp projects set-env <id> <env>` (idempotent for
 the same value, `--force` to overwrite), `gapp projects clear-env

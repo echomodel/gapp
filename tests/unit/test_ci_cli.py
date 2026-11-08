@@ -6,8 +6,18 @@ from gapp.admin.cli.main import main as cli_main
 from gapp.admin.sdk import ci as ci_mod
 
 
+def _status(**overrides):
+    base = {
+        "repo": "acme/deploy-workflows", "workflow": False, "solution_repo": None,
+        "solution_repo_private": None, "domain": None, "app_credentials": None,
+        "next_step": None,
+    }
+    base.update(overrides)
+    return base
+
+
 def test_ci_status_reports_next_step(monkeypatch):
-    monkeypatch.setattr(ci_mod, "get_ci_status", lambda solution=None: {"repo": "acme/deploy-workflows", "workflow": False})
+    monkeypatch.setattr(ci_mod, "get_ci_status", lambda solution=None: _status())
     result = CliRunner().invoke(cli_main, ["ci", "status"])
     assert result.exit_code == 0, result.output
     assert "acme/deploy-workflows" in result.output
@@ -16,10 +26,40 @@ def test_ci_status_reports_next_step(monkeypatch):
 
 
 def test_ci_status_without_repo_points_at_init(monkeypatch):
-    monkeypatch.setattr(ci_mod, "get_ci_status", lambda solution=None: {"repo": None, "workflow": False})
+    monkeypatch.setattr(ci_mod, "get_ci_status", lambda solution=None: _status(repo=None))
     result = CliRunner().invoke(cli_main, ["ci", "status"])
     assert result.exit_code == 0, result.output
     assert "Next Step: ci init" in result.output
+
+
+def test_ci_status_shows_private_repo_credentials_and_next_step(monkeypatch):
+    monkeypatch.setattr(ci_mod, "get_ci_status", lambda solution=None: _status(
+        workflow=True, solution_repo="me/my-app", solution_repo_private=True,
+        domain="mcp.example.com",
+        app_credentials={
+            "app_id_var": "HOSTING_GITHUB_APP_ID", "app_key_secret": "HOSTING_GITHUB_APP_PRIVATE_KEY",
+            "app_id_present": True, "private_key_present": False,
+        },
+        next_step={"action": "configure hosting app", "hint": "Missing in acme/deploy-workflows: Actions secret HOSTING_GITHUB_APP_PRIVATE_KEY."},
+    ))
+    result = CliRunner().invoke(cli_main, ["ci", "status"])
+    assert result.exit_code == 0, result.output
+    assert "me/my-app (private)" in result.output
+    assert "Domain:    mcp.example.com" in result.output
+    assert "variable HOSTING_GITHUB_APP_ID present" in result.output
+    assert "secret HOSTING_GITHUB_APP_PRIVATE_KEY missing" in result.output
+    assert "Next Step: configure hosting app" in result.output
+    assert "Ready: gapp ci trigger" not in result.output
+
+
+def test_ci_status_ready_for_public_repo(monkeypatch):
+    monkeypatch.setattr(ci_mod, "get_ci_status", lambda solution=None: _status(
+        workflow=True, solution_repo="me/my-app", solution_repo_private=False,
+    ))
+    result = CliRunner().invoke(cli_main, ["ci", "status"])
+    assert result.exit_code == 0, result.output
+    assert "me/my-app (public)" in result.output
+    assert "Ready: gapp ci trigger" in result.output
 
 
 def test_ci_init_passes_args_and_prints_result(monkeypatch):
@@ -38,23 +78,59 @@ def test_ci_init_passes_args_and_prints_result(monkeypatch):
     assert "Next Step: gapp ci setup" in result.output
 
 
+def _setup_result(**overrides):
+    base = {
+        "solution": "my-app", "solution_repo": "me/my-app", "solution_repo_private": False,
+        "project_id": "my-proj", "ci_repo": "acme/deploy-workflows", "domain": None,
+        "app_credentials": None, "wif_pool": "exists", "wif_provider": "created",
+        "service_account": "exists", "binding": "exists", "workflow": "pushed", "next_step": None,
+    }
+    base.update(overrides)
+    return base
+
+
 def test_ci_setup_passes_args_and_prints_resources(monkeypatch):
     calls = {}
 
-    def fake_setup(solution=None, solution_repo=None):
-        calls["solution"], calls["solution_repo"] = solution, solution_repo
-        return {
-            "solution": "my-app", "solution_repo": "me/my-app", "project_id": "my-proj",
-            "ci_repo": "acme/deploy-workflows", "wif_pool": "exists", "wif_provider": "created",
-            "service_account": "exists", "binding": "exists", "workflow": "pushed",
-        }
+    def fake_setup(solution=None, solution_repo=None, domain=None, app_id_var=None, app_key_secret=None):
+        calls.update(solution=solution, solution_repo=solution_repo, domain=domain,
+                     app_id_var=app_id_var, app_key_secret=app_key_secret)
+        return _setup_result()
 
     monkeypatch.setattr(ci_mod, "setup_ci", fake_setup)
     result = CliRunner().invoke(cli_main, ["ci", "setup", "--solution", "my-app", "--solution-repo", "me/my-app"])
     assert result.exit_code == 0, result.output
-    assert calls == {"solution": "my-app", "solution_repo": "me/my-app"}
-    assert "my-app (me/my-app) → my-proj via acme/deploy-workflows" in result.output
+    assert calls == {"solution": "my-app", "solution_repo": "me/my-app", "domain": None,
+                     "app_id_var": None, "app_key_secret": None}
+    assert "my-app (me/my-app, public) → my-proj via acme/deploy-workflows" in result.output
     assert "Workflow pushed" in result.output
+    assert "Next Step: gapp ci trigger" in result.output
+
+
+def test_ci_setup_passes_domain_and_app_credential_names(monkeypatch):
+    calls = {}
+
+    def fake_setup(solution=None, solution_repo=None, domain=None, app_id_var=None, app_key_secret=None):
+        calls.update(domain=domain, app_id_var=app_id_var, app_key_secret=app_key_secret)
+        return _setup_result(
+            solution_repo_private=True, domain=domain,
+            app_credentials={"app_id_var": app_id_var, "app_key_secret": app_key_secret,
+                             "app_id_present": False, "private_key_present": False},
+            next_step={"action": "configure hosting app", "hint": "Missing in acme/deploy-workflows: Actions variable MY_APP_ID, Actions secret MY_APP_KEY."},
+        )
+
+    monkeypatch.setattr(ci_mod, "setup_ci", fake_setup)
+    result = CliRunner().invoke(cli_main, [
+        "ci", "setup", "--domain", "mcp.example.com",
+        "--app-id-var", "MY_APP_ID", "--app-key-secret", "MY_APP_KEY",
+    ])
+    assert result.exit_code == 0, result.output
+    assert calls == {"domain": "mcp.example.com", "app_id_var": "MY_APP_ID", "app_key_secret": "MY_APP_KEY"}
+    assert "private" in result.output
+    assert "Domain mcp.example.com" in result.output
+    assert "variable MY_APP_ID missing" in result.output
+    assert "Next Step: configure hosting app" in result.output
+    assert "Next Step: gapp ci trigger" not in result.output
 
 
 def test_ci_trigger_maps_no_watch_and_prints_run(monkeypatch):
@@ -84,3 +160,21 @@ def test_ci_commands_surface_sdk_errors(monkeypatch):
     result = CliRunner().invoke(cli_main, ["ci", "trigger"])
     assert result.exit_code == 1
     assert "No CI repo configured" in result.output
+
+
+def test_deploy_passes_replace_domain(monkeypatch):
+    from gapp.admin.sdk.core import GappSDK
+    calls = {}
+
+    def fake_deploy(self, **kwargs):
+        calls.update(kwargs)
+        return {"name": "my-app"}
+
+    monkeypatch.setattr(GappSDK, "deploy", fake_deploy)
+    result = CliRunner().invoke(cli_main, ["deploy", "--replace-domain"])
+    assert result.exit_code == 0, result.output
+    assert calls["replace_domain"] is True
+
+    result = CliRunner().invoke(cli_main, ["deploy"])
+    assert result.exit_code == 0, result.output
+    assert calls["replace_domain"] is False
