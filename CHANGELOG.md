@@ -3,7 +3,7 @@
 Notable changes to gapp. Versions are git tags (`vX.Y.Z`); the version
 source is `gapp/__init__.py`.
 
-## Unreleased
+## 3.9.0
 
 - The CI repo holds one generic deploy workflow
   (`.github/workflows/gapp-deploy.yml`), one register workflow
