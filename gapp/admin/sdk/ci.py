@@ -1,16 +1,18 @@
-"""gapp ci — CI/CD automation for gapp solutions.
+"""gapp ci — the CI fleet system.
 
-The operator's CI repo holds three gapp-owned files, installed by `ci init`:
-a generic deploy workflow, a register workflow, and the data file
-`gapp/solutions.yaml` that maps each solution to its repo, project and
-domain. `ci setup` registers a solution by dispatching the register
-workflow, which validates and writes the entry with its own token, so the
-machine running `ci setup` needs neither gcloud nor a GitHub API write.
-`ci trigger` dispatches the deploy workflow with a solution name. The only
-step that needs gcloud is the first `ci setup` on a project, which creates
-the project's Workload Identity pool, provider and deploy service account
-and records them in the CI repo as a GitHub Environment named after the
-project id.
+gapp has two fleet systems that do not talk to each other. The root
+commands (`gapp setup`, `deploy`, `status`, ...) are the direct system:
+they need a Google Cloud identity and their record is the GCP project
+label. The `gapp ci` commands here are the CI system: they need GitHub
+(write access to the CI repo, or just dispatch) and their record is
+`gapp/solutions.yaml` in the operator repo plus the project's GitHub
+Environment. Nothing in this module reads GCP, except `setup_ci_project`,
+the one command that touches both, once per project.
+
+Every command's requirements are fixed by its name, and every expected
+failure comes back as a plain outcome with a next step: the result dicts
+carry `ok` and, when `ok` is False, `next_step` with `action` and `hint`.
+Nothing here raises for a condition the operator can act on.
 """
 
 import base64
@@ -37,11 +39,12 @@ APP_ID_VAR = "HOSTING_GITHUB_APP_ID"
 APP_KEY_SECRET = "HOSTING_GITHUB_APP_PRIVATE_KEY"
 
 # Comma-separated GitHub owners whose repos the register workflow accepts.
-ALLOWED_OWNERS_VAR = "GAPP_ALLOWED_OWNERS"
+# Managed by `gapp ci sources`.
+ALLOWED_SOURCES_VAR = "GAPP_ALLOWED_SOURCES"
 
 # Per-project deploy identity, recorded in the CI repo as a GitHub
 # Environment named after the project id, holding these two variables.
-# Written by the first `ci setup` on a project, read by every deploy.
+# Written by `gapp ci project setup`, read by every deploy.
 ENV_WIF_PROVIDER_VAR = "GAPP_WIF_PROVIDER"
 ENV_DEPLOY_SA_VAR = "GAPP_DEPLOY_SERVICE_ACCOUNT"
 
@@ -56,7 +59,7 @@ SOLUTIONS_FILE = "gapp/solutions.yaml"
 SOLUTIONS_FILE_INITIAL = """\
 # Solutions registered for CI deploys. gapp owns this file: the register
 # workflow (gapp ci setup) writes it and the deploy workflow (gapp ci
-# trigger) reads it. Each entry has name, repo (owner/name), project (the
+# deploy) reads it. Each entry has name, repo (owner/name), project (the
 # GCP project id; the GitHub Environment of the same name holds the deploy
 # identity), and optionally domain and gapp_ref.
 solutions: []
@@ -67,8 +70,69 @@ UNCHECKED_NOTE = (
     "API is not reachable here); the register and deploy runs check it"
 )
 
-# The register workflow prefixes every line meant for the operator.
+# The register workflow prefixes every line meant for the operator, and
+# reports its outcome as `gapp-register: result=<code>`.
 REGISTER_LOG_PREFIX = "gapp-register:"
+REGISTER_SUCCESS_CODES = ("added", "updated", "unchanged")
+
+# The two messages `ci setup` prints verbatim for the two one-time steps.
+PROJECT_NOT_TRUSTED_MESSAGE = (
+    "CI repo {ci_repo} is not yet trusted to deploy to GCP project {project}. One-time setup:\n"
+    "\n"
+    "1. Run `gapp ci project setup {project}`\n"
+    "   - Requires gcloud signed in as an Owner of {project}\n"
+    "   - Requires `gh` signed in as an admin of {ci_repo}\n"
+    "2. Run this command again: {command}"
+)
+SOURCE_NOT_ALLOWED_MESSAGE = (
+    "Source repos owned by {owner} are not yet allowed to deploy through CI repo {ci_repo}. One-time setup:\n"
+    "\n"
+    "1. Run `gapp ci sources add {owner}`\n"
+    "   - Or: gh variable set GAPP_ALLOWED_SOURCES --repo {ci_repo} --body <current-list>,{owner}\n"
+    "   - Requires `gh` signed in with write access to {ci_repo}\n"
+    "2. Run this command again: {command}"
+)
+
+PROJECT_SETUP_REQUIREMENTS = (
+    "`gapp ci project setup <project>` requires gcloud signed in as an Owner of the "
+    "project and `gh` signed in as an admin of the CI repo (its owner, for a personal repo)."
+)
+
+
+# --- outcomes ---
+
+
+def _outcome(action: str, hint: str, **extra) -> dict:
+    """A plain outcome: what stands in the way, and the exact next step."""
+    result = {"ok": False, "next_step": {"action": action, "hint": hint}}
+    result.update(extra)
+    return result
+
+
+def _gh_reason(stderr: str, ci_repo: str) -> str:
+    """Translate a gh failure into words, without the raw HTTP error."""
+    text = stderr or ""
+    if "401" in text or "authentication" in text.lower() or "not logged" in text.lower():
+        return "`gh` is not signed in on this machine"
+    if "403" in text or "blocked" in text.lower() or "forbidden" in text.lower():
+        return f"this machine's GitHub access is not allowed to do that in {ci_repo}"
+    if "404" in text:
+        return f"{ci_repo}, or the file or workflow asked for, was not found by this GitHub login"
+    return "GitHub did not accept the request"
+
+
+def _gh_missing_outcome() -> dict:
+    return _outcome("install gh", (
+        "The GitHub CLI (gh) is not installed on this machine, and every `gapp ci` command works "
+        "through it. Install it, then sign in with `gh auth login`."
+    ))
+
+
+def _no_ci_repo_outcome() -> dict:
+    return _outcome("ci init", (
+        "No CI repo is configured on this machine. Run `gapp ci init <owner>/<repo>` once to "
+        "designate the repo that holds gapp's deploy and register workflows."
+    ))
 
 
 # --- local config and repo resolution ---
@@ -160,6 +224,10 @@ def get_ci_repo() -> str | None:
     return _resolve_ci_repo()
 
 
+def _gh_available() -> bool:
+    return shutil.which("gh") is not None
+
+
 # --- GitHub API plumbing (everything goes through the gh CLI) ---
 
 
@@ -172,20 +240,6 @@ def _gh_api_json(args: list[str], payload: dict | None = None) -> tuple[int, str
         kwargs["input"] = json.dumps(payload)
     res = subprocess.run(cmd, **kwargs)
     return res.returncode, res.stdout or "", res.stderr or ""
-
-
-def _is_repo_private(repo: str) -> bool:
-    """Whether a GitHub repo is private, from the API (`.private`)."""
-    res = subprocess.run(
-        ["gh", "api", f"repos/{repo}", "--jq", ".private"],
-        capture_output=True, text=True,
-    )
-    if res.returncode != 0:
-        raise RuntimeError(
-            f"Could not read the visibility of {repo}: {res.stderr.strip()}\n"
-            f"  The gh login needs read access to the solution repo."
-        )
-    return res.stdout.strip().lower() == "true"
 
 
 def _read_ci_file(ci_repo: str, path: str) -> tuple[str | None, str | None]:
@@ -240,6 +294,17 @@ def _write_ci_file(ci_repo: str, path: str, content: str, message: str) -> str:
     return "updated" if sha else "created"
 
 
+def _repo_permission(ci_repo: str) -> tuple[bool | None, str]:
+    """Whether the gh login is an admin of the CI repo: (admin, reason when unknown)."""
+    rc, out, err = _gh_api_json([f"repos/{ci_repo}", "--jq", ".permissions.admin"])
+    if rc != 0:
+        return None, _gh_reason(err, ci_repo)
+    value = out.strip().lower()
+    if value in ("true", "false"):
+        return value == "true", ""
+    return None, "GitHub did not report this login's permission on the repo"
+
+
 # --- Actions variables and secrets (presence only; GitHub never returns a secret) ---
 
 
@@ -248,9 +313,9 @@ def _actions_api_available(ci_repo: str) -> bool:
 
     Some sessions reach GitHub through a proxy that refuses the Actions
     variables and secrets API while allowing contents reads and workflow
-    dispatch. The capability is probed once, up front, like gcloud is, so a
-    check this machine cannot perform is reported as unchecked rather than
-    as a failure or a missing value.
+    dispatch. The capability is probed once, up front, so a check this
+    machine cannot perform is reported as unchecked rather than as a
+    failure or a missing value.
     """
     res = subprocess.run(
         ["gh", "api", f"repos/{ci_repo}/actions/variables?per_page=1"],
@@ -276,23 +341,23 @@ def _actions_item_present(ci_repo: str, kind: str, name: str) -> bool | None:
     return None
 
 
-def _actions_variable_value(ci_repo: str, name: str) -> str | None:
-    """The value of an Actions variable, or None when absent or unreadable."""
-    rc, out, _ = _gh_api_json([f"repos/{ci_repo}/actions/variables/{name}"])
-    if rc != 0 or not out.strip():
-        return None
-    return (json.loads(out).get("value") or "").strip() or None
+def _actions_variable_value(ci_repo: str, name: str) -> tuple[int, str | None, str]:
+    """(rc, value or None when absent, stderr) of an Actions variable read."""
+    rc, out, err = _gh_api_json([f"repos/{ci_repo}/actions/variables/{name}"])
+    if rc != 0:
+        return rc, None, err
+    return 0, (json.loads(out).get("value") or "").strip(), ""
 
 
 def _variables_report(ci_repo: str) -> dict:
     """Presence of the three operator-set values in the CI repo.
 
     `variables` maps each name to True, False, or None (unchecked). The
-    hosting app's pair matters only for private solution repos; the owner
+    hosting app's pair matters only for private solution repos; the source
     allowlist is needed before any solution can be registered. Never sets
     or overwrites them: the values are the operator's.
     """
-    names = {ALLOWED_OWNERS_VAR: "variables", APP_ID_VAR: "variables", APP_KEY_SECRET: "secrets"}
+    names = {ALLOWED_SOURCES_VAR: "variables", APP_ID_VAR: "variables", APP_KEY_SECRET: "secrets"}
     if not _actions_api_available(ci_repo):
         return {"variables": {n: None for n in names}, "checked": False, "note": UNCHECKED_NOTE}
     return {
@@ -302,16 +367,16 @@ def _variables_report(ci_repo: str) -> dict:
 
 
 def _variables_next_step(ci_repo: str, report: dict) -> dict | None:
-    """The `gh` commands for whichever operator-set values are missing."""
+    """The commands for whichever operator-set values are missing."""
     if not report["checked"]:
         return None
     present = report["variables"]
     lines = []
-    if present[ALLOWED_OWNERS_VAR] is not True:
+    if present[ALLOWED_SOURCES_VAR] is not True:
         lines.append(
-            f"Repository variable {ALLOWED_OWNERS_VAR} is not set in {ci_repo}. The register "
-            f"workflow accepts only solution repos whose owner it lists (comma-separated):\n"
-            f"  gh variable set {ALLOWED_OWNERS_VAR} --repo {ci_repo} --body <owner1,owner2>"
+            f"No source owners are allowed yet in {ci_repo}: the register workflow accepts only "
+            f"solution repos whose GitHub owner is listed. Allow each owner once:\n"
+            f"  gapp ci sources add <owner>"
         )
     missing_app = [n for n in (APP_ID_VAR, APP_KEY_SECRET) if present[n] is not True]
     if missing_app:
@@ -331,46 +396,6 @@ def _variables_next_step(ci_repo: str, report: dict) -> dict | None:
     return {"action": "configure variables", "hint": "\n".join(lines)}
 
 
-def _hosting_app_presence(ci_repo: str) -> dict:
-    """Presence of the hosting app's variable and secret, or unchecked."""
-    if not _actions_api_available(ci_repo):
-        return {
-            "app_id_var": APP_ID_VAR, "app_key_secret": APP_KEY_SECRET,
-            "app_id_present": None, "private_key_present": None,
-            "checked": False, "note": UNCHECKED_NOTE,
-        }
-    return {
-        "app_id_var": APP_ID_VAR, "app_key_secret": APP_KEY_SECRET,
-        "app_id_present": _actions_item_present(ci_repo, "variables", APP_ID_VAR),
-        "private_key_present": _actions_item_present(ci_repo, "secrets", APP_KEY_SECRET),
-        "checked": True, "note": None,
-    }
-
-
-def _hosting_app_next_step(ci_repo: str, solution_repo: str, creds: dict) -> dict | None:
-    """For a private solution repo: the missing credential, if known."""
-    if not creds["checked"]:
-        return None
-    missing = []
-    if creds["app_id_present"] is not True:
-        missing.append(f"Actions variable {APP_ID_VAR}")
-    if creds["private_key_present"] is not True:
-        missing.append(f"Actions secret {APP_KEY_SECRET}")
-    if not missing:
-        return None
-    return {
-        "action": "configure hosting app",
-        "hint": (
-            f"{solution_repo} is private; CI clones it with a GitHub App installed on "
-            f"its owner. Missing in {ci_repo}: {', '.join(missing)}. Store the app's id and "
-            f"private key there:\n"
-            f"  gh variable set {APP_ID_VAR} --repo {ci_repo} --body <app-id>\n"
-            f"  gh secret set {APP_KEY_SECRET} --repo {ci_repo} < key.pem\n"
-            f"See docs/CI.md, \"Private solution repos\"."
-        ),
-    }
-
-
 # --- the per-project Environment record ---
 
 
@@ -384,37 +409,6 @@ def _environment_exists(ci_repo: str, project_id: str) -> bool:
     return rc == 0 and bool(out.strip())
 
 
-def _read_environment_record(ci_repo: str, project_id: str) -> dict | None:
-    """The deploy identity recorded for a project in the CI repo.
-
-    The record is the GitHub Environment named after the project id. Its
-    existence is the check (repo environments endpoint). When the Actions
-    variables API is readable from this machine, the two variables are
-    read too and an incomplete record is reported as None so the gcloud
-    path can repair it; when it is not, the record is trusted as written
-    and the values come back as None with `checked` False.
-    """
-    if not _environment_exists(ci_repo, project_id):
-        return None
-    if not _actions_api_available(ci_repo):
-        return {"wif_provider": None, "service_account": None,
-                "checked": False, "note": UNCHECKED_NOTE}
-    values = {}
-    for var in (ENV_WIF_PROVIDER_VAR, ENV_DEPLOY_SA_VAR):
-        rc, out, _ = _gh_api_json([f"repos/{ci_repo}/environments/{project_id}/variables/{var}"])
-        if rc != 0 or not out.strip():
-            return None
-        value = (json.loads(out).get("value") or "").strip()
-        if not value:
-            return None
-        values[var] = value
-    return {
-        "wif_provider": values[ENV_WIF_PROVIDER_VAR],
-        "service_account": values[ENV_DEPLOY_SA_VAR],
-        "checked": True, "note": None,
-    }
-
-
 def _write_environment_record(ci_repo: str, project_id: str,
                               wif_provider: str, service_account: str) -> str:
     """Record a project's deploy identity in the CI repo.
@@ -425,9 +419,7 @@ def _write_environment_record(ci_repo: str, project_id: str,
     """
     rc, _, err = _gh_api_json(["-X", "PUT", f"repos/{ci_repo}/environments/{project_id}"])
     if rc != 0:
-        raise RuntimeError(
-            f"Could not create the GitHub Environment '{project_id}' in {ci_repo}: {err.strip()}"
-        )
+        raise RuntimeError(f"create the Environment '{project_id}': {_gh_reason(err, ci_repo)}")
     status = "unchanged"
     for var, value in ((ENV_WIF_PROVIDER_VAR, wif_provider), (ENV_DEPLOY_SA_VAR, service_account)):
         endpoint = f"repos/{ci_repo}/environments/{project_id}/variables"
@@ -441,9 +433,7 @@ def _write_environment_record(ci_repo: str, project_id: str,
             rc, _, err = _gh_api_json(["-X", "POST", endpoint], {"name": var, "value": value})
             status = "created"
         if rc != 0:
-            raise RuntimeError(
-                f"Could not write Environment variable {var} on '{project_id}' in {ci_repo}: {err.strip()}"
-            )
+            raise RuntimeError(f"write the Environment variable {var} on '{project_id}': {_gh_reason(err, ci_repo)}")
     return status
 
 
@@ -509,6 +499,23 @@ def _install_operator_files(ci_repo: str) -> dict[str, str]:
     return statuses
 
 
+def _files_report(ci_repo: str) -> dict:
+    """Presence, and currency against this gapp's templates, of the three files."""
+    report = {}
+    try:
+        gapp_repo = _get_gapp_repo()
+        expected = _operator_files(gapp_repo, _resolve_gapp_ref(gapp_repo))
+    except RuntimeError:
+        expected = {}
+    for path in (DEPLOY_WORKFLOW_PATH, REGISTER_WORKFLOW_PATH):
+        _, content = _read_ci_file(ci_repo, path)
+        report[path] = {"present": content is not None,
+                        "current": (content == expected.get(path)) if (content is not None and path in expected) else None}
+    _, data = _read_ci_file(ci_repo, SOLUTIONS_FILE)
+    report[SOLUTIONS_FILE] = {"present": data is not None, "current": None}
+    return report
+
+
 def _load_solutions(ci_repo: str) -> list[dict] | None:
     """The entries of gapp/solutions.yaml in the CI repo, or None when the file is absent."""
     _, content = _read_ci_file(ci_repo, SOLUTIONS_FILE)
@@ -560,14 +567,21 @@ def init_ci(repo: str, local_only: bool = False) -> dict:
        create the solutions data file (unless local_only)
     6. Report whether the operator-set variables and secret exist
 
-    Returns dict describing what was done.
+    Needs a GitHub API write (the workflow files). Returns dict describing
+    what was done; `ok` is False with `next_step` when the files could not
+    be installed from this machine.
     """
+    if not local_only and not _gh_available():
+        return {"repo": repo, "config_status": None, "topic_status": None, **_gh_missing_outcome()}
+
     full_name = _resolve_repo(repo)
 
     result = {
+        "ok": True,
         "repo": full_name,
         "config_status": None,
         "topic_status": None,
+        "next_step": None,
     }
 
     # Write to local config
@@ -583,10 +597,10 @@ def init_ci(repo: str, local_only: bool = False) -> dict:
     # Check if another repo already has the topic
     existing = _find_ci_repo_by_topic()
     if existing and existing != full_name:
-        raise RuntimeError(
-            f"Another repo already has the {_CI_TOPIC} topic: {existing}\n"
-            f"  Remove the topic from that repo first, or use --local-only."
-        )
+        return {**result, **_outcome("choose one CI repo", (
+            f"Another repo already carries the {_CI_TOPIC} topic: {existing}. One CI repo per operator. "
+            f"Remove the topic from that repo first, or run `gapp ci init {full_name} --local-only`."
+        ))}
 
     if existing == full_name:
         result["topic_status"] = "already_set"
@@ -606,9 +620,11 @@ def init_ci(repo: str, local_only: bool = False) -> dict:
                 text=True,
             )
             if create.returncode != 0:
-                raise RuntimeError(
-                    f"Failed to create repo {full_name}: {create.stderr.strip()}"
-                )
+                return {**result, **_outcome("create the CI repo", (
+                    f"{full_name} does not exist and could not be created from this machine: "
+                    f"{_gh_reason(create.stderr, full_name)}. Create it on GitHub (private), or sign in "
+                    f"with `gh auth login` as an account that can create it, then run `gapp ci init {full_name}` again."
+                ))}
             result["repo_created"] = True
 
         # Add topic
@@ -623,40 +639,222 @@ def init_ci(repo: str, local_only: bool = False) -> dict:
     # API writes cannot; say so and name the files.
     try:
         result["files"] = _install_operator_files(full_name)
-        result["next_step"] = None
     except RuntimeError as e:
         result["files"] = None
-        result["next_step"] = {
-            "action": "install operator files",
-            "hint": (
-                f"The GitHub API refused to write gapp's files to {full_name} from this machine "
-                f"({str(e).splitlines()[0]}). Run `gapp ci init {full_name}` from a machine whose "
-                f"gh login can write to the repo; it installs {DEPLOY_WORKFLOW_PATH}, "
-                f"{REGISTER_WORKFLOW_PATH} and {SOLUTIONS_FILE}."
-            ),
-        }
+        result.update(_outcome("install operator files", (
+            f"gapp's files could not be written to {full_name} from this machine: "
+            f"{_gh_reason(str(e), full_name)}. `gapp ci init` needs a `gh` login that can write to "
+            f"the repo. Run `gapp ci init {full_name}` from a machine with one; it installs "
+            f"{DEPLOY_WORKFLOW_PATH}, {REGISTER_WORKFLOW_PATH} and {SOLUTIONS_FILE}."
+        )))
 
     report = _variables_report(full_name)
     result["variables"] = report["variables"]
     result["variables_checked"] = report["checked"]
     result["variables_note"] = report["note"]
-    if result["next_step"] is None:
+    if result["ok"]:
         result["next_step"] = _variables_next_step(full_name, report)
+    return result
+
+
+# --- ci project setup: the one CI command that touches GCP ---
+
+
+def _gcloud_outcome(step: str, project_id: str, detail: str) -> dict:
+    """Classify a gcloud failure into words with the requirement restated."""
+    text = (detail or "").strip()
+    first = text.splitlines()[0] if text else ""
+    lowered = text.lower()
+    if "unauthenticated" in lowered or "credential" in lowered or "login" in lowered:
+        why = "gcloud has no working sign-in on this machine"
+    elif "permission" in lowered or "403" in lowered or "forbidden" in lowered:
+        why = f"the signed-in gcloud account is not an Owner of {project_id} (permission denied)"
+    elif "not found" in lowered or "404" in lowered:
+        why = f"project {project_id} was not found by the signed-in gcloud account"
+    else:
+        why = f"gcloud could not {step}" + (f" ({first})" if first else "")
+    return _outcome("sign in to gcloud as an Owner", (
+        f"Could not {step} for project {project_id}: {why}. {PROJECT_SETUP_REQUIREMENTS} "
+        f"Sign in with `gcloud auth login` (or point gapp at the right account with "
+        f"`gapp config account <email>`), then run `gapp ci project setup {project_id}` again."
+    ))
+
+
+def setup_ci_project(project: str) -> dict:
+    """Make the CI repo trusted to deploy to a GCP project. Once per project, idempotent.
+
+    Creates or confirms the Workload Identity pool and provider and the
+    `gapp-deploy` service account in the project, binds the pool to the
+    CI repo, and records the deploy identity in the CI repo as the GitHub
+    Environment named after the project (`GAPP_WIF_PROVIDER`,
+    `GAPP_DEPLOY_SERVICE_ACCOUNT`). This is the only `gapp ci` command that
+    touches GCP. Requires gcloud signed in as an Owner of the project and
+    `gh` signed in as an admin of the CI repo; every failure says which.
+    """
+    project_id = (project or "").strip()
+    result = {
+        "ok": True, "project_id": project_id, "ci_repo": None,
+        "wif_pool": None, "wif_provider": None, "service_account": None, "binding": None,
+        "environment": project_id, "environment_record": None, "next_step": None,
+    }
+    if not project_id:
+        return {**result, **_outcome("pass the project", "Name the GCP project: `gapp ci project setup <project>`.")}
+    if not _gh_available():
+        return {**result, **_gh_missing_outcome()}
+    ci_repo = get_ci_repo()
+    if not ci_repo:
+        return {**result, **_no_ci_repo_outcome()}
+    result["ci_repo"] = ci_repo
+
+    admin, reason = _repo_permission(ci_repo)
+    if admin is not True:
+        why = reason if admin is None else f"the signed-in `gh` account is not an admin of {ci_repo}"
+        return {**result, **_outcome("sign in to gh as an admin", (
+            f"Cannot record the project's deploy identity in {ci_repo}: {why}. "
+            f"{PROJECT_SETUP_REQUIREMENTS} Sign in with `gh auth login` as the repo's admin "
+            f"(its owner, for a personal repo), then run `gapp ci project setup {project_id}` again."
+        ))}
+
+    if shutil.which("gcloud") is None:
+        return {**result, **_outcome("install gcloud", (
+            f"gcloud is not installed on this machine. {PROJECT_SETUP_REQUIREMENTS} Run "
+            f"`gapp ci project setup {project_id}` from a machine with gcloud signed in as an "
+            f"Owner of {project_id}; every other `gapp ci` command works from here."
+        ))}
+    try:
+        require_gcloud_account()
+    except RuntimeError as e:
+        return {**result, **_outcome("sign in to gcloud as an Owner", f"{e} {PROJECT_SETUP_REQUIREMENTS}")}
+
+    steps = (
+        ("wif_pool", "create or confirm the Workload Identity pool", lambda: _ensure_wif_pool(project_id)),
+        ("wif_provider", "create or confirm the Workload Identity provider",
+         lambda: _ensure_wif_provider(project_id, ci_repo.split("/")[0])),
+        ("service_account", "create or confirm the gapp-deploy service account", lambda: _ensure_deploy_sa(project_id)),
+        ("binding", "bind the Workload Identity pool to the CI repo", lambda: _ensure_wif_binding(project_id, ci_repo)),
+    )
+    for key, step, fn in steps:
+        try:
+            result[key] = fn()
+        except RuntimeError as e:
+            return {**result, **_gcloud_outcome(step, project_id, str(e))}
+    try:
+        project_number = _get_project_number(project_id)
+    except RuntimeError as e:
+        return {**result, **_gcloud_outcome("read the project number", project_id, str(e))}
+    try:
+        result["environment_record"] = _write_environment_record(
+            ci_repo, project_id, _wif_provider_path(project_number), _deploy_sa_email(project_id),
+        )
+    except RuntimeError as e:
+        return {**result, **_outcome("sign in to gh as an admin", (
+            f"GCP is ready, but the deploy identity could not be recorded in {ci_repo}: could not {e}. "
+            f"{PROJECT_SETUP_REQUIREMENTS} Then run `gapp ci project setup {project_id}` again; the GCP "
+            f"steps are idempotent."
+        ))}
+    return result
+
+
+# --- ci sources ---
+
+
+def _sources_list(ci_repo: str) -> tuple[list[str] | None, dict | None]:
+    """The allowed source owners, or (None, outcome) when they cannot be read."""
+    rc, value, err = _actions_variable_value(ci_repo, ALLOWED_SOURCES_VAR)
+    if rc != 0 and "404" in err:
+        return [], None
+    if rc != 0:
+        return None, _outcome("sign in to gh with write access", (
+            f"Could not read {ALLOWED_SOURCES_VAR} in {ci_repo}: {_gh_reason(err, ci_repo)}. "
+            f"`gapp ci sources` needs `gh` signed in with write access to {ci_repo}."
+        ))
+    return [o.strip() for o in (value or "").split(",") if o.strip()], None
+
+
+def _sources_write(ci_repo: str, owners: list[str], existed: bool) -> dict | None:
+    """Write the allowlist; returns an outcome on refusal, None on success."""
+    endpoint = f"repos/{ci_repo}/actions/variables"
+    value = ",".join(owners)
+    if not owners and existed:
+        rc, _, err = _gh_api_json(["-X", "DELETE", f"{endpoint}/{ALLOWED_SOURCES_VAR}"])
+    elif existed:
+        rc, _, err = _gh_api_json(["-X", "PATCH", f"{endpoint}/{ALLOWED_SOURCES_VAR}"],
+                                  {"name": ALLOWED_SOURCES_VAR, "value": value})
+    else:
+        rc, _, err = _gh_api_json(["-X", "POST", endpoint], {"name": ALLOWED_SOURCES_VAR, "value": value})
+    if rc != 0:
+        return _outcome("sign in to gh with write access", (
+            f"Could not write {ALLOWED_SOURCES_VAR} in {ci_repo}: {_gh_reason(err, ci_repo)}. "
+            f"`gapp ci sources` needs `gh` signed in with write access to {ci_repo}; sign in with "
+            f"`gh auth login`, or set the variable from a machine that can:\n"
+            f"  gh variable set {ALLOWED_SOURCES_VAR} --repo {ci_repo} --body {value or '<owners>'}"
+        ))
+    return None
+
+
+def manage_sources(action: str, owner: str | None = None) -> dict:
+    """List, add to, or remove from the owners allowed to deploy through the CI repo.
+
+    The list is the CI repo's repository variable `GAPP_ALLOWED_SOURCES`
+    (comma-separated GitHub owners); the register workflow refuses a
+    solution repo whose owner is not on it. Needs `gh` with write access
+    to the CI repo (read access for `list`).
+    """
+    result = {"ok": True, "action": action, "ci_repo": None, "owner": owner, "owners": None,
+              "changed": False, "next_step": None}
+    if action not in ("add", "remove", "list"):
+        return {**result, **_outcome("choose an action", "Use `gapp ci sources add|remove|list [<owner>]`.")}
+    if action != "list" and not (owner or "").strip():
+        return {**result, **_outcome("pass the owner", f"Name the GitHub owner: `gapp ci sources {action} <owner>`.")}
+    if not _gh_available():
+        return {**result, **_gh_missing_outcome()}
+    ci_repo = get_ci_repo()
+    if not ci_repo:
+        return {**result, **_no_ci_repo_outcome()}
+    result["ci_repo"] = ci_repo
+
+    owners, outcome = _sources_list(ci_repo)
+    if outcome:
+        return {**result, **outcome}
+    existed = _actions_item_present(ci_repo, "variables", ALLOWED_SOURCES_VAR) is True
+    result["owners"] = list(owners)
+    if action == "list":
+        return result
+
+    owner = owner.strip()
+    present = any(o.lower() == owner.lower() for o in owners)
+    if action == "add":
+        if present:
+            result["note"] = f"{owner} is already allowed to deploy through {ci_repo}."
+            return result
+        new_owners = owners + [owner]
+    else:
+        if not present:
+            result["note"] = f"{owner} is not in the allowed sources of {ci_repo}; nothing to remove."
+            return result
+        new_owners = [o for o in owners if o.lower() != owner.lower()]
+    refusal = _sources_write(ci_repo, new_owners, existed)
+    if refusal:
+        return {**result, **refusal}
+    result["owners"] = new_owners
+    result["changed"] = True
+    result["note"] = (f"{owner} may now deploy through {ci_repo}." if action == "add"
+                      else f"{owner} may no longer deploy through {ci_repo}.")
     return result
 
 
 # --- workflow runs ---
 
 
-def _dispatch(ci_repo: str, workflow_file: str, fields: dict[str, str]) -> None:
+def _dispatch(ci_repo: str, workflow_file: str, fields: dict[str, str]) -> str | None:
+    """Dispatch a workflow; returns None, or the reason in words when refused."""
     cmd = ["gh", "workflow", "run", workflow_file, "--repo", ci_repo]
     for key, value in fields.items():
         cmd += ["-f", f"{key}={value}"]
     res = subprocess.run(cmd, capture_output=True, text=True)
     if res.returncode != 0:
-        raise RuntimeError(
-            f"Failed to dispatch {workflow_file} in {ci_repo}:\n  {res.stderr.strip()}"
-        )
+        return _gh_reason(res.stderr, ci_repo)
+    return None
 
 
 def _latest_run_id(ci_repo: str, workflow_file: str) -> str | None:
@@ -708,326 +906,252 @@ def _run_messages(ci_repo: str, run_id: str, prefix: str) -> list[str]:
     return messages
 
 
+def _run_url(ci_repo: str, run_id: str | None) -> str | None:
+    return f"https://github.com/{ci_repo}/actions/runs/{run_id}" if run_id else None
+
+
 # --- ci setup ---
 
 
 def setup_ci(solution: str | None = None, solution_repo: str | None = None, *,
-             domain: str | None = None,
              project: str | None = None,
-             watch: bool = True) -> dict:
-    """Register a solution for CI deploys.
+             domain: str | None = None,
+             watch: bool = True,
+             command: str | None = None) -> dict:
+    """Register a solution for CI deploys. Never uses gcloud.
 
     Dispatches the register workflow in the CI repo with the solution's
-    name, repo, project and domain, waits for the run, and reports its
-    result. The run validates (the project's Environment exists, the repo's
-    owner is allowed, the repo is reachable, no other project already holds
+    name, repo, project and domain, waits for the run and reports its
+    result. The run validates (the project's Environment exists, the
+    repo's owner is allowed, the repo is reachable, no other project holds
     the solution) and writes the entry in ``gapp/solutions.yaml`` with its
-    own token, so this machine needs neither gcloud nor a GitHub API write:
-    `gh` that can dispatch is enough.
+    own token, so this machine needs only a `gh` that can dispatch.
 
-    ``solution_repo`` (``owner/name``, a bare name, or a github.com URL) is
-    the GitHub repo to deploy. When omitted, it is read from the current
-    checkout's ``origin`` remote. ``domain`` is the custom domain the deploy
-    maps, overriding gapp.yaml at deploy time; ``None`` keeps the domain the
-    entry already has, ``""`` removes it.
-
-    ``project`` names the GCP project. Without it, the project is found by
-    label when gcloud is available; otherwise the command stops and names
-    ``--project``. The first setup on a project (no Environment named after
-    it in the CI repo yet) is the one step that needs gcloud: it creates or
-    verifies the Workload Identity pool, provider, deploy service account
-    and binding and records them as the Environment. That never runs from
-    a machine without gcloud; such a machine stops and says which machine
-    to run it from.
-
-    ``watch`` False returns right after the dispatch, with ``run_id`` set.
-
-    The result's ``dispatched`` says whether the register run was started,
-    ``registered`` whether it succeeded (None when not watched), ``messages``
-    what the run reported, and ``next_step`` what to do when it did not.
+    ``project`` is required: the CI system has no way to find a project
+    without GCP, and it never asks GCP. A project the CI repo is not yet
+    trusted for stops with the one-time `gapp ci project setup` message; a
+    solution repo whose owner is not allowed stops with the one-time
+    `gapp ci sources add` message. ``domain`` None keeps the entry's
+    domain, "" removes it. ``command`` is the user's exact command line,
+    repeated in those messages; the CLI passes it.
     """
     from gapp.admin.sdk.core import GappSDK
 
+    project_id = (project or "").strip()
+    result = {
+        "ok": True,
+        "solution": None, "solution_repo": None, "project_id": project_id or None,
+        "ci_repo": None, "domain": None, "environment": project_id or None,
+        "workflow": REGISTER_WORKFLOW, "dispatched": False, "run_id": None, "run_url": None,
+        "conclusion": None, "registered": None, "result_code": None, "messages": [],
+        "next_step": None,
+    }
+    if not project_id:
+        return {**result, **_outcome("pass --project", (
+            "The CI system needs the GCP project named: `gapp ci setup --project <project>`. It never "
+            "looks the project up in GCP."
+        ))}
+    if not _gh_available():
+        return {**result, **_gh_missing_outcome()}
     ci_repo = get_ci_repo()
     if not ci_repo:
-        raise RuntimeError(
-            "No CI repo configured. Run 'gapp ci init <repo-name>' first."
-        )
+        return {**result, **_no_ci_repo_outcome()}
+    result["ci_repo"] = ci_repo
 
     sdk = GappSDK()
     sol_ctx = sdk.resolve_solution(solution)
     if not sol_ctx or not sol_ctx.get("name"):
-        raise RuntimeError(
-            "No solution specified and not inside a solution repo.\n"
-            "  Run: gapp ci setup --solution <solution-name>"
-        )
+        return {**result, **_outcome("name the solution", (
+            "No solution named and not inside a solution repo. Run from the solution's checkout, or "
+            "pass `--solution <name> --solution-repo <owner>/<repo>`."
+        ))}
     solution_name = sol_ctx["name"]
-
-    if solution_repo:
-        full_solution_repo = _resolve_solution_repo(solution_repo)
-    else:
-        full_solution_repo = sdk.discover_github_repo(sol_ctx)
+    result["solution"] = solution_name
+    try:
+        full_solution_repo = _resolve_solution_repo(solution_repo) if solution_repo else sdk.discover_github_repo(sol_ctx)
+    except RuntimeError as e:
+        return {**result, **_outcome("name the solution repo", str(e))}
     if not full_solution_repo:
-        raise RuntimeError(
-            f"Cannot determine the GitHub repo for '{solution_name}'.\n"
-            f"  Pass it explicitly: --solution-repo owner/name (or a github.com URL),\n"
-            f"  or run from inside the solution repo's working tree so it can be read\n"
-            f"  from `git remote get-url origin`."
-        )
+        return {**result, **_outcome("name the solution repo", (
+            f"Cannot tell which GitHub repo holds '{solution_name}'. Pass `--solution-repo <owner>/<repo>` "
+            f"(or a github.com URL), or run from inside the solution repo's checkout so it is read from "
+            f"`git remote get-url origin`."
+        ))}
+    result["solution_repo"] = full_solution_repo
+    owner = full_solution_repo.split("/")[0]
+    command_line = command or (
+        f"gapp ci setup --project {project_id}"
+        + (f" --solution {solution_name} --solution-repo {full_solution_repo}" if solution or solution_repo else "")
+        + (f" --domain {domain}" if domain else "")
+    )
 
-    result = {
-        "solution": solution_name,
-        "solution_repo": full_solution_repo,
-        "solution_repo_private": None,
-        "project_id": project.strip() if project else None,
-        "ci_repo": ci_repo,
-        "domain": None,
-        "environment": None,
-        "environment_record": None,
-        "gcloud_used": False,
-        "wif_pool": None,
-        "wif_provider": None,
-        "service_account": None,
-        "binding": None,
-        "app_credentials": None,
-        "workflow": REGISTER_WORKFLOW,
-        "dispatched": False,
-        "run_id": None,
-        "run_url": None,
-        "conclusion": None,
-        "registered": None,
-        "messages": [],
-        "next_step": None,
-    }
-
-    def stop(action, hint):
-        result["next_step"] = {"action": action, "hint": hint}
-        return result
-
-    # The register workflow must be installed before anything can be dispatched.
     _, register = _read_ci_file(ci_repo, REGISTER_WORKFLOW_PATH)
     if register is None:
-        return stop("ci init", (
-            f"{ci_repo} has no {REGISTER_WORKFLOW_PATH}. Run `gapp ci init {ci_repo}` from a "
-            f"machine whose gh login can write to the repo; it installs gapp's workflows and "
-            f"the solutions file."
-        ))
+        return {**result, **_outcome("ci init", (
+            f"{ci_repo} has no {REGISTER_WORKFLOW_PATH}, so there is nothing to dispatch. Run "
+            f"`gapp ci init {ci_repo}` from a machine whose `gh` can write to the repo; it installs "
+            f"gapp's workflows and the solutions file."
+        ))}
 
-    gcloud_here = shutil.which("gcloud") is not None
+    if not _environment_exists(ci_repo, project_id):
+        return {**result, **_outcome("ci project setup", PROJECT_NOT_TRUSTED_MESSAGE.format(
+            ci_repo=ci_repo, project=project_id, command=command_line))}
 
-    # The project: given, or found by label when gcloud is here.
-    project_id = result["project_id"]
-    if not project_id:
-        if not gcloud_here:
-            return stop("pass --project", (
-                f"No project given and gcloud is not available on this machine to find the "
-                f"project by label. Re-run with --project <project-id> (gapp_ci_setup(project=...)); "
-                f"gapp status on a machine with gcloud shows it."
-            ))
-        require_gcloud_account()
-        try:
-            project_id = sdk.resolve_project_for_solution(solution_name)["project_id"]
-        except RuntimeError as e:
-            raise RuntimeError(
-                f"No GCP project found for '{solution_name}': {e}\n"
-                f"  Run 'gapp setup --project <project-id>' first, or pass --project."
-            )
-        result["project_id"] = project_id
-    result["environment"] = project_id
-
-    # First-time project work: the Environment record. Only a machine with
-    # gcloud can create it; any machine can see whether it exists.
-    record = _read_environment_record(ci_repo, project_id)
-    if record is None:
-        if not gcloud_here:
-            if _environment_exists(ci_repo, project_id):
-                record = {"checked": False}
-            else:
-                return stop("ci setup with gcloud", (
-                    f"{ci_repo} has no Environment '{project_id}', so this project has not been "
-                    f"set up for CI yet. The first `gapp ci setup --project {project_id}` on a "
-                    f"project runs from a machine with gcloud logged in as a project admin: it "
-                    f"creates the Workload Identity pool, provider and gapp-deploy service "
-                    f"account and records them as that Environment. Then this command works "
-                    f"from any machine."
-                ))
-        else:
-            require_gcloud_account()
-            try:
-                sdk.resolve_project_for_solution(solution_name, project=project_id)
-            except RuntimeError as e:
-                raise RuntimeError(
-                    f"No GCP project found for '{solution_name}': {e}\n"
-                    f"  Run 'gapp setup --project <project-id>' first."
-                )
-            result["gcloud_used"] = True
-            result["wif_pool"] = _ensure_wif_pool(project_id)
-            github_owner = ci_repo.split("/")[0]
-            result["wif_provider"] = _ensure_wif_provider(project_id, github_owner)
-            result["service_account"] = _ensure_deploy_sa(project_id)
-            result["binding"] = _ensure_wif_binding(project_id, ci_repo)
-            result["environment_record"] = _write_environment_record(
-                ci_repo, project_id,
-                _wif_provider_path(_get_project_number(project_id)),
-                _deploy_sa_email(project_id),
-            )
-    if result["environment_record"] is None:
-        result["environment_record"] = "exists" if record.get("checked") else "exists (variables not checked from this machine)"
-
-    # Keep the entry's domain unless the caller said otherwise.
     entries = _load_solutions(ci_repo)
     existing = _find_entry(entries, solution_name)
-    if domain is None:
-        effective_domain = (existing or {}).get("domain") or None
-    else:
-        effective_domain = domain.strip() or None
+    if existing and existing.get("project") and existing["project"] != project_id:
+        return {**result, **_outcome("remove the old entry", (
+            f"'{solution_name}' is already registered in {ci_repo} on project '{existing['project']}', "
+            f"and this run targets '{project_id}'. A solution deploys to one project per CI repo. To "
+            f"move it, remove its entry from {SOLUTIONS_FILE} first, then run this command again: "
+            f"{command_line}"
+        ))}
+    effective_domain = ((existing or {}).get("domain") or None) if domain is None else (domain.strip() or None)
     result["domain"] = effective_domain
 
-    # What the register run will refuse, when this machine can already tell.
-    if existing and existing.get("project") and existing["project"] != project_id:
-        return stop("remove the old entry", (
-            f"'{solution_name}' is already registered in {ci_repo} on project "
-            f"'{existing['project']}', but this run targets '{project_id}'. A solution deploys "
-            f"to one project per CI repo. To move it, remove its entry from {SOLUTIONS_FILE} "
-            f"first, then re-run setup."
-        ))
-    private = _is_repo_private(full_solution_repo)
-    result["solution_repo_private"] = private
-    if private:
-        creds = _hosting_app_presence(ci_repo)
-        result["app_credentials"] = creds
-        step = _hosting_app_next_step(ci_repo, full_solution_repo, creds)
-        if step:
-            return stop(step["action"], step["hint"])
-    if _actions_api_available(ci_repo):
-        allowed = _actions_variable_value(ci_repo, ALLOWED_OWNERS_VAR)
-        owner = full_solution_repo.split("/")[0].lower()
-        if not allowed or owner not in [o.strip().lower() for o in allowed.split(",")]:
-            return stop("configure variables", (
-                f"The register workflow accepts only solution repos whose owner is listed in the "
-                f"repository variable {ALLOWED_OWNERS_VAR} of {ci_repo}"
-                f"{' (' + allowed + ')' if allowed else ', which is not set'}. Add '{owner}':\n"
-                f"  gh variable set {ALLOWED_OWNERS_VAR} --repo {ci_repo} --body "
-                f"{(allowed + ',' if allowed else '') + owner}"
-            ))
-
-    # Dispatch the register workflow and report what it did.
-    _dispatch(ci_repo, REGISTER_WORKFLOW, {
+    refused = _dispatch(ci_repo, REGISTER_WORKFLOW, {
         "solution": solution_name,
         "solution-repo": full_solution_repo,
         "project": project_id,
         "domain": effective_domain or "",
     })
+    if refused:
+        return {**result, **_outcome("dispatch the register workflow", (
+            f"The register workflow could not be dispatched in {ci_repo}: {refused}. `gapp ci setup` needs "
+            f"a `gh` signed in with access to dispatch workflows in {ci_repo} (`gh auth login`), then run "
+            f"this command again: {command_line}"
+        ))}
     result["dispatched"] = True
     result["run_id"] = _latest_run_id(ci_repo, REGISTER_WORKFLOW)
-    if result["run_id"]:
-        result["run_url"] = f"https://github.com/{ci_repo}/actions/runs/{result['run_id']}"
-    if not watch or not result["run_id"]:
-        if not result["run_id"]:
-            result["next_step"] = {"action": "check the run", "hint": (
-                f"Dispatched {REGISTER_WORKFLOW} in {ci_repo}, but its run id could not be read; "
-                f"check the repo's Actions tab."
-            )}
+    result["run_url"] = _run_url(ci_repo, result["run_id"])
+    if not result["run_id"]:
+        return {**result, **_outcome("check the run", (
+            f"Dispatched {REGISTER_WORKFLOW} in {ci_repo}, but its run could not be found yet. Check the "
+            f"repo's Actions tab for the register run, then `gapp ci status`."
+        ))}
+    if not watch:
         return result
-    _, conclusion = _wait_for_run(ci_repo, result["run_id"])
+
+    status, conclusion = _wait_for_run(ci_repo, result["run_id"])
     result["conclusion"] = conclusion
     result["messages"] = _run_messages(ci_repo, result["run_id"], REGISTER_LOG_PREFIX)
-    result["registered"] = conclusion == "success"
-    if not result["registered"]:
-        reasons = [m for m in result["messages"] if m.startswith("refused")] or result["messages"]
-        result["next_step"] = {"action": "fix and re-run ci setup", "hint": (
-            f"The register run {result['run_url']} ended with '{conclusion or 'no conclusion'}'. "
-            + (" ".join(reasons) if reasons else "See the run's log.")
-        )}
-    return result
+    codes = [m.split("=", 1)[1].strip() for m in result["messages"] if m.startswith("result=")]
+    result["result_code"] = codes[-1] if codes else None
+    texts = [m for m in result["messages"] if not m.startswith("result=")]
+    if status != "completed":
+        return {**result, **_outcome("check the run", (
+            f"The register run did not finish within the wait: {result['run_url']}. Check it there; when "
+            f"it has registered '{solution_name}', `gapp ci deploy` works. Otherwise run this command again: "
+            f"{command_line}"
+        ))}
+    if result["result_code"] in REGISTER_SUCCESS_CODES and conclusion == "success":
+        result["registered"] = True
+        return result
+    result["registered"] = False
+    if result["result_code"] == "source-owner-not-allowed":
+        return {**result, **_outcome("ci sources add", SOURCE_NOT_ALLOWED_MESSAGE.format(
+            owner=owner, ci_repo=ci_repo, command=command_line))}
+    if result["result_code"] == "project-not-trusted":
+        return {**result, **_outcome("ci project setup", PROJECT_NOT_TRUSTED_MESSAGE.format(
+            ci_repo=ci_repo, project=project_id, command=command_line))}
+    said = " ".join(texts) if texts else "it ended with no message"
+    return {**result, **_outcome("fix and run ci setup again", (
+        f"The register run refused to register '{solution_name}': {said} ({result['run_url']}). Fix what it "
+        f"names, then run this command again: {command_line}"
+    ))}
 
 
 # --- ci status ---
 
 
 def get_ci_status(solution: str | None = None) -> dict:
-    """Where CI stands for the operator and, when resolvable, the current solution.
+    """The CI system's complete report. Never touches GCP.
 
     Returns:
         repo: owner/name of the CI repo, or None if gapp_ci_init has not
-              been run. Resolved from local config first, then GitHub topic.
-        files: presence of the deploy workflow, the register workflow and
-              the solutions file in the CI repo.
-        variables: presence of GAPP_ALLOWED_OWNERS, HOSTING_GITHUB_APP_ID and
-              HOSTING_GITHUB_APP_PRIVATE_KEY (True/False, or None when the
-              Actions API is not readable from this machine).
-        solutions: every registered entry, each with name, repo, project,
-              domain, gapp_ref and whether the project's Environment exists.
+              been run.
+        files: for each of the deploy workflow, the register workflow and
+              the solutions file: present, and (workflows) current against
+              this gapp's templates.
+        variables: presence of GAPP_ALLOWED_SOURCES, HOSTING_GITHUB_APP_ID
+              and HOSTING_GITHUB_APP_PRIVATE_KEY (True/False, or None when
+              the Actions API is not readable from this machine).
+        solutions: every registered entry with name, repo, project, domain,
+              gapp_ref and whether the project's Environment exists.
+        environments: project id -> Environment exists.
         legacy_workflows: solutions still deployed by a per-solution
-              workflow in the CI repo, to register and then delete.
-        solution: the current solution's name when one resolves.
-        registered: whether it has an entry (None when no solution resolves).
-        workflow: kept for callers that read it: True when the solution is
-              registered or has a per-solution workflow.
+              workflow in the CI repo.
+        solution, registered: the current solution and whether it has an
+              entry (None when no solution resolves); environment and
+              environment_record describe its project's Environment.
         next_step: {action, hint} naming the gap, or None when
-              `gapp ci trigger` can run.
+              `gapp ci deploy` can run.
     """
     from gapp.admin.sdk.core import GappSDK
 
     result = {
+        "ok": True,
         "repo": None,
         "files": None,
         "variables": None,
         "variables_checked": None,
         "variables_note": None,
         "solutions": [],
+        "environments": {},
         "legacy_workflows": [],
         "solution": None,
         "registered": None,
-        "workflow": False,
         "solution_repo": None,
-        "solution_repo_private": None,
         "domain": None,
+        "gapp_ref": None,
         "environment": None,
         "environment_record": None,
-        "app_credentials": None,
         "next_step": None,
     }
-
+    if not _gh_available():
+        return {**result, **_gh_missing_outcome()}
     result["repo"] = _resolve_ci_repo()
     if not result["repo"]:
-        result["next_step"] = {"action": "ci init", "hint": "Run `gapp ci init <owner>/<repo>` to designate the CI repo."}
-        return result
+        return {**result, **_no_ci_repo_outcome()}
     ci_repo = result["repo"]
 
-    _, deploy = _read_ci_file(ci_repo, DEPLOY_WORKFLOW_PATH)
-    _, register = _read_ci_file(ci_repo, REGISTER_WORKFLOW_PATH)
+    result["files"] = _files_report(ci_repo)
     entries = _load_solutions(ci_repo)
-    result["files"] = {
-        DEPLOY_WORKFLOW_PATH: deploy is not None,
-        REGISTER_WORKFLOW_PATH: register is not None,
-        SOLUTIONS_FILE: entries is not None,
-    }
     report = _variables_report(ci_repo)
     result["variables"] = report["variables"]
     result["variables_checked"] = report["checked"]
     result["variables_note"] = report["note"]
     result["legacy_workflows"] = _legacy_workflows(ci_repo)
 
-    environments = {}
     for entry in entries or []:
         project = entry.get("project")
-        if project and project not in environments:
-            environments[project] = _environment_exists(ci_repo, project)
+        if project and project not in result["environments"]:
+            result["environments"][project] = _environment_exists(ci_repo, project)
         result["solutions"].append({
             "name": entry.get("name"), "repo": entry.get("repo"), "project": project,
             "domain": entry.get("domain"), "gapp_ref": entry.get("gapp_ref"),
-            "environment_exists": environments.get(project, False),
+            "environment_exists": result["environments"].get(project, False),
         })
 
-    missing_files = [p for p, ok in result["files"].items() if not ok]
-    if missing_files:
+    def stop(action, hint):
+        result["ok"] = False
+        result["next_step"] = {"action": action, "hint": hint}
+        return result
+
+    missing = [p for p, f in result["files"].items() if not f["present"]]
+    outdated = [p for p, f in result["files"].items() if f["current"] is False]
+    if missing:
+        return stop("ci init", (
+            f"Missing in {ci_repo}: {', '.join(missing)}. Run `gapp ci init {ci_repo}` from a machine "
+            f"whose `gh` can write to the repo."
+        ))
+    if outdated:
         result["next_step"] = {"action": "ci init", "hint": (
-            f"Missing in {ci_repo}: {', '.join(missing_files)}. Run `gapp ci init {ci_repo}` "
-            f"from a machine whose gh login can write to the repo."
+            f"Not current with this gapp release in {ci_repo}: {', '.join(outdated)}. Run `gapp ci init "
+            f"{ci_repo}` from a machine whose `gh` can write to the repo to update them."
         )}
-    elif (step := _variables_next_step(ci_repo, report)) and report["variables"][ALLOWED_OWNERS_VAR] is not True:
-        result["next_step"] = step
+    elif report["checked"] and report["variables"][ALLOWED_SOURCES_VAR] is not True:
+        result["next_step"] = _variables_next_step(ci_repo, report)
 
     ctx = GappSDK().resolve_solution(solution)
     if not ctx:
@@ -1036,152 +1160,123 @@ def get_ci_status(solution: str | None = None) -> dict:
     result["solution"] = solution_name
     entry = _find_entry(entries, solution_name)
     result["registered"] = entry is not None
-    result["workflow"] = entry is not None or solution_name in result["legacy_workflows"]
     if entry is None:
         if result["next_step"] is None:
-            hint = f"'{solution_name}' is not registered in {ci_repo}. Run `gapp ci setup --project <project-id>`"
+            hint = f"'{solution_name}' is not registered in {ci_repo}. Run `gapp ci setup --project <project>`"
             if solution_name in result["legacy_workflows"]:
-                hint += (f"; it still has its own workflow {WORKFLOWS_DIR}/{solution_name}.yml, which "
-                         f"keeps working and can be deleted once the solution is registered")
+                hint += (f"; it still has its own workflow {WORKFLOWS_DIR}/{solution_name}.yml, which runs "
+                         f"from the Actions tab and can be deleted once the solution is registered")
             result["next_step"] = {"action": "ci setup", "hint": hint + "."}
         return result
 
     result["solution_repo"] = entry.get("repo")
     result["domain"] = entry.get("domain")
+    result["gapp_ref"] = entry.get("gapp_ref")
     result["environment"] = entry.get("project")
     record = _environment_record_status(ci_repo, entry["project"]) if entry.get("project") else None
     result["environment_record"] = record
     if result["next_step"] is None and record is not None:
         if not record["exists"]:
-            result["next_step"] = {"action": "ci setup with gcloud", "hint": (
+            result["next_step"] = {"action": "ci project setup", "hint": (
                 f"'{solution_name}' is registered on project '{entry['project']}', but {ci_repo} has no "
-                f"Environment of that name. Run `gapp ci setup --project {entry['project']}` from a "
-                f"machine with gcloud to record the project's deploy identity."
+                f"Environment of that name, so a deploy cannot authenticate. Run `gapp ci project setup "
+                f"{entry['project']}` (gcloud as an Owner of the project, `gh` as an admin of {ci_repo})."
             )}
         elif record["checked"] and not (record["wif_provider_present"] and record["service_account_present"]):
-            missing = [v for v, ok in ((ENV_WIF_PROVIDER_VAR, record["wif_provider_present"]),
-                                       (ENV_DEPLOY_SA_VAR, record["service_account_present"])) if not ok]
-            result["next_step"] = {"action": "ci setup with gcloud", "hint": (
-                f"The Environment '{entry['project']}' in {ci_repo} is missing {', '.join(missing)}. "
-                f"Run `gapp ci setup --project {entry['project']}` from a machine with gcloud to "
-                f"record the deploy identity again."
+            missing_vars = [v for v, ok in ((ENV_WIF_PROVIDER_VAR, record["wif_provider_present"]),
+                                            (ENV_DEPLOY_SA_VAR, record["service_account_present"])) if not ok]
+            result["next_step"] = {"action": "ci project setup", "hint": (
+                f"The Environment '{entry['project']}' in {ci_repo} is missing {', '.join(missing_vars)}. "
+                f"Run `gapp ci project setup {entry['project']}` to record the deploy identity again."
             )}
-    if entry.get("repo"):
-        try:
-            private = _is_repo_private(entry["repo"])
-        except RuntimeError as e:
-            result["solution_repo_private"] = None
-            if result["next_step"] is None:
-                result["next_step"] = {"action": "check solution repo", "hint": str(e)}
-            return result
-        result["solution_repo_private"] = private
-        if private:
-            creds = _hosting_app_presence(ci_repo)
-            result["app_credentials"] = creds
-            step = _hosting_app_next_step(ci_repo, entry["repo"], creds)
-            if step and result["next_step"] is None:
-                result["next_step"] = step
     return result
 
 
-# --- ci trigger ---
+# --- ci deploy ---
 
 
-def trigger_ci(solution: str | None = None, *, ref: str = "main", watch: bool = True) -> dict:
-    """Trigger a CI deployment for a solution.
+def deploy_ci(solution: str | None = None, *, ref: str = "main", watch: bool = True) -> dict:
+    """Deploy a registered solution through the CI repo's deploy workflow.
 
-    Dispatches the generic deploy workflow in the CI repo with the
-    solution's name (and the ref), after checking what would make the run
-    fail at once: the solution is registered, its project's Environment
-    exists, and a private repo's hosting-app credential is present where
-    that can be read from here. A solution that is not registered but still
-    has its own per-solution workflow is dispatched through that workflow.
-    If watch=True (default), blocks and streams status until completion.
+    Dispatches `gapp-deploy.yml` with the solution's name and the ref and,
+    when `watch` is True (default), streams the run and reports its
+    conclusion. Needs only a `gh` that can dispatch workflows in the CI
+    repo. A solution with no entry in `gapp/solutions.yaml` is not
+    deployed; the outcome names `gapp ci setup`.
     """
     from gapp.admin.sdk.core import GappSDK
 
+    result = {
+        "ok": True, "solution": None, "ci_repo": None, "workflow": DEPLOY_WORKFLOW, "ref": ref,
+        "run_id": None, "run_url": None, "watched": False, "conclusion": None, "next_step": None,
+    }
+    if not _gh_available():
+        return {**result, **_gh_missing_outcome()}
     ci_repo = get_ci_repo()
     if not ci_repo:
-        raise RuntimeError(
-            "No CI repo configured. Run 'gapp ci init <repo-name>' first."
-        )
+        return {**result, **_no_ci_repo_outcome()}
+    result["ci_repo"] = ci_repo
 
     ctx = GappSDK().resolve_solution(solution)
     if not ctx:
         if not solution:
-            raise RuntimeError(
-                "No solution specified and not inside a solution repo.\n"
-                "  Run: gapp ci trigger --solution <solution-name>"
-            )
+            return {**result, **_outcome("name the solution", (
+                "No solution named and not inside a solution repo. Run `gapp ci deploy --solution <name>`."
+            ))}
         ctx = {"name": solution}
     solution_name = ctx["name"]
+    result["solution"] = solution_name
 
     entry = _find_entry(_load_solutions(ci_repo), solution_name)
-    legacy = False
     if entry is None:
-        _, leaf = _read_ci_file(ci_repo, f"{WORKFLOWS_DIR}/{solution_name}.yml")
-        if leaf is None:
-            raise RuntimeError(
-                f"'{solution_name}' is not registered in {ci_repo} ({SOLUTIONS_FILE}).\n"
-                f"  Run 'gapp ci setup --solution {solution_name} --project <project-id>' first."
-            )
-        legacy = True
-        workflow_file = f"{solution_name}.yml"
-        fields = {"ref": ref}
-    else:
-        _, deploy = _read_ci_file(ci_repo, DEPLOY_WORKFLOW_PATH)
-        if deploy is None:
-            raise RuntimeError(
-                f"{ci_repo} has no {DEPLOY_WORKFLOW_PATH}. Run 'gapp ci init {ci_repo}' to install it."
-            )
-        project = entry.get("project")
-        if not project or not _environment_exists(ci_repo, project):
-            raise RuntimeError(
-                f"'{solution_name}' is registered on project '{project}', but {ci_repo} has no "
-                f"Environment of that name. Run 'gapp ci setup --project {project}' from a machine "
-                f"with gcloud to record the project's deploy identity."
-            )
-        if entry.get("repo") and _is_repo_private(entry["repo"]):
-            step = _hosting_app_next_step(ci_repo, entry["repo"], _hosting_app_presence(ci_repo))
-            if step:
-                raise RuntimeError(step["hint"])
-        workflow_file = DEPLOY_WORKFLOW
-        fields = {"solution": solution_name, "ref": ref}
+        return {**result, **_outcome("ci setup", (
+            f"'{solution_name}' is not registered in {ci_repo} ({SOLUTIONS_FILE}), so there is nothing to "
+            f"deploy. Register it first: `gapp ci setup --solution {solution_name} --solution-repo "
+            f"<owner>/<repo> --project <project>`."
+        ))}
+    _, deploy = _read_ci_file(ci_repo, DEPLOY_WORKFLOW_PATH)
+    if deploy is None:
+        return {**result, **_outcome("ci init", (
+            f"{ci_repo} has no {DEPLOY_WORKFLOW_PATH}. Run `gapp ci init {ci_repo}` from a machine whose "
+            f"`gh` can write to the repo to install it."
+        ))}
 
-    _dispatch(ci_repo, workflow_file, fields)
-    run_id = _latest_run_id(ci_repo, workflow_file)
-    run_url = f"https://github.com/{ci_repo}/actions/runs/{run_id}" if run_id else None
+    refused = _dispatch(ci_repo, DEPLOY_WORKFLOW, {"solution": solution_name, "ref": ref})
+    if refused:
+        return {**result, **_outcome("dispatch the deploy workflow", (
+            f"The deploy workflow could not be dispatched in {ci_repo}: {refused}. `gapp ci deploy` needs a "
+            f"`gh` signed in with access to dispatch workflows in {ci_repo} (`gh auth login`)."
+        ))}
+    result["run_id"] = _latest_run_id(ci_repo, DEPLOY_WORKFLOW)
+    result["run_url"] = _run_url(ci_repo, result["run_id"])
+    if not result["run_id"]:
+        return {**result, **_outcome("check the run", (
+            f"Dispatched {DEPLOY_WORKFLOW} in {ci_repo} for '{solution_name}', but its run could not be found "
+            f"yet. Check the repo's Actions tab."
+        ))}
+    if not watch:
+        return result
 
-    trigger_result = {
-        "solution": solution_name,
-        "ci_repo": ci_repo,
-        "workflow": workflow_file,
-        "legacy_workflow": legacy,
-        "ref": ref,
-        "run_id": run_id,
-        "run_url": run_url,
-        "watched": False,
-        "conclusion": None,
-        "next_step": None,
-    }
-    if legacy:
-        trigger_result["next_step"] = {"action": "ci setup", "hint": (
-            f"'{solution_name}' still deploys through its own workflow {workflow_file}. Register it "
-            f"with `gapp ci setup --solution {solution_name} --project <project-id>` and delete "
-            f"that file when convenient."
-        )}
+    subprocess.run(["gh", "run", "watch", result["run_id"], "--repo", ci_repo])
+    result["watched"] = True
+    conclusion_result = subprocess.run(
+        ["gh", "api", f"repos/{ci_repo}/actions/runs/{result['run_id']}", "--jq", ".conclusion"],
+        capture_output=True, text=True,
+    )
+    if conclusion_result.returncode == 0:
+        result["conclusion"] = conclusion_result.stdout.strip() or None
+    if result["conclusion"] != "success":
+        return {**result, **_outcome("read the run log", (
+            f"The deploy run for '{solution_name}' ended with '{result['conclusion'] or 'no conclusion'}': "
+            f"{result['run_url']}. Its first steps name a missing credential or Environment variable in "
+            f"words; the deploy step's log has gapp's own message otherwise."
+        ))}
+    return result
 
-    if watch and run_id:
-        subprocess.run(["gh", "run", "watch", run_id, "--repo", ci_repo])
-        trigger_result["watched"] = True
-        conclusion_result = subprocess.run(
-            ["gh", "api", f"repos/{ci_repo}/actions/runs/{run_id}", "--jq", ".conclusion"],
-            capture_output=True, text=True,
-        )
-        if conclusion_result.returncode == 0:
-            trigger_result["conclusion"] = conclusion_result.stdout.strip()
 
-    return trigger_result
+def trigger_ci(solution: str | None = None, *, ref: str = "main", watch: bool = True) -> dict:
+    """Former name of `deploy_ci`; kept for one release."""
+    return deploy_ci(solution, ref=ref, watch=watch)
 
 
 def watch_ci(run_id: str) -> dict:
@@ -1191,7 +1286,7 @@ def watch_ci(run_id: str) -> dict:
     """
     ci_repo = get_ci_repo()
     if not ci_repo:
-        raise RuntimeError("No CI repo configured.")
+        return {"run_id": run_id, "ci_repo": None, "conclusion": None, **_no_ci_repo_outcome()}
 
     subprocess.run(["gh", "run", "watch", run_id, "--repo", ci_repo])
 
@@ -1203,13 +1298,14 @@ def watch_ci(run_id: str) -> dict:
     conclusion = result.stdout.strip() if result.returncode == 0 else None
 
     return {
+        "ok": True,
         "run_id": run_id,
         "ci_repo": ci_repo,
         "conclusion": conclusion,
     }
 
 
-# --- WIF and service account ---
+# --- WIF and service account (used only by `ci project setup`) ---
 
 _WIF_POOL_ID = "github"
 _WIF_PROVIDER_ID = "github"
@@ -1236,7 +1332,7 @@ def _get_project_number(project_id: str) -> str:
         text=True,
     )
     if result.returncode != 0:
-        raise RuntimeError(f"Failed to get project number for {project_id}: {result.stderr.strip()}")
+        raise RuntimeError(result.stderr.strip())
     return result.stdout.strip()
 
 
@@ -1259,7 +1355,7 @@ def _ensure_wif_pool(project_id: str) -> str:
         text=True,
     )
     if result.returncode != 0:
-        raise RuntimeError(f"Failed to create WIF pool: {result.stderr.strip()}")
+        raise RuntimeError(result.stderr.strip())
     return "created"
 
 
@@ -1295,7 +1391,7 @@ def _ensure_wif_provider(project_id: str, github_owner: str) -> str:
         text=True,
     )
     if result.returncode != 0:
-        raise RuntimeError(f"Failed to create WIF provider: {result.stderr.strip()}")
+        raise RuntimeError(result.stderr.strip())
     return "created"
 
 
@@ -1319,12 +1415,12 @@ def _ensure_deploy_sa(project_id: str) -> str:
             text=True,
         )
         if result.returncode != 0:
-            raise RuntimeError(f"Failed to create service account: {result.stderr.strip()}")
+            raise RuntimeError(result.stderr.strip())
         status = "created"
 
     # Always ensure roles (idempotent — add-iam-policy-binding is a no-op if already bound)
     for role in _DEPLOY_SA_ROLES:
-        run_gcloud(
+        res = run_gcloud(
             ["projects", "add-iam-policy-binding", project_id,
              "--member", f"serviceAccount:{sa_email}",
              "--role", role,
@@ -1332,6 +1428,8 @@ def _ensure_deploy_sa(project_id: str) -> str:
             capture_output=True,
             text=True,
         )
+        if res.returncode != 0:
+            raise RuntimeError(res.stderr.strip())
 
     return status
 
@@ -1357,7 +1455,7 @@ def _ensure_wif_binding(project_id: str, ci_repo: str) -> str:
         text=True,
     )
     if result.returncode != 0:
-        raise RuntimeError(f"Failed to add WIF binding: {result.stderr.strip()}")
+        raise RuntimeError(result.stderr.strip())
     return "set"
 
 

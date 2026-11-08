@@ -684,7 +684,7 @@ Two design choices make this work:
 
 ## Resolution rules
 
-Every solution-keyed command (`setup`, `deploy`, `status`, `secret get/set/list`, `ci status/trigger`) routes through `GappSDK.resolve_project_for_solution(solution, env=None, project=None)`. Inputs: solution name (from gapp.yaml or arg), owner (from active profile, may be None for global), optional `--env`, optional `--project`.
+Every solution-keyed command of the direct system (`setup`, `deploy`, `status`, `secret get/set/list`) routes through `GappSDK.resolve_project_for_solution(solution, env=None, project=None)`. The CI system (`gapp ci`) never calls it: its project comes from `--project` and its record is the CI repo (see "Two fleet systems"). Inputs: solution name (from gapp.yaml or arg), owner (from active profile, may be None for global), optional `--env`, optional `--project`.
 
 | Solution-label matches | `--env` | `--project` | Outcome |
 |---|---|---|---|
@@ -747,3 +747,77 @@ Resources (buckets, Cloud Run services) don't change names — they were already
 gapp is designed to work without a local machine. The three-layer model — tool (gapp), application (solution repo), and operator config (private repo) — enables deployment from GitHub Actions, Codespaces, or any stateless environment using Workload Identity Federation for keyless GCP authentication.
 
 See [docs/CI.md](docs/CI.md) for the full design: authentication architecture, the operator repo pattern, CLI design decisions, and what changes are needed in gapp.
+
+## Two fleet systems
+
+gapp has **two fleet systems that do not talk to each other**:
+
+- **Root commands** (`gapp setup`, `deploy`, `status`, `secrets`, ...) are
+  the **direct** system. They need a Google Cloud identity. Their record of
+  where a solution lives is the GCP project label. They never read GitHub.
+- **`gapp ci` commands** are the **CI** system. They need GitHub (write
+  access to the CI repo; dispatch). Their record is `gapp/solutions.yaml`
+  in the operator repo and the project's GitHub Environment. They never
+  read GCP, except `ci project setup`, which is the one command that
+  touches both, once per project.
+
+A solution is deployed by one system. **No command consults the other
+system's state**, there is no shared local store, and no `--force`
+reconciliation. Every command's requirements are fixed by its name;
+nothing is conditional on hidden state. Labels remain the direct system's
+running-state marker; the operator repo remains the CI system's intent
+log; neither is promoted to authority over the other.
+
+**Every failure is a plain outcome with a next step.** No stack trace,
+raw HTTP error or raw gcloud error reaches the user. The SDK returns
+`ok` and, when it is false, `next_step` (`action`, `hint`) in every CI
+result; `gapp status` returns `next_step: sign in` with the login
+command when no usable identity exists instead of raising; the CLI
+prints the step and exits 1; the MCP tools return the same dicts. The
+register workflow reports every outcome as a structured result
+(`gapp-register: result=<code>`) that `ci setup` prints verbatim, and
+the deploy workflow names a missing Environment, variable or credential
+in words on its first step. Tests assert the outcome text for every
+failure path, not just that something failed.
+
+### How we got here
+
+Before 4.0.0, `ci setup` registered a solution by dispatching a register
+workflow but also carried the one-time per-project bootstrap (WIF pool,
+provider, deploy account, binding, the project's GitHub Environment)
+inside the same command, so it needed gcloud on the first run for a
+project and never afterwards. A command whose dependencies change with
+hidden state is hard to reason about and to design around, and it made
+the question "which machine can run this?" unanswerable from the
+command's name. Separately, `gapp status` with no GCP identity crashed
+with a raw attribute error, and the allowlist variable was set by hand
+under a name nobody should have to remember.
+
+Considered and rejected:
+
+- **(a) A per-machine XDG record of solution to project/system, with a
+  `--force` override.** Per-machine, so it misses the real cross-machine
+  case (direct setup on a laptop, CI setup from a cloud session); a third
+  state store beside labels and the intent log; cross-talk in disguise.
+- **(b) A machine-level mode set by `gapp init`.** The mode is a property
+  of the solution and the operator, not the machine: a laptop
+  legitimately does both, and a cloud session can only do `ci`. Separate
+  command groups already say which system you touch by the name you type.
+- **(c) Reading the CI intent log from the direct path, or GCP labels from
+  the CI path.** Cross-talk, and the second needs broad project-list
+  access the runner must not have.
+
+Accepted guard against a solution deployed by both systems: a custom
+domain can map to one Cloud Run service, so the second mapping is
+refused; otherwise the rule is documented, not enforced.
+
+What this settled in the commands: the per-project bootstrap became
+`gapp ci project setup <project>`, the only `ci` command that touches
+GCP, with its two requirements (gcloud as an Owner of the project, `gh`
+as an admin of the CI repo) stated in `--help` and in every failure;
+`ci setup` never uses gcloud and stops with a verbatim one-time message
+when the project is not yet trusted or the source owner not yet allowed;
+the allowlist became `gapp ci sources add|remove|list` over
+`GAPP_ALLOWED_SOURCES`; `ci trigger` became `ci deploy`, the same verb as
+the direct system; and `gapp status` reports the direct system only and
+never crashes.

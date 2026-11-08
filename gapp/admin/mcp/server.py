@@ -260,35 +260,43 @@ def gapp_secret_list(solution: str | None = None) -> dict:
 
 @_tool()
 def gapp_ci_status(solution: str | None = None) -> dict:
-    """Check CI/CD readiness: the operator's CI repo and the current solution.
+    """The CI system's report: the operator's CI repo and the current solution.
+
+    gapp has two fleet systems that do not talk to each other: the root
+    tools (gapp_setup, gapp_deploy, gapp_status, secrets) are the direct
+    system and need a Google Cloud identity; the gapp_ci_* tools are the
+    CI system and need GitHub. This tool never touches GCP.
 
     Returns:
+        ok: false when something stands in the way; then next_step holds
+              {action, hint} with the exact step. Every gapp_ci_* tool
+              returns ok and next_step this way instead of failing.
         repo: CI repo name (owner/name), or null if gapp_ci_init
               has not been run.
-        files: whether the CI repo holds gapp's deploy workflow,
-              register workflow and gapp/solutions.yaml (installed by
-              gapp_ci_init).
-        variables: whether GAPP_ALLOWED_OWNERS, HOSTING_GITHUB_APP_ID and
+        files: for gapp's deploy workflow, register workflow and
+              gapp/solutions.yaml: present, and (workflows) current
+              against this gapp's templates.
+        variables: whether GAPP_ALLOWED_SOURCES, HOSTING_GITHUB_APP_ID and
               HOSTING_GITHUB_APP_PRIVATE_KEY exist in the CI repo (null
               each when this machine cannot read the Actions API).
         solutions: every registered solution with repo, project, domain,
               gapp_ref and whether the project's Environment exists.
+        environments: project id -> whether its Environment exists.
         legacy_workflows: solutions still deployed by a per-solution
               workflow file; register each, then delete the file.
         solution, registered: the current solution and whether it has an
-              entry; solution_repo, solution_repo_private, domain,
-              environment and environment_record describe that entry and
-              the project's Environment (GAPP_WIF_PROVIDER and
-              GAPP_DEPLOY_SERVICE_ACCOUNT).
-        app_credentials: for a private solution repo, whether the hosting
-              GitHub App's variable and secret exist. null for a public repo.
+              entry; solution_repo, domain, gapp_ref, environment and
+              environment_record describe that entry and the project's
+              Environment (GAPP_WIF_PROVIDER and GAPP_DEPLOY_SERVICE_ACCOUNT).
         next_step: {action, hint} naming the gap when a CI deploy would
-              fail as things stand; null when gapp_ci_trigger can run.
+              fail as things stand; null when gapp_ci_deploy can run.
 
-    The CI/CD setup sequence is:
-    1. gapp_ci_init — designate the CI repo and install gapp's files (once)
-    2. gapp_ci_setup — register a solution (per solution, idempotent)
-    3. gapp_ci_trigger — deploy via GitHub Actions
+    The CI setup sequence is:
+    1. gapp_ci_init — designate the CI repo and install gapp's files (once per operator)
+    2. gapp_ci_project_setup — trust the CI repo for a GCP project (once per project; gcloud)
+    3. gapp_ci_sources(action="add", owner=...) — allow a source owner (once per owner)
+    4. gapp_ci_setup — register a solution (per solution, idempotent)
+    5. gapp_ci_deploy — deploy via GitHub Actions
 
     Args:
         solution: Solution name. Defaults to current directory's solution.
@@ -299,68 +307,96 @@ def gapp_ci_status(solution: str | None = None) -> dict:
 
 @_tool()
 def gapp_ci_init(repo: str, local_only: bool = False) -> dict:
-    """Designate the operator's CI repo for GitHub Actions deployments.
+    """Designate the operator's CI repo and install gapp's files in it.
 
-    This is the first step in CI/CD setup. Must be called before
-    gapp_ci_setup. The CI repo is a private GitHub repo that holds gapp's
-    generic deploy workflow, register workflow and the data file
-    gapp/solutions.yaml — it is NOT the solution repo.
+    This is the first step in CI setup. The CI repo is a private GitHub
+    repo that holds gapp's generic deploy workflow, register workflow and
+    the data file gapp/solutions.yaml — it is NOT the solution repo.
 
-    Idempotent. Unless local_only, it installs or updates those three
-    files through the GitHub API (the data file is created once, never
-    overwritten) and reports whether the CI repo holds the repository
-    variable GAPP_ALLOWED_OWNERS (owners whose repos may be registered)
-    and the hosting GitHub App's HOSTING_GITHUB_APP_ID variable and
-    HOSTING_GITHUB_APP_PRIVATE_KEY secret (needed only for private solution
-    repos), returning the `gh` commands to set the missing ones as
-    `next_step`. It never sets or overwrites them. Needs a gh login that
-    can write to the CI repo; where the GitHub API refuses writes,
-    `next_step` says which machine to run it from.
-
-    Check current state with gapp_ci_status before calling.
+    Needs a GitHub API write: a gh login that can write to the CI repo.
+    Idempotent. Unless local_only, it installs or updates the two
+    workflows and creates the data file (once, never overwritten) and
+    reports whether the CI repo holds GAPP_ALLOWED_SOURCES (managed by
+    gapp_ci_sources), HOSTING_GITHUB_APP_ID and
+    HOSTING_GITHUB_APP_PRIVATE_KEY (private solution repos only), with
+    the commands for the missing ones as next_step. It never sets them.
+    Where the GitHub API refuses writes, ok is false and next_step says
+    which machine to run it from.
 
     Args:
         repo: GitHub repo name or owner/name.
-        local_only: Only write to local config, skip GitHub topic.
+        local_only: Only write to local config, skip everything on GitHub.
     """
     from gapp.admin.sdk.ci import init_ci
     return init_ci(repo, local_only=local_only)
 
 
 @_tool()
+def gapp_ci_project_setup(project: str) -> dict:
+    """Make the CI repo trusted to deploy to a GCP project (once per project, idempotent).
+
+    The only gapp_ci_* tool that touches GCP. Creates or confirms the
+    Workload Identity pool and provider and the gapp-deploy service
+    account in the project, binds the pool to the CI repo, and records
+    the deploy identity in the CI repo as the GitHub Environment named
+    after the project (GAPP_WIF_PROVIDER, GAPP_DEPLOY_SERVICE_ACCOUNT).
+
+    Requires gcloud signed in as an Owner of the project and gh signed in
+    as an admin of the CI repo (its owner, for a personal repo). A machine
+    without them gets ok false and a next_step naming the requirement;
+    run it where they are, then gapp_ci_setup works from anywhere.
+
+    Args:
+        project: GCP project id.
+    """
+    from gapp.admin.sdk.ci import setup_ci_project
+    return setup_ci_project(project)
+
+
+@_tool()
+def gapp_ci_sources(action: str, owner: str | None = None) -> dict:
+    """List, add to, or remove from the GitHub owners allowed to deploy through the CI repo.
+
+    The list is the CI repo's repository variable GAPP_ALLOWED_SOURCES;
+    the register workflow refuses a solution repo whose owner is not on
+    it, and gapp_ci_setup then returns the one-time step. Needs gh with
+    write access to the CI repo (read access for "list").
+
+    Args:
+        action: "add", "remove" or "list".
+        owner: The GitHub owner (user or organization) for add and remove.
+
+    Returns ok, owners (the list after the change), changed, note, and
+    next_step when gh cannot read or write the variable.
+    """
+    from gapp.admin.sdk.ci import manage_sources
+    return manage_sources(action, owner)
+
+
+@_tool()
 def gapp_ci_setup(
     solution: str | None = None,
     solution_repo: str | None = None,
-    domain: str | None = None,
     project: str | None = None,
+    domain: str | None = None,
     watch: bool = True,
 ) -> dict:
-    """Register a solution for CI/CD deployment.
+    """Register a solution for CI deploys. Never uses gcloud.
 
     Dispatches the register workflow in the CI repo with the solution's
     name, repo, project and domain, waits for the run and reports its
-    result. The run validates (the project's Environment exists in the CI
-    repo, the repo's owner is listed in GAPP_ALLOWED_OWNERS, the repo is
-    reachable, no other project already holds the solution) and writes
-    the entry in gapp/solutions.yaml with its own token, so this machine
-    needs neither gcloud nor a GitHub API write — a gh login that can
-    dispatch workflows is enough. Idempotent; re-running keeps the entry's
-    domain unless `domain` is passed.
+    result. The run validates (the project's Environment exists, the
+    repo's owner is in GAPP_ALLOWED_SOURCES, the repo is reachable, no
+    other project already holds the solution) and writes the entry in
+    gapp/solutions.yaml with its own token, so this machine needs only a
+    gh login that can dispatch workflows. Idempotent; re-running keeps
+    the entry's domain unless `domain` is passed.
 
-    The first run on a GCP project is the one step that needs gcloud with
-    project-admin rights: it creates Workload Identity Federation, the
-    deploy service account and IAM bindings, and records them in the CI
-    repo as a GitHub Environment named after the project id. On a machine
-    without gcloud that case stops with `next_step` saying so.
-
-    A private solution repo is detected automatically; the deploy clones
-    it with the hosting GitHub App whose id and key are the CI repo's
-    HOSTING_GITHUB_APP_ID variable and HOSTING_GITHUB_APP_PRIVATE_KEY
-    secret, and `next_step` names them when they are known to be missing.
-
-    Prerequisites: gapp_ci_init must have been called first. The solution
-    must also have been initialized (gapp_init) and set up (gapp_setup)
-    with a GCP project. Check readiness with gapp_ci_status.
+    Two one-time steps come back as ok false with the exact message:
+    the project not yet trusted (run gapp_ci_project_setup, which needs
+    gcloud as an Owner), and the source owner not yet allowed (run
+    gapp_ci_sources add). Other refusals of the register run come back
+    verbatim with the run link.
 
     Args:
         solution: Solution name. Defaults to the current directory's solution.
@@ -370,29 +406,55 @@ def gapp_ci_setup(
             local checkout required. Omit it only when running from
             inside the solution repo, where it is read from the ``origin``
             remote.
+        project: GCP project id. Required: the CI system never looks a
+            project up in GCP. A solution already registered on another
+            project is refused.
         domain: Custom domain the CI deploy maps; it overrides gapp.yaml
             at deploy time, so a public solution repo can keep a
             placeholder there. None keeps the entry's existing domain;
             "" removes it.
-        project: GCP project id. Required on a machine without gcloud;
-            otherwise found from the project labels when omitted. A
-            solution already registered on another project is refused.
         watch: Wait for the register run and report its conclusion and
             messages (default True). False returns after the dispatch
-            with `run_id` and `run_url` set.
+            with run_id and run_url set.
 
-    The result's `dispatched` says whether the run was started,
-    `registered` whether it succeeded, `messages` what it reported, and
-    `next_step` what to do when it did not. Checks this machine cannot
-    perform (the Actions variables and secrets API behind a restrictive
-    proxy) come back with `checked: false` and a note instead of failing;
-    the register run performs them.
+    The result's dispatched says whether the run was started, registered
+    whether it succeeded, result_code the run's structured outcome,
+    messages what it reported, and next_step what to do when it did not.
     """
     from gapp.admin.sdk.ci import setup_ci
     return setup_ci(
-        solution=solution, solution_repo=solution_repo, domain=domain, project=project,
+        solution=solution, solution_repo=solution_repo, project=project, domain=domain,
         watch=watch,
+        command=f"gapp ci setup --project {project}"
+        + (f" --solution {solution}" if solution else "")
+        + (f" --solution-repo {solution_repo}" if solution_repo else "")
+        + (f" --domain {domain}" if domain else ""),
     )
+
+
+@_tool()
+def gapp_ci_deploy(
+    solution: str | None = None,
+    ref: str = "main",
+    watch: bool = True,
+) -> dict:
+    """Deploy a registered solution via GitHub Actions.
+
+    Dispatches the CI repo's generic deploy workflow with the solution's
+    name; the run reads the solution's entry from gapp/solutions.yaml and
+    deploys through the project's GitHub Environment. Needs only a gh
+    login that can dispatch workflows; no gcloud or terraform. A solution
+    that is not registered is not deployed: ok is false and next_step
+    names gapp_ci_setup. A failed run comes back with its link; its first
+    steps name a missing credential or Environment variable in words.
+
+    Args:
+        solution: Solution name. Defaults to current directory's solution.
+        ref: Git ref to deploy (default: main).
+        watch: Block and stream status until completion (default: True).
+    """
+    from gapp.admin.sdk.ci import deploy_ci
+    return deploy_ci(solution=solution, ref=ref, watch=watch)
 
 
 @_tool()
@@ -401,35 +463,29 @@ def gapp_ci_trigger(
     ref: str = "main",
     watch: bool = True,
 ) -> dict:
-    """Trigger a CI deployment for a solution via GitHub Actions.
-
-    Prerequisites: gapp_ci_init and gapp_ci_setup must have been
-    completed first. Check readiness with gapp_ci_status. This
-    dispatches the CI repo's generic deploy workflow with the solution's
-    name; the run reads the solution's entry from gapp/solutions.yaml and
-    deploys through the project's GitHub Environment. Needs only a gh
-    login that can dispatch workflows. Refuses up front, with the next
-    step, when the solution is not registered, its project has no
-    Environment, or (private solution repo) the CI repo lacks the hosting
-    GitHub App's variable or secret.
+    """Former name of gapp_ci_deploy; use that. Kept for one release.
 
     Args:
         solution: Solution name. Defaults to current directory's solution.
         ref: Git ref to deploy (default: main).
         watch: Block and stream status until completion (default: True).
     """
-    from gapp.admin.sdk.ci import trigger_ci
-    return trigger_ci(solution=solution, ref=ref, watch=watch)
+    from gapp.admin.sdk.ci import deploy_ci
+    return deploy_ci(solution=solution, ref=ref, watch=watch)
 
 
 @_tool()
 def gapp_status(solution: str | None = None, env: str | None = None) -> dict:
-    """Infrastructure health check for a gapp solution.
+    """Infrastructure health check for a gapp solution (the direct system).
 
-    Returns initialized, deployment.project, deployment.pending,
-    deployment.services, domain (the live custom domain mapping's
-    state: pending_dns, pending_cert, active, or error, with the CNAME
-    target to set), and next_step with the recommended action.
+    Reads GCP labels and Terraform state; never GitHub, never the CI
+    system (use gapp_ci_status for that). Returns initialized,
+    deployment.project, deployment.pending, deployment.services, domain
+    (the live custom domain mapping's state: pending_dns, pending_cert,
+    active, or error, with the CNAME target to set), and next_step with
+    the recommended action. It never fails for a missing or unusable
+    Google Cloud identity: that comes back as next_step "sign in" with
+    the login command.
 
     Args:
         solution: Solution name. Defaults to current directory's solution.

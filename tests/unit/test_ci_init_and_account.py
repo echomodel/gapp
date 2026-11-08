@@ -29,6 +29,8 @@ FILES = (ci_mod.DEPLOY_WORKFLOW_PATH, ci_mod.REGISTER_WORKFLOW_PATH, ci_mod.SOLU
 @pytest.fixture
 def init_env(monkeypatch, fake_gh):
     """init_ci against the in-memory GitHub: the topic is already set."""
+    import shutil
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/gh" if name == "gh" else None)
     monkeypatch.setattr(ci_mod, "_find_ci_repo_by_topic", lambda: CI_REPO)
     monkeypatch.setattr(ci_mod, "_get_gapp_repo", lambda: "example-org/gapp")
     monkeypatch.setattr(ci_mod, "_resolve_gapp_ref", lambda gapp_repo: "v3.9.0")
@@ -37,7 +39,7 @@ def init_env(monkeypatch, fake_gh):
 
 def test_init_installs_the_three_files_on_a_fresh_repo(init_env):
     res = ci_mod.init_ci(CI_REPO)
-    assert res["topic_status"] == "already_set"
+    assert res["ok"] is True and res["topic_status"] == "already_set"
     assert res["files"] == {p: "created" for p in FILES}
     deploy = yaml.safe_load(init_env.files[(CI_REPO, ci_mod.DEPLOY_WORKFLOW_PATH)])
     assert deploy["jobs"]["deploy"]["uses"] == "example-org/gapp/.github/workflows/deploy.yml@v3.9.0"
@@ -71,18 +73,18 @@ def test_init_updates_outdated_workflows_beside_existing_leaf_workflows(init_env
 
 def test_init_reports_the_three_variables_with_commands_when_missing(init_env):
     res = ci_mod.init_ci(CI_REPO)
-    assert res["variables"] == {"GAPP_ALLOWED_OWNERS": False, "HOSTING_GITHUB_APP_ID": False,
+    assert res["variables"] == {"GAPP_ALLOWED_SOURCES": False, "HOSTING_GITHUB_APP_ID": False,
                                 "HOSTING_GITHUB_APP_PRIVATE_KEY": False}
     hint = res["next_step"]["hint"]
     assert res["next_step"]["action"] == "configure variables"
-    assert f"gh variable set GAPP_ALLOWED_OWNERS --repo {CI_REPO} --body <owner1,owner2>" in hint
+    assert "gapp ci sources add <owner>" in hint
     assert f"gh variable set HOSTING_GITHUB_APP_ID --repo {CI_REPO} --body <app-id>" in hint
     assert f"gh secret set HOSTING_GITHUB_APP_PRIVATE_KEY --repo {CI_REPO} < key.pem" in hint
     assert "Only private solution repos need them" in hint
 
 
 def test_init_with_everything_set_has_no_next_step(init_env):
-    init_env.variables[(CI_REPO, "GAPP_ALLOWED_OWNERS")] = "me"
+    init_env.variables[(CI_REPO, "GAPP_ALLOWED_SOURCES")] = "me"
     init_env.variables[(CI_REPO, "HOSTING_GITHUB_APP_ID")] = "1"
     init_env.secrets.add((CI_REPO, "HOSTING_GITHUB_APP_PRIVATE_KEY"))
     res = ci_mod.init_ci(CI_REPO)
@@ -107,11 +109,27 @@ def test_init_reports_unchecked_when_the_actions_api_is_unreachable(init_env):
 def test_init_where_api_writes_are_refused_names_the_files_and_the_machine(init_env):
     init_env.api_writes = False
     res = ci_mod.init_ci(CI_REPO)
-    assert res["files"] is None
+    assert res["ok"] is False and res["files"] is None
     assert res["next_step"]["action"] == "install operator files"
     for path in FILES:
         assert path in res["next_step"]["hint"]
     assert f"gapp ci init {CI_REPO}" in res["next_step"]["hint"]
+    assert "not allowed to do that" in res["next_step"]["hint"] and "HTTP" not in res["next_step"]["hint"]
+
+
+def test_init_without_gh_is_an_outcome(monkeypatch, fake_gh):
+    import shutil
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    res = ci_mod.init_ci(CI_REPO)
+    assert res["ok"] is False and res["next_step"]["action"] == "install gh"
+    assert fake_gh.calls == []
+
+
+def test_init_refuses_a_second_ci_repo_as_an_outcome(monkeypatch, init_env):
+    monkeypatch.setattr(ci_mod, "_find_ci_repo_by_topic", lambda: "acme/other-ci")
+    res = ci_mod.init_ci(CI_REPO)
+    assert res["ok"] is False and res["next_step"]["action"] == "choose one CI repo"
+    assert "acme/other-ci" in res["next_step"]["hint"] and "--local-only" in res["next_step"]["hint"]
 
 
 def test_init_local_only_skips_github(fake_gh):

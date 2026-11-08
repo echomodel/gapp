@@ -884,10 +884,30 @@ class GappSDK:
     def status(self, name: str | None = None, env: Optional[str] = None) -> StatusResult:
         # Lenient: status is read-only and must work even if the local
         # gapp.yaml predates the current schema or is missing fields the
-        # build pipeline would require.
-        ctx = self.resolve_solution_with_project(name, env=env, strict=False)
-        if not ctx:
-            return StatusResult(initialized=False, next_step=NextStep(action="init"))
+        # build pipeline would require. It reports the direct system only
+        # (GCP labels and Terraform state) and never raises for a missing
+        # or unusable Google Cloud identity: that is an outcome with the
+        # login command, not a crash, and not "not deployed".
+        local = self.resolve_solution(name, strict=False)
+        if not local:
+            return StatusResult(
+                initialized=False,
+                deployment=DeploymentInfo(project=None, pending=True),
+                next_step=NextStep(action="init", hint=(
+                    "No gapp.yaml here (or not inside a git repository). Run `gapp init` in the "
+                    "solution's repo, or pass --solution <name> to check a deployed solution."
+                )),
+            )
+        try:
+            ctx = self.resolve_solution_with_project(name, env=env, strict=False)
+        except CloudAccessError:
+            return StatusResult(
+                initialized=True,
+                name=local["name"],
+                repo_path=local.get("repo_path"),
+                deployment=DeploymentInfo(project=None, pending=True),
+                next_step=NextStep(action="sign in", hint=self._identity_hint()),
+            )
         solution_name = ctx["name"]
         repo_path = ctx.get("repo_path")
         project_id = ctx.get("project_id")
@@ -935,6 +955,17 @@ class GappSDK:
             if outputs and result.domain is None and (live := (outputs.get("custom_domain") or "").strip()):
                 result.domain = self._domain_status(project_id, live)
         return result
+
+    def _identity_hint(self) -> str:
+        """What to do when no Google Cloud identity this machine holds works."""
+        account = self.get_account()
+        who = f" for the configured account {account}" if account else ""
+        login = f"gcloud auth login {account}" if account else "gcloud auth login"
+        return (
+            f"No Google Cloud identity this machine can use{who}: the login is missing, expired, "
+            f"or not allowed to read the project. Sign in with `{login}` (or point gapp at another "
+            f"account with `gapp config account <email>`), then run `gapp status` again."
+        )
 
     def _domain_status(self, project_id: str, domain: str) -> DomainStatus:
         """Fill DomainStatus from the Cloud Run domain mapping's conditions."""

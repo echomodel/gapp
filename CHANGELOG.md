@@ -3,6 +3,53 @@
 Notable changes to gapp. Versions are git tags (`vX.Y.Z`); the version
 source is `gapp/__init__.py`.
 
+## Unreleased (4.0.0)
+
+gapp now has two fleet systems with a rigid line between them. The root
+commands (`gapp setup`, `deploy`, `status`, `secrets`, ...) are the direct
+system: they need a Google Cloud identity and their record is the GCP
+project label. The `gapp ci` commands are the CI system: they need GitHub
+and their record is `gapp/solutions.yaml` in the CI repo plus the project's
+GitHub Environment. No command consults the other system's state, and
+every command's requirements are fixed by its name.
+
+Breaking changes:
+
+- `gapp ci setup` never uses gcloud and no longer bootstraps a project.
+  The one-time per-project work (Workload Identity pool, provider,
+  `gapp-deploy` service account, binding, the project's Environment) moved
+  to the new `gapp ci project setup <project>`, the only `ci` command that
+  touches GCP. `--project` is required on `ci setup`; a project the CI
+  repo is not yet trusted for stops with the one-time message.
+- `gapp ci trigger` is renamed `gapp ci deploy` (the MCP tool
+  `gapp_ci_trigger` likewise becomes `gapp_ci_deploy`). `ci trigger` and
+  `gapp_ci_trigger` remain for this one release as hidden aliases that
+  name the new command. A solution with no entry in `gapp/solutions.yaml`
+  is no longer deployed through a legacy per-solution workflow; `ci
+  status` lists such solutions to register.
+- The CI repo variable `GAPP_ALLOWED_OWNERS` is renamed
+  `GAPP_ALLOWED_SOURCES`, with no alias, and is managed by the new
+  `gapp ci sources add|remove|list <owner>`. The register workflow reads
+  the new name; re-run `gapp ci init` to update the workflows.
+
+Also:
+
+- Every `gapp ci` command returns a plain outcome with a next step instead
+  of failing: `ok` and `next_step` in every result (CLI exits 1 and prints
+  the step; MCP tools return the same dict). No stack traces, raw HTTP
+  errors or raw gcloud errors reach the user. The register workflow
+  reports every outcome as a structured result (`result=<code>`) that
+  `ci setup` prints verbatim; the deploy workflow names a missing
+  Environment, Environment variable or App credential in words on its
+  first step.
+- `gapp status` reports the direct system only and never crashes: with no
+  usable Google Cloud identity it says so and names the login command;
+  without a `gapp.yaml` it says what to run.
+- `gapp ci status` is the CI system's complete report: the three gapp
+  files (present and current), the three variables, every registered
+  solution with project, domain, gapp ref and Environment, legacy
+  per-solution workflows, and the next step.
+
 ## 3.9.0
 
 - The CI repo holds one generic deploy workflow
