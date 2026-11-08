@@ -103,7 +103,13 @@ No terraform or gcloud on the deploying machine.
    needs no gcloud at all**: `gapp ci setup --solution <s>
    --solution-repo <owner>/<repo> --project <project-id>` runs with
    `gh` alone, from any machine, including this one. Use that form
-   whenever the project already hosts a gapp solution.
+   whenever the project already hosts a gapp solution. Where the
+   GitHub API refuses writes from this machine, add `--out <path>`
+   and commit the generated file to the CI repo as
+   `.github/workflows/<solution>.yml`; checks the machine cannot
+   perform are reported as not checked, and the first run verifies
+   them. `--project` is refused if the CI repo already binds the
+   solution to another project.
 3. **Private solution repo.** The runner's built-in token can read
    only the CI repo, so a private solution repo is cloned with a
    one-hour token from a GitHub App the user installs on the repo's

@@ -330,6 +330,7 @@ def gapp_ci_setup(
     solution_repo: str | None = None,
     domain: str | None = None,
     project: str | None = None,
+    out: str | None = None,
 ) -> dict:
     """Wire a solution for CI/CD deployment.
 
@@ -371,10 +372,23 @@ def gapp_ci_setup(
         project: GCP project id. With the project's Environment already
             recorded in the CI repo, setup runs without gcloud. Without
             it, the project is discovered from its labels (gcloud).
+            Refused when the CI repo already holds a workflow for this
+            solution bound to a different project.
+        out: Write the rendered workflow to this file path instead of
+            through the GitHub API. Also happens automatically, to a path
+            under gapp's cache directory, when the API refuses the write;
+            the result's `workflow_path` holds the file and `next_step`
+            names where to commit it in the CI repo
+            (.github/workflows/<solution>.yml).
+
+    Checks this machine cannot perform (the Actions variables and secrets
+    API behind a restrictive proxy) come back with `checked: false` and a
+    note instead of failing; the first run's credential step verifies them.
     """
     from gapp.admin.sdk.ci import setup_ci
     return setup_ci(
         solution=solution, solution_repo=solution_repo, domain=domain, project=project,
+        out=out,
     )
 
 

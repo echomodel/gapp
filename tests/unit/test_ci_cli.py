@@ -114,7 +114,7 @@ def _setup_result(**overrides):
         "solution": "my-app", "solution_repo": "me/my-app", "solution_repo_private": False,
         "project_id": "my-proj", "ci_repo": "acme/deploy-workflows", "domain": None,
         "environment": "my-proj", "environment_record": "created", "gcloud_used": True,
-        "app_credentials": None, "wif_pool": "exists", "wif_provider": "created",
+        "workflow_path": None, "app_credentials": None, "wif_pool": "exists", "wif_provider": "created",
         "service_account": "exists", "binding": "exists", "workflow": "pushed", "next_step": None,
     }
     base.update(overrides)
@@ -124,14 +124,14 @@ def _setup_result(**overrides):
 def test_ci_setup_passes_args_and_prints_resources(monkeypatch):
     calls = {}
 
-    def fake_setup(solution=None, solution_repo=None, domain=None, project=None):
-        calls.update(solution=solution, solution_repo=solution_repo, domain=domain, project=project)
+    def fake_setup(solution=None, solution_repo=None, domain=None, project=None, out=None):
+        calls.update(solution=solution, solution_repo=solution_repo, domain=domain, project=project, out=out)
         return _setup_result()
 
     monkeypatch.setattr(ci_mod, "setup_ci", fake_setup)
     result = CliRunner().invoke(cli_main, ["ci", "setup", "--solution", "my-app", "--solution-repo", "me/my-app"])
     assert result.exit_code == 0, result.output
-    assert calls == {"solution": "my-app", "solution_repo": "me/my-app", "domain": None, "project": None}
+    assert calls == {"solution": "my-app", "solution_repo": "me/my-app", "domain": None, "project": None, "out": None}
     assert "my-app (me/my-app, public) → my-proj via acme/deploy-workflows" in result.output
     assert "WIF pool exists" in result.output
     assert "Environment my-proj created" in result.output
@@ -142,7 +142,7 @@ def test_ci_setup_passes_args_and_prints_resources(monkeypatch):
 def test_ci_setup_with_project_reports_no_gcloud(monkeypatch):
     calls = {}
 
-    def fake_setup(solution=None, solution_repo=None, domain=None, project=None):
+    def fake_setup(solution=None, solution_repo=None, domain=None, project=None, out=None):
         calls.update(project=project, domain=domain)
         return _setup_result(gcloud_used=False, environment_record="used", wif_pool="recorded",
                              wif_provider="recorded", service_account="recorded", binding="recorded",
@@ -158,6 +158,29 @@ def test_ci_setup_with_project_reports_no_gcloud(monkeypatch):
     assert "Environment my-proj recorded; no gcloud call made" in result.output
     assert "WIF pool" not in result.output
     assert "Domain mcp.example.com" in result.output
+
+
+def test_ci_setup_out_prints_the_file_and_the_commit_step(monkeypatch):
+    calls = {}
+
+    def fake_setup(solution=None, solution_repo=None, domain=None, project=None, out=None):
+        calls.update(out=out)
+        return _setup_result(
+            gcloud_used=False, workflow="written to file", workflow_path=out,
+            app_credentials={"app_id_var": "HOSTING_GITHUB_APP_ID", "app_key_secret": "HOSTING_GITHUB_APP_PRIVATE_KEY",
+                             "app_id_present": None, "private_key_present": None, "checked": False,
+                             "note": "not checked from this machine; the first run's credential step verifies it"},
+            next_step={"action": "commit workflow", "hint": "Commit it to acme/deploy-workflows as .github/workflows/my-app.yml."},
+        )
+
+    monkeypatch.setattr(ci_mod, "setup_ci", fake_setup)
+    result = CliRunner().invoke(cli_main, ["ci", "setup", "--project", "my-proj", "--out", "my-app.yml"])
+    assert result.exit_code == 0, result.output
+    assert calls == {"out": "my-app.yml"}
+    assert "File my-app.yml" in result.output
+    assert "Hosting app: not checked from this machine" in result.output
+    assert "Next Step: commit workflow" in result.output
+    assert ".github/workflows/my-app.yml" in result.output
 
 
 def test_ci_setup_private_repo_prints_credentials_and_next_step(monkeypatch):

@@ -14,7 +14,7 @@ something only their other machine can do.
 | projects set-env / clear-env | yes | project admin | no | no | one label write |
 | setup | yes | project admin: enable services, create bucket, edit IAM, write labels | no | no | once per solution per project, idempotent |
 | ci init; first ci setup on a project | yes | project admin: WIF pool, service account, IAM | no | yes, to the private CI repo | pool and SA are shared per project; setup records them as the CI repo's GitHub Environment `<project-id>` |
-| ci setup for another solution on an already-set-up project | yes | **no** (`--project <id>`; the Environment record is read instead) | no | yes, to the private CI repo | GitHub access only; runs from any machine, including a cloud session |
+| ci setup for another solution on an already-set-up project | yes | **no** (`--project <id>`; the Environment record is read instead) | no | read access to the CI repo; a write, or `--out <path>` when the API refuses writes | runs from any machine, including a cloud session whose GitHub proxy allows only reads and dispatch: pass `--out`, then commit the file to the CI repo as `.github/workflows/<solution>.yml` through the operator's normal commit process |
 | ci setup, private solution repo | yes | as above | no | as above, plus the hosting GitHub App's id and key stored in the CI repo | the app is created and installed by the user in a browser, once per operator; see below |
 | custom domain | yes | the deploying identity must have verified the domain or a parent | no | no | verification happens in Search Console, a browser step for the user; see below |
 | secrets list / get / set | yes | Secret Manager | no | no | |
@@ -115,6 +115,15 @@ does not need the missing capability:
   draft the operator workflow for the CI repo
 - if CI is wired and the step is deploy, dispatch the workflow and
   watch the run; that is a complete deploy with no handoff
+
+When this machine reaches GitHub through a proxy that refuses API
+writes (cloud agent sessions often do), `gapp ci setup --project <id>
+--out <path>` still produces the workflow here; a check the machine
+cannot perform (the Actions variables and secrets API) is reported as
+not checked, which is not a failure: the first run's credential step
+verifies it. Commit the file to the CI repo at the path `next_step`
+names. Do not create a verify or pre-flight workflow in the CI repo;
+the deploy run is the verification.
 
 Then hand off only the steps that truly need the other machine, in
 this shape:

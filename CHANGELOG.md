@@ -13,6 +13,16 @@ source is `gapp/__init__.py`.
   already recorded, setup makes no GCP call, so a new solution on an
   already-set-up project needs `gh` only. The reusable deploy workflow
   gains an `environment` input and reads the two variables from it.
+  `--project` is refused when the CI repo already binds the solution to
+  a different project.
+- `gapp ci setup --out <path>` (`out=` on the MCP tool) writes the rendered
+  workflow to a file instead of through the GitHub API; the same happens
+  automatically, under gapp's cache directory, when the API refuses the
+  write, and `next_step` names the path to commit it to in the CI repo.
+  Checks a machine cannot perform (the Actions variables and secrets API
+  behind a restrictive proxy) are reported as not checked rather than
+  failed; the Environment's existence is read through the repo
+  environments endpoint.
 - `gapp ci status` reports the Environment a workflow deploys through and
   whether its two variables exist; `gapp ci trigger` refuses when one is
   missing.

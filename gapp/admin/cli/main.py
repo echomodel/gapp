@@ -426,14 +426,21 @@ def ci_status_cmd(solution):
         click.echo(f"Domain:    {result['domain']}")
     if result.get("environment"):
         record = result.get("environment_record") or {}
-        def _rec(present):
-            return "present" if present else "missing"
-        click.echo(
-            f"Environment: {result['environment']} (GAPP_WIF_PROVIDER "
-            f"{_rec(record.get('wif_provider_present'))}, GAPP_DEPLOY_SERVICE_ACCOUNT "
-            f"{_rec(record.get('service_account_present'))})"
-        )
-    if creds := result.get("app_credentials"):
+        if record.get("exists") is False:
+            click.echo(f"Environment: {result['environment']} (missing)")
+        elif record.get("checked") is False:
+            click.echo(f"Environment: {result['environment']} (exists; variables {record.get('note') or 'not checked'})")
+        else:
+            def _rec(present):
+                return "present" if present else "missing"
+            click.echo(
+                f"Environment: {result['environment']} (GAPP_WIF_PROVIDER "
+                f"{_rec(record.get('wif_provider_present'))}, GAPP_DEPLOY_SERVICE_ACCOUNT "
+                f"{_rec(record.get('service_account_present'))})"
+            )
+    if (creds := result.get("app_credentials")) and creds.get("checked") is False:
+        click.echo(f"Hosting app: {creds['note']}")
+    elif creds := result.get("app_credentials"):
         def _state(present):
             return "present" if present else "missing" if present is False else "unverified"
         click.echo(
@@ -472,7 +479,9 @@ def ci_init_cmd(repo, local_only):
     if result.get("repo_created"):
         click.echo("    repo created (private) ✓")
     click.echo(f"    topic {result['topic_status']} ✓")
-    if app := result.get("hosting_app"):
+    if (app := result.get("hosting_app")) and app.get("checked") is False:
+        click.echo(f"    Hosting app (private solution repos only): {app['note']}")
+    elif app := result.get("hosting_app"):
         def _state(present):
             return "present" if present else "missing" if present is False else "unverified"
         click.echo(
@@ -501,7 +510,12 @@ def ci_init_cmd(repo, local_only):
     help="GCP project id. When the CI repo already records this project's deploy "
          "identity (its GitHub Environment), setup needs gh only, no gcloud.",
 )
-def ci_setup_cmd(solution, solution_repo, domain, project):
+@click.option(
+    "--out", default=None, metavar="PATH", type=click.Path(dir_okay=False),
+    help="Write the rendered workflow to this file instead of through the GitHub API; "
+         "the output names where to commit it in the CI repo.",
+)
+def ci_setup_cmd(solution, solution_repo, domain, project, out):
     """Wire one solution for CI deploys (once per solution, idempotent).
 
     The first run on a project needs gcloud with project-admin rights: it
@@ -519,11 +533,18 @@ def ci_setup_cmd(solution, solution_repo, domain, project):
     variable and HOSTING_GITHUB_APP_PRIVATE_KEY secret; the output names
     whichever is missing. Re-running keeps an existing domain unless
     --domain is passed. Requires `gapp ci init` and `gapp setup` first.
+
+    Checks this machine cannot perform (the Actions variables and secrets
+    API behind a restrictive proxy) are reported as not checked, not as
+    failures. When the GitHub API refuses the workflow write, or --out is
+    given, the rendered workflow is written to a file and the output names
+    the path to commit it to in the CI repo.
     """
     from gapp.admin.sdk.ci import setup_ci
     try:
         result = setup_ci(
             solution=solution, solution_repo=solution_repo, domain=domain, project=project,
+            out=out,
         )
     except (RuntimeError, ValueError) as e:
         click.echo(f"  Error: {e}", err=True)
@@ -541,15 +562,20 @@ def ci_setup_cmd(solution, solution_repo, domain, project):
     else:
         click.echo(f"    Environment {result['environment']} recorded; no gcloud call made ✓")
     click.echo(f"    Workflow {result['workflow']} ✓")
+    if result.get("workflow_path"):
+        click.echo(f"    File {result['workflow_path']}")
     if result.get("domain"):
         click.echo(f"    Domain {result['domain']} ✓")
     if creds := result.get("app_credentials"):
-        def _state(present):
-            return "present" if present else "missing" if present is False else "unverified"
-        click.echo(
-            f"    Hosting app: variable {creds['app_id_var']} {_state(creds['app_id_present'])}, "
-            f"secret {creds['app_key_secret']} {_state(creds['private_key_present'])}"
-        )
+        if creds.get("checked") is False:
+            click.echo(f"    Hosting app: {creds['note']}")
+        else:
+            def _state(present):
+                return "present" if present else "missing" if present is False else "unverified"
+            click.echo(
+                f"    Hosting app: variable {creds['app_id_var']} {_state(creds['app_id_present'])}, "
+                f"secret {creds['app_key_secret']} {_state(creds['private_key_present'])}"
+            )
     if next_step := result.get("next_step"):
         click.echo(f"\nNext Step: {next_step['action']}")
         click.echo(f"  {next_step['hint']}\n")

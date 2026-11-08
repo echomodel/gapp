@@ -30,6 +30,11 @@ class FakeGitHub:
         self.calls = []         # every command seen
         self.puts = []          # (repo, path, content) for every write
         self.env_writes = []    # (method, repo, env, VAR or None)
+        # Capabilities of the machine's GitHub access. A proxy may refuse
+        # every API write and the Actions variables/secrets reads while
+        # allowing contents reads and workflow dispatch.
+        self.api_writes = True
+        self.actions_api = True
 
     def run(self, cmd, **kwargs):
         self.calls.append((cmd, kwargs))
@@ -40,12 +45,17 @@ class FakeGitHub:
         if "-X" in cmd:
             method = cmd[cmd.index("-X") + 1]
             endpoint = cmd[cmd.index("-X") + 2]
+            if not self.api_writes:
+                return _Result(1, "", "gh: HTTP 403: request blocked: GitHub API writes are not allowed from this session")
             payload = json.loads(kwargs["input"]) if kwargs.get("input") else None
             if "/environments/" in endpoint:
                 return self._environment_write(method, endpoint, payload)
             assert method == "PUT", f"unexpected method {method} for {endpoint}"
             return self._put(endpoint, payload)
         endpoint = cmd[2]
+        if "/actions/variables" in endpoint or "/actions/secrets" in endpoint or "/variables" in endpoint:
+            if not self.actions_api:
+                return _Result(1, "", "gh: HTTP 403: request blocked: Actions variables and secrets are not readable from this session")
         return self._get(endpoint, cmd)
 
     # -- GitHub Environments and their variables --
@@ -95,7 +105,7 @@ class FakeGitHub:
         raise AssertionError(f"unexpected gh command {cmd}")
 
     def _get(self, endpoint, cmd):
-        parts = endpoint.split("/")
+        parts = endpoint.split("?")[0].split("/")
         repo = "/".join(parts[1:3])
         rest = parts[3:]
         if not rest:
@@ -115,6 +125,8 @@ class FakeGitHub:
                 "name": path.rsplit("/", 1)[-1], "sha": f"sha-{len(content)}",
                 "content": base64.b64encode(content.encode()).decode(),
             }))
+        if rest == ["actions", "variables"]:                  # list variables (capability probe)
+            return _Result(0, json.dumps({"total_count": 0, "variables": []}))
         if rest[0] == "actions" and len(rest) == 3:
             store = self.variables if rest[1] == "variables" else self.secrets
             if (repo, rest[2]) in store:

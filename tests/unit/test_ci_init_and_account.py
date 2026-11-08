@@ -59,6 +59,14 @@ def test_init_never_sets_the_credentials_and_rerun_is_a_no_op(init_env):
     assert not any("-X" in cmd for cmd, _ in init_env.calls)   # reads only
 
 
+def test_init_reports_unchecked_when_the_actions_api_is_unreachable(init_env):
+    init_env.actions_api = False
+    res = ci_mod.init_ci(CI_REPO)
+    assert res["hosting_app"]["checked"] is False
+    assert "not checked from this machine" in res["hosting_app"]["note"]
+    assert res["next_step"] is None
+
+
 def test_init_local_only_skips_the_github_check(fake_gh):
     res = ci_mod.init_ci(CI_REPO, local_only=True)
     assert res["topic_status"] == "skipped"

@@ -73,12 +73,16 @@ def test_parse_workflow_reads_back_what_generate_wrote(pinned):
     )
     assert ci_mod._parse_workflow(content) == {
         "solution_repo": "me/my-app", "domain": "mcp.example.com", "environment": "my-proj",
+        "project": "my-proj",
         "app_id_var": "HOSTING_GITHUB_APP_ID", "app_key_secret": "HOSTING_GITHUB_APP_PRIVATE_KEY",
     }
     assert ci_mod._parse_workflow(None) == {
-        "solution_repo": None, "domain": None, "environment": None,
+        "solution_repo": None, "domain": None, "environment": None, "project": None,
         "app_id_var": None, "app_key_secret": None,
     }
+    literal = yaml.dump({"jobs": {"deploy": {"with": {
+        "service-account": "@".join(["gapp-deploy", "old-proj.iam.gserviceaccount.com"])}}}})
+    assert ci_mod._parse_workflow(literal)["project"] == "old-proj"
     assert ci_mod._parse_workflow("not: [valid")["solution_repo"] is None
 
 
@@ -88,7 +92,9 @@ def test_parse_workflow_reads_back_what_generate_wrote(pinned):
 def test_environment_record_round_trip(fake_gh):
     assert ci_mod._read_environment_record(CI_REPO, "my-proj") is None
     assert ci_mod._write_environment_record(CI_REPO, "my-proj", WIF, SA) == "created"
-    assert ci_mod._read_environment_record(CI_REPO, "my-proj") == {"wif_provider": WIF, "service_account": SA}
+    assert ci_mod._read_environment_record(CI_REPO, "my-proj") == {
+        "wif_provider": WIF, "service_account": SA, "checked": True, "note": None,
+    }
     assert ci_mod._write_environment_record(CI_REPO, "my-proj", WIF, SA) == "unchanged"
     assert ci_mod._write_environment_record(CI_REPO, "my-proj", WIF, OTHER_SA) == "updated"
     assert fake_gh.environments[(CI_REPO, "my-proj")]["GAPP_DEPLOY_SERVICE_ACCOUNT"].startswith("other@")
@@ -98,8 +104,22 @@ def test_environment_record_is_incomplete_without_both_variables(fake_gh):
     fake_gh.environments[(CI_REPO, "my-proj")] = {"GAPP_WIF_PROVIDER": WIF}
     assert ci_mod._read_environment_record(CI_REPO, "my-proj") is None
     assert ci_mod._environment_record_status(CI_REPO, "my-proj") == {
-        "wif_provider_present": True, "service_account_present": False,
+        "exists": True, "wif_provider_present": True, "service_account_present": False,
+        "checked": True, "note": None,
     }
+
+
+def test_environment_existence_is_checked_through_the_environments_endpoint(fake_gh):
+    """Where the Actions variables API is unreadable, the Environment's existence
+    still comes from the repo environments endpoint and the record is trusted."""
+    fake_gh.actions_api = False
+    assert ci_mod._read_environment_record(CI_REPO, "my-proj") is None
+    fake_gh.environments[(CI_REPO, "my-proj")] = {}
+    record = ci_mod._read_environment_record(CI_REPO, "my-proj")
+    assert record["checked"] is False and "not checked from this machine" in record["note"]
+    status = ci_mod._environment_record_status(CI_REPO, "my-proj")
+    assert status["exists"] is True and status["checked"] is False
+    assert not any("/variables/" in cmd[2] for cmd, _ in fake_gh.calls if len(cmd) > 2)
 
 
 # -- setup_ci end to end, against the in-memory GitHub --
@@ -170,6 +190,73 @@ def test_setup_with_project_and_recorded_environment_needs_no_gcloud(wired, monk
     assert [w for w in wired.env_writes] == []   # the record is read, never rewritten
 
 
+def test_setup_without_gcloud_or_api_writes_completes_with_out(wired, monkeypatch, tmp_path):
+    """A machine with neither gcloud nor GitHub API writes (a cloud session behind
+    a restrictive proxy) still wires a solution on an already-set-up project."""
+    from gapp.admin.sdk.core import GappSDK
+    wired.environments[(CI_REPO, "my-proj")] = {}
+    wired.api_writes = False
+    wired.actions_api = False
+    wired.private["me/my-app"] = True
+    monkeypatch.setattr(GappSDK, "resolve_project_for_solution", _no_gcloud)
+    for step in ("_ensure_wif_pool", "_ensure_wif_provider", "_ensure_deploy_sa",
+                 "_ensure_wif_binding", "_get_project_number"):
+        monkeypatch.setattr(ci_mod, step, _no_gcloud)
+    monkeypatch.setattr(ci_mod, "run_gcloud", _no_gcloud)
+    monkeypatch.setenv("PATH", "/nonexistent")
+    out = tmp_path / "my-app.yml"
+
+    res = ci_mod.setup_ci(solution="my-app", solution_repo="me/my-app", project="my-proj", out=str(out))
+
+    assert res["gcloud_used"] is False
+    assert res["workflow"] == "written to file"
+    assert res["workflow_path"] == str(out)
+    doc = yaml.safe_load(out.read_text())
+    assert doc["jobs"]["deploy"]["with"]["environment"] == "my-proj"
+    assert doc["jobs"]["deploy"]["with"]["solution-repo-app-id"] == "${{ vars.HOSTING_GITHUB_APP_ID }}"
+    assert (CI_REPO, WORKFLOW_PATH) not in wired.files              # nothing written through the API
+    assert res["next_step"]["action"] == "commit workflow"
+    assert f".github/workflows/my-app.yml" in res["next_step"]["hint"]
+    assert CI_REPO in res["next_step"]["hint"]
+    # The credential check this machine cannot perform is reported, not failed.
+    assert res["app_credentials"]["checked"] is False
+    assert "not checked from this machine" in res["app_credentials"]["note"]
+    assert "Missing" not in res["next_step"]["hint"]
+
+
+def test_refused_api_write_falls_back_to_a_cache_file(wired, monkeypatch, tmp_path):
+    wired.environments[(CI_REPO, "my-proj")] = {"GAPP_WIF_PROVIDER": WIF, "GAPP_DEPLOY_SERVICE_ACCOUNT": SA}
+    wired.api_writes = False
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+
+    res = ci_mod.setup_ci(solution="my-app", solution_repo="me/my-app", project="my-proj")
+
+    assert res["workflow"] == "write refused; written to file"
+    assert res["workflow_path"] == str(tmp_path / "gapp" / "ci" / "my-app.yml")
+    assert yaml.safe_load(open(res["workflow_path"]))["jobs"]["deploy"]["with"]["environment"] == "my-proj"
+    assert "refused" in res["next_step"]["hint"] and ".github/workflows/my-app.yml" in res["next_step"]["hint"]
+
+
+def test_project_is_refused_when_the_existing_workflow_names_another_project(wired):
+    wired.environments[(CI_REPO, "my-proj")] = {"GAPP_WIF_PROVIDER": WIF, "GAPP_DEPLOY_SERVICE_ACCOUNT": SA}
+    wired.environments[(CI_REPO, "other-proj")] = {"GAPP_WIF_PROVIDER": WIF, "GAPP_DEPLOY_SERVICE_ACCOUNT": SA}
+    ci_mod.setup_ci(solution="my-app", solution_repo="me/my-app", project="my-proj")
+    with pytest.raises(RuntimeError, match="bound to project 'my-proj', but this run targets 'other-proj'"):
+        ci_mod.setup_ci(solution="my-app", solution_repo="me/my-app", project="other-proj")
+    # The existing workflow is untouched.
+    assert _written(wired)["jobs"]["deploy"]["with"]["environment"] == "my-proj"
+
+
+def test_project_collision_is_detected_on_a_literal_workflow_too(wired):
+    wired.environments[(CI_REPO, "other-proj")] = {"GAPP_WIF_PROVIDER": WIF, "GAPP_DEPLOY_SERVICE_ACCOUNT": SA}
+    wired.files[(CI_REPO, WORKFLOW_PATH)] = yaml.dump({"jobs": {"deploy": {
+        "uses": "example-org/gapp/.github/workflows/deploy.yml@v3.7.1",
+        "with": {"solution-repo": "me/my-app", "service-account": "@".join(["gapp-deploy", "my-proj.iam.gserviceaccount.com"])},
+    }}})
+    with pytest.raises(RuntimeError, match="bound to project 'my-proj'"):
+        ci_mod.setup_ci(solution="my-app", solution_repo="me/my-app", project="other-proj")
+
+
 def test_setup_with_project_but_incomplete_record_falls_back_to_gcloud(wired):
     wired.environments[(CI_REPO, "my-proj")] = {"GAPP_WIF_PROVIDER": WIF}
     res = ci_mod.setup_ci(solution="my-app", solution_repo="me/my-app", project="my-proj")
@@ -237,11 +324,20 @@ def test_setup_private_repo_adds_app_inputs_with_the_fixed_names(wired):
     assert res["next_step"] is None
     assert res["app_credentials"] == {
         "app_id_var": "HOSTING_GITHUB_APP_ID", "app_key_secret": "HOSTING_GITHUB_APP_PRIVATE_KEY",
-        "app_id_present": True, "private_key_present": True,
+        "app_id_present": True, "private_key_present": True, "checked": True, "note": None,
     }
     job = _written(wired)["jobs"]["deploy"]
     assert job["with"]["solution-repo-app-id"] == "${{ vars.HOSTING_GITHUB_APP_ID }}"
     assert job["secrets"]["solution-repo-app-private-key"] == "${{ secrets.HOSTING_GITHUB_APP_PRIVATE_KEY }}"
+
+
+def test_setup_private_repo_reports_unchecked_credentials_without_blocking(wired):
+    wired.private["me/my-app"] = True
+    wired.actions_api = False
+    res = ci_mod.setup_ci(solution="my-app", solution_repo="me/my-app")
+    assert res["app_credentials"]["checked"] is False
+    assert res["app_credentials"]["app_id_present"] is None
+    assert res["next_step"] is None
 
 
 def test_setup_private_repo_names_missing_credentials_in_next_step(wired):
@@ -267,4 +363,4 @@ def test_setup_has_no_per_solution_credential_name_options():
     import inspect
     params = inspect.signature(ci_mod.setup_ci).parameters
     assert "app_id_var" not in params and "app_key_secret" not in params
-    assert "project" in params
+    assert "project" in params and "out" in params
