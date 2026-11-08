@@ -13,7 +13,8 @@ something only their other machine can do.
 | init (write `gapp.yaml`) | optional | no | no | optional | `gapp init` adds a repo topic when `gh` is logged in; otherwise it just writes the file. Writing `gapp.yaml` by hand from the schema is fine too. |
 | projects set-env / clear-env | yes | project admin | no | no | one label write |
 | setup | yes | project admin: enable services, create bucket, edit IAM, write labels | no | no | once per solution per project, idempotent |
-| ci init / ci setup | yes | project admin: WIF pool, service account, IAM | no | yes, to the private CI repo | once per solution; pool and SA are shared per project |
+| ci init; first ci setup on a project | yes | project admin: WIF pool, service account, IAM | no | yes, to the private CI repo | pool and SA are shared per project; setup records them as the CI repo's GitHub Environment `<project-id>` |
+| ci setup for another solution on an already-set-up project | yes | **no** (`--project <id>`; the Environment record is read instead) | no | yes, to the private CI repo | GitHub access only; runs from any machine, including a cloud session |
 | ci setup, private solution repo | yes | as above | no | as above, plus the hosting GitHub App's id and key stored in the CI repo | the app is created and installed by the user in a browser, once per operator; see below |
 | custom domain | yes | the deploying identity must have verified the domain or a parent | no | no | verification happens in Search Console, a browser step for the user; see below |
 | secrets list / get / set | yes | Secret Manager | no | no | |
@@ -86,10 +87,11 @@ Two more steps are the user's, in a browser, and no tool replaces them:
   deployable repos (Contents read-only, no webhook, installable only on
   that account), installs it there, and generates a private key. Then,
   from a terminal with `gh`, they store the id and the key in the CI
-  repo (`gh variable set HOSTING_GITHUB_APP_ID ...`,
+  repo under the fixed names (`gh variable set HOSTING_GITHUB_APP_ID ...`,
   `gh secret set HOSTING_GITHUB_APP_PRIVATE_KEY < key.pem`) and delete
   the key file. Never ask for the key in chat and never store it
-  anywhere else. `gapp ci status` tells you when this is still missing.
+  anywhere else. `gapp ci init` and `gapp ci status` tell you when
+  this is still missing and print those two commands.
   Say explicitly: install the app on an org of deployable repos, never
   on all repositories of a personal account.
 - **Domain ownership verification** for a custom domain. The user runs
@@ -126,7 +128,9 @@ On your workstation (where gapp and gcloud are logged in), in the <solution> rep
 1. git pull
 2. gapp setup <project-id>              # or the MCP call gapp_setup(project_id="<project-id>")
 3. gapp ci init <owner>/<ci-repo>       # once per operator; or gapp_ci_init(repo=...)
-4. gapp ci setup --solution <solution>  # creates WIF, service account, workflow; or gapp_ci_setup(...)
+4. gapp ci setup --solution <solution>  # first solution on the project: creates WIF, service account, records the Environment, writes the workflow; or gapp_ci_setup(...)
+   # (another solution on an already-set-up project needs no gcloud: run
+   #  gapp ci setup --solution <solution> --solution-repo <owner>/<repo> --project <project-id> here instead)
 
 Then tell me "setup done" and I will trigger the deploy from here.
 ```

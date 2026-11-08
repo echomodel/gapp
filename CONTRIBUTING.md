@@ -532,6 +532,13 @@ A release is one local prep command plus two publish steps. The local
 prep is automated via `scripts/release.py` so the version files can
 never drift and the test suite is never skipped.
 
+#### 0. Changelog
+
+Move the entries under `## Unreleased` in `CHANGELOG.md` to a `## X.Y.Z`
+heading and commit that with the last change going into the release (or
+on its own), so the version bump below lands on a changelog that already
+names the version.
+
 #### 1. Local prep (one command)
 
 ```bash

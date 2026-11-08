@@ -5,6 +5,7 @@ import re
 import subprocess
 
 from gapp.admin.sdk.config import get_config_dir
+from gapp.admin.sdk.util import run_gcloud, require_gcloud_account
 
 import yaml
 
@@ -13,9 +14,18 @@ _CI_TOPIC = "gapp-ci"
 
 # Where the caller workflow of a private solution repo finds the hosting
 # GitHub App's credentials: an Actions variable and an Actions secret in
-# the CI repo. Defaults; `gapp ci setup` accepts overrides.
-DEFAULT_APP_ID_VAR = "HOSTING_GITHUB_APP_ID"
-DEFAULT_APP_KEY_SECRET = "HOSTING_GITHUB_APP_PRIVATE_KEY"
+# the CI repo. Fixed names, like GITHUB_TOKEN: the credentials belong to
+# the CI repo (one pair per operator), so nothing about a solution could
+# want different ones.
+APP_ID_VAR = "HOSTING_GITHUB_APP_ID"
+APP_KEY_SECRET = "HOSTING_GITHUB_APP_PRIVATE_KEY"
+
+# Per-project deploy identity, recorded in the CI repo as a GitHub
+# Environment named after the project id, holding these two variables.
+# Written by the first `ci setup` on a project, read by every later one,
+# so a new solution on an already-set-up project needs no gcloud.
+ENV_WIF_PROVIDER_VAR = "GAPP_WIF_PROVIDER"
+ENV_DEPLOY_SA_VAR = "GAPP_DEPLOY_SERVICE_ACCOUNT"
 
 
 def _load_ci_config() -> dict:
@@ -126,6 +136,7 @@ def init_ci(repo: str, local_only: bool = False) -> dict:
 
     if existing == full_name:
         result["topic_status"] = "already_set"
+        result.update(_hosting_app_report(full_name))
         return result
 
     # Ensure repo exists
@@ -156,7 +167,43 @@ def init_ci(repo: str, local_only: bool = False) -> dict:
     )
     result["topic_status"] = "added"
 
+    result.update(_hosting_app_report(full_name))
     return result
+
+
+def _hosting_app_report(ci_repo: str) -> dict:
+    """Whether the CI repo holds the hosting app's variable and secret.
+
+    `ci init` reports them so the operator learns about the one-time step
+    before the first private solution repo needs it. It never sets or
+    overwrites them: the values are the operator's. Returns hosting_app
+    (presence of each) and next_step (the two commands) when either is
+    missing.
+    """
+    present = {
+        "app_id_var": APP_ID_VAR,
+        "app_key_secret": APP_KEY_SECRET,
+        "app_id_present": _actions_item_present(ci_repo, "variables", APP_ID_VAR),
+        "private_key_present": _actions_item_present(ci_repo, "secrets", APP_KEY_SECRET),
+    }
+    if present["app_id_present"] is True and present["private_key_present"] is True:
+        return {"hosting_app": present, "next_step": None}
+    missing = []
+    if present["app_id_present"] is not True:
+        missing.append(f"Actions variable {APP_ID_VAR}")
+    if present["private_key_present"] is not True:
+        missing.append(f"Actions secret {APP_KEY_SECRET}")
+    unverified = None in (present["app_id_present"], present["private_key_present"])
+    hint = (
+        f"{'Could not verify' if unverified else 'Not yet in'} {ci_repo}: {', '.join(missing)}. "
+        f"Only private solution repos need them: CI clones a private repo with a "
+        f"GitHub App installed on its owner. When you have one, store its id and "
+        f"private key once:\n"
+        f"  gh variable set {APP_ID_VAR} --repo {ci_repo} --body <app-id>\n"
+        f"  gh secret set {APP_KEY_SECRET} --repo {ci_repo} < key.pem\n"
+        f"See docs/CI.md, \"Private solution repos\"."
+    )
+    return {"hosting_app": present, "next_step": {"action": "configure hosting app", "hint": hint}}
 
 
 def _resolve_ci_repo() -> str | None:
@@ -203,6 +250,81 @@ def _actions_item_present(ci_repo: str, kind: str, name: str) -> bool | None:
     return None
 
 
+def _gh_api_json(args: list[str], payload: dict | None = None) -> tuple[int, str, str]:
+    """Run `gh api` with an optional JSON body; returns (rc, stdout, stderr)."""
+    cmd = ["gh", "api"] + args
+    kwargs = {"capture_output": True, "text": True}
+    if payload is not None:
+        cmd += ["--input", "-"]
+        kwargs["input"] = json.dumps(payload)
+    res = subprocess.run(cmd, **kwargs)
+    return res.returncode, res.stdout or "", res.stderr or ""
+
+
+def _read_environment_record(ci_repo: str, project_id: str) -> dict | None:
+    """The deploy identity recorded for a project in the CI repo.
+
+    Reads the GitHub Environment named after the project id and its two
+    variables. Returns {"wif_provider", "service_account"} when both are
+    set, else None. Never derived from workflow files: the Environment is
+    the record.
+    """
+    values = {}
+    for var in (ENV_WIF_PROVIDER_VAR, ENV_DEPLOY_SA_VAR):
+        rc, out, _ = _gh_api_json([f"repos/{ci_repo}/environments/{project_id}/variables/{var}"])
+        if rc != 0 or not out.strip():
+            return None
+        value = (json.loads(out).get("value") or "").strip()
+        if not value:
+            return None
+        values[var] = value
+    return {
+        "wif_provider": values[ENV_WIF_PROVIDER_VAR],
+        "service_account": values[ENV_DEPLOY_SA_VAR],
+    }
+
+
+def _write_environment_record(ci_repo: str, project_id: str,
+                              wif_provider: str, service_account: str) -> str:
+    """Record a project's deploy identity in the CI repo.
+
+    Creates the Environment named after the project id if needed and sets
+    the two variables, creating or updating each only when its value
+    differs. Returns "created", "updated", or "unchanged".
+    """
+    rc, _, err = _gh_api_json(["-X", "PUT", f"repos/{ci_repo}/environments/{project_id}"])
+    if rc != 0:
+        raise RuntimeError(
+            f"Could not create the GitHub Environment '{project_id}' in {ci_repo}: {err.strip()}"
+        )
+    status = "unchanged"
+    for var, value in ((ENV_WIF_PROVIDER_VAR, wif_provider), (ENV_DEPLOY_SA_VAR, service_account)):
+        endpoint = f"repos/{ci_repo}/environments/{project_id}/variables"
+        rc, out, _ = _gh_api_json([f"{endpoint}/{var}"])
+        if rc == 0 and out.strip():
+            if (json.loads(out).get("value") or "").strip() == value:
+                continue
+            rc, _, err = _gh_api_json(["-X", "PATCH", f"{endpoint}/{var}"], {"name": var, "value": value})
+            status = "updated" if status != "created" else status
+        else:
+            rc, _, err = _gh_api_json(["-X", "POST", endpoint], {"name": var, "value": value})
+            status = "created"
+        if rc != 0:
+            raise RuntimeError(
+                f"Could not write Environment variable {var} on '{project_id}' in {ci_repo}: {err.strip()}"
+            )
+    return status
+
+
+def _environment_record_status(ci_repo: str, project_id: str) -> dict:
+    """Presence of each recorded variable, for `ci status`."""
+    out = {}
+    for key, var in (("wif_provider_present", ENV_WIF_PROVIDER_VAR), ("service_account_present", ENV_DEPLOY_SA_VAR)):
+        rc, body, _ = _gh_api_json([f"repos/{ci_repo}/environments/{project_id}/variables/{var}"])
+        out[key] = rc == 0 and bool((json.loads(body).get("value") or "").strip()) if (rc == 0 and body.strip()) else False
+    return out
+
+
 def _read_workflow_file(ci_repo: str, solution_name: str) -> tuple[str | None, str | None]:
     """Fetch the solution's caller workflow from the CI repo.
 
@@ -226,7 +348,8 @@ def _parse_workflow(content: str | None) -> dict:
     when absent). The variable and secret names are recovered from the
     `${{ vars.NAME }}` / `${{ secrets.NAME }}` expressions gapp wrote.
     """
-    info = {"solution_repo": None, "domain": None, "app_id_var": None, "app_key_secret": None}
+    info = {"solution_repo": None, "domain": None, "environment": None,
+            "app_id_var": None, "app_key_secret": None}
     if not content:
         return info
     try:
@@ -236,6 +359,9 @@ def _parse_workflow(content: str | None) -> dict:
     job = ((doc.get("jobs") or {}).get("deploy") or {})
     with_block = job.get("with") or {}
     info["solution_repo"] = with_block.get("solution-repo") or None
+    environment = with_block.get("environment")
+    if environment is not None:
+        info["environment"] = str(environment).strip() or None
     domain = with_block.get("domain")
     if domain is not None:
         info["domain"] = str(domain).strip() or None
@@ -302,6 +428,33 @@ def _assess_private_readiness(ci_repo: str, solution_name: str, solution_repo: s
             "next_step": {"action": "configure hosting app", "hint": hint}}
 
 
+def _assess_environment_readiness(ci_repo: str, solution_name: str, environment: str | None) -> dict:
+    """Is the Environment an Environment-form workflow deploys through complete?
+
+    Returns environment_record (presence of each variable, or None for a
+    literal-form workflow) and next_step (None when ready).
+    """
+    if not environment:
+        return {"environment_record": None, "next_step": None}
+    record = _environment_record_status(ci_repo, environment)
+    if all(record.values()):
+        return {"environment_record": record, "next_step": None}
+    missing = [v for v, ok in ((ENV_WIF_PROVIDER_VAR, record["wif_provider_present"]),
+                               (ENV_DEPLOY_SA_VAR, record["service_account_present"])) if not ok]
+    return {
+        "environment_record": record,
+        "next_step": {
+            "action": "ci setup",
+            "hint": (
+                f"The workflow for '{solution_name}' deploys through the GitHub "
+                f"Environment '{environment}' in {ci_repo}, but that Environment is "
+                f"missing {', '.join(missing)}. Re-run `gapp ci setup --solution "
+                f"{solution_name}` with gcloud logged in to record the deploy identity again."
+            ),
+        },
+    }
+
+
 def get_ci_status(solution: str | None = None) -> dict:
     """Check CI readiness for the current solution.
 
@@ -319,6 +472,11 @@ def get_ci_status(solution: str | None = None) -> dict:
                   workflow exists.
         solution_repo_private: visibility of that repo (None when unknown).
         domain: the `domain:` input the workflow passes, if any.
+        environment: the project id whose GitHub Environment the workflow
+                  deploys through, when it uses the Environment form;
+                  None for a workflow that still carries literals.
+        environment_record: for an Environment-form workflow, whether the
+                  Environment's two variables exist in the CI repo.
         app_credentials: for a private repo, the Actions variable and
                   secret the workflow names and whether each exists in
                   the CI repo. None for a public repo.
@@ -333,6 +491,8 @@ def get_ci_status(solution: str | None = None) -> dict:
         "solution_repo": None,
         "solution_repo_private": None,
         "domain": None,
+        "environment": None,
+        "environment_record": None,
         "app_credentials": None,
         "next_step": None,
     }
@@ -358,6 +518,12 @@ def get_ci_status(solution: str | None = None) -> dict:
     info = _parse_workflow(content)
     result["solution_repo"] = info["solution_repo"]
     result["domain"] = info["domain"]
+    result["environment"] = info["environment"]
+    env_ready = _assess_environment_readiness(result["repo"], solution_name, info["environment"])
+    result["environment_record"] = env_ready["environment_record"]
+    if env_ready["next_step"]:
+        result["next_step"] = env_ready["next_step"]
+        return result
     if not info["solution_repo"]:
         return result
     try:
@@ -417,6 +583,9 @@ def trigger_ci(solution: str | None = None, *, ref: str = "main", watch: bool = 
     # A private solution repo needs the hosting app's credentials in place,
     # or the run fails at checkout with "Repository not found". Refuse now.
     info = _parse_workflow(content)
+    env_ready = _assess_environment_readiness(ci_repo, solution_name, info["environment"])
+    if env_ready["next_step"]:
+        raise RuntimeError(env_ready["next_step"]["hint"])
     if info["solution_repo"]:
         private = _is_repo_private(info["solution_repo"])
         readiness = _assess_private_readiness(
@@ -528,8 +697,8 @@ _DEPLOY_SA_ROLES = [
 
 def _get_project_number(project_id: str) -> str:
     """Get the numeric project number from a project ID."""
-    result = subprocess.run(
-        ["gcloud", "projects", "describe", project_id,
+    result = run_gcloud(
+        ["projects", "describe", project_id,
          "--format", "value(projectNumber)"],
         capture_output=True,
         text=True,
@@ -544,8 +713,8 @@ def _ensure_wif_pool(project_id: str) -> str:
     pool_name = f"projects/{project_id}/locations/global/workloadIdentityPools/{_WIF_POOL_ID}"
 
     # Check if exists
-    check = subprocess.run(
-        ["gcloud", "iam", "workload-identity-pools", "describe", _WIF_POOL_ID,
+    check = run_gcloud(
+        ["iam", "workload-identity-pools", "describe", _WIF_POOL_ID,
          "--project", project_id, "--location", "global"],
         capture_output=True,
         text=True,
@@ -554,8 +723,8 @@ def _ensure_wif_pool(project_id: str) -> str:
         return "exists"
 
     # Create
-    result = subprocess.run(
-        ["gcloud", "iam", "workload-identity-pools", "create", _WIF_POOL_ID,
+    result = run_gcloud(
+        ["iam", "workload-identity-pools", "create", _WIF_POOL_ID,
          "--project", project_id, "--location", "global",
          "--display-name", "GitHub Actions"],
         capture_output=True,
@@ -569,8 +738,8 @@ def _ensure_wif_pool(project_id: str) -> str:
 def _ensure_wif_provider(project_id: str, github_owner: str) -> str:
     """Create WIF OIDC provider for GitHub if it doesn't exist."""
     # Check if exists
-    check = subprocess.run(
-        ["gcloud", "iam", "workload-identity-pools", "providers", "describe",
+    check = run_gcloud(
+        ["iam", "workload-identity-pools", "providers", "describe",
          _WIF_PROVIDER_ID,
          "--project", project_id, "--location", "global",
          "--workload-identity-pool", _WIF_POOL_ID],
@@ -581,8 +750,8 @@ def _ensure_wif_provider(project_id: str, github_owner: str) -> str:
         return "exists"
 
     # Create — restrict to repos owned by the operator's GitHub account
-    result = subprocess.run(
-        ["gcloud", "iam", "workload-identity-pools", "providers", "create-oidc",
+    result = run_gcloud(
+        ["iam", "workload-identity-pools", "providers", "create-oidc",
          _WIF_PROVIDER_ID,
          "--project", project_id, "--location", "global",
          "--workload-identity-pool", _WIF_POOL_ID,
@@ -608,16 +777,16 @@ def _ensure_deploy_sa(project_id: str) -> str:
     sa_email = f"{_DEPLOY_SA_NAME}@{project_id}.iam.gserviceaccount.com"
 
     # Create if needed
-    check = subprocess.run(
-        ["gcloud", "iam", "service-accounts", "describe", sa_email,
+    check = run_gcloud(
+        ["iam", "service-accounts", "describe", sa_email,
          "--project", project_id],
         capture_output=True,
         text=True,
     )
     status = "exists"
     if check.returncode != 0:
-        result = subprocess.run(
-            ["gcloud", "iam", "service-accounts", "create", _DEPLOY_SA_NAME,
+        result = run_gcloud(
+            ["iam", "service-accounts", "create", _DEPLOY_SA_NAME,
              "--project", project_id,
              "--display-name", "gapp CI/CD deploy"],
             capture_output=True,
@@ -629,8 +798,8 @@ def _ensure_deploy_sa(project_id: str) -> str:
 
     # Always ensure roles (idempotent — add-iam-policy-binding is a no-op if already bound)
     for role in _DEPLOY_SA_ROLES:
-        subprocess.run(
-            ["gcloud", "projects", "add-iam-policy-binding", project_id,
+        run_gcloud(
+            ["projects", "add-iam-policy-binding", project_id,
              "--member", f"serviceAccount:{sa_email}",
              "--role", role,
              "--condition", "None"],
@@ -652,8 +821,8 @@ def _ensure_wif_binding(project_id: str, ci_repo: str) -> str:
         f"attribute.repository/{ci_repo}"
     )
 
-    result = subprocess.run(
-        ["gcloud", "iam", "service-accounts", "add-iam-policy-binding",
+    result = run_gcloud(
+        ["iam", "service-accounts", "add-iam-policy-binding",
          sa_email,
          "--project", project_id,
          "--role", "roles/iam.workloadIdentityUser",
@@ -693,29 +862,36 @@ def _resolve_gapp_ref(gapp_repo: str) -> str:
     return fallback
 
 
-def _generate_workflow(solution_name: str, solution_repo: str,
-                       project_id: str, gapp_repo: str, *,
-                       domain: str | None = None,
-                       app_id_var: str | None = None,
-                       app_key_secret: str | None = None) -> str:
-    """Generate the caller workflow YAML for the operator's CI repo.
-
-    domain: written as the reusable workflow's `domain:` input, which
-        overrides the solution's gapp.yaml at deploy time.
-    app_id_var / app_key_secret: for a private solution repo, the CI repo's
-        Actions variable holding the hosting GitHub App's id and the Actions
-        secret holding its private key. Both or neither.
-    """
-    if bool(app_id_var) != bool(app_key_secret):
-        raise ValueError("app_id_var and app_key_secret must be given together.")
-    project_number = _get_project_number(project_id)
-    sa_email = f"{_DEPLOY_SA_NAME}@{project_id}.iam.gserviceaccount.com"
-    wif_provider = (
+def _wif_provider_path(project_number: str) -> str:
+    return (
         f"projects/{project_number}/locations/global/"
         f"workloadIdentityPools/{_WIF_POOL_ID}/"
         f"providers/{_WIF_PROVIDER_ID}"
     )
 
+
+def _deploy_sa_email(project_id: str) -> str:
+    return f"{_DEPLOY_SA_NAME}@{project_id}.iam.gserviceaccount.com"
+
+
+def _generate_workflow(solution_name: str, solution_repo: str,
+                       project_id: str, gapp_repo: str, *,
+                       domain: str | None = None,
+                       private: bool = False) -> str:
+    """Generate the caller workflow YAML for the operator's CI repo.
+
+    The job passes `environment: <project-id>`: the reusable workflow runs
+    its job in that GitHub Environment of the CI repo and reads the deploy
+    identity (`GAPP_WIF_PROVIDER`, `GAPP_DEPLOY_SERVICE_ACCOUNT`) from the
+    Environment's variables, so the workflow carries no per-project
+    literals and this function needs nothing from GCP.
+
+    domain: written as the reusable workflow's `domain:` input, which
+        overrides the solution's gapp.yaml at deploy time.
+    private: the solution repo is private, so the job passes the hosting
+        GitHub App's id and private key from the CI repo's fixed Actions
+        variable and secret.
+    """
     # Pin the reusable workflow to the installed gapp version's release tag.
     gapp_ref = _resolve_gapp_ref(gapp_repo)
 
@@ -737,8 +913,7 @@ def _generate_workflow(solution_name: str, solution_repo: str,
                 "with": {
                     "solution-repo": solution_repo,
                     "ref": "${{ inputs.ref }}",
-                    "workload-identity-provider": wif_provider,
-                    "service-account": sa_email,
+                    "environment": project_id,
                     "gapp-repo": gapp_repo,
                     "gapp-ref": gapp_ref,
                     "solution-name": solution_name,
@@ -753,10 +928,10 @@ def _generate_workflow(solution_name: str, solution_repo: str,
     with_block = workflow["jobs"]["deploy"]["with"]
     if domain:
         with_block["domain"] = domain
-    if app_id_var:
-        with_block["solution-repo-app-id"] = f"${{{{ vars.{app_id_var} }}}}"
+    if private:
+        with_block["solution-repo-app-id"] = f"${{{{ vars.{APP_ID_VAR} }}}}"
         workflow["jobs"]["deploy"]["secrets"] = {
-            "solution-repo-app-private-key": f"${{{{ secrets.{app_key_secret} }}}}",
+            "solution-repo-app-private-key": f"${{{{ secrets.{APP_KEY_SECRET} }}}}",
         }
     return yaml.dump(workflow, default_flow_style=False, sort_keys=False)
 
@@ -811,8 +986,7 @@ def _write_workflow_to_ci_repo(ci_repo: str, solution_name: str,
 
 def setup_ci(solution: str | None = None, solution_repo: str | None = None, *,
              domain: str | None = None,
-             app_id_var: str | None = None,
-             app_key_secret: str | None = None) -> dict:
+             project: str | None = None) -> dict:
     """Wire a solution for CI/CD deployment.
 
     No local clone of the solution repo is required when ``solution`` and
@@ -830,11 +1004,21 @@ def setup_ci(solution: str | None = None, solution_repo: str | None = None, *,
     (the default) keeps whatever ``domain:`` the existing workflow already
     carries, so re-running setup never drops a domain; ``""`` removes it.
 
+    ``project`` names the GCP project. When the CI repo already holds that
+    project's deploy identity (a GitHub Environment named after the project
+    id with ``GAPP_WIF_PROVIDER`` and ``GAPP_DEPLOY_SERVICE_ACCOUNT`` set),
+    setup makes no GCP call at all: it only writes the workflow, so a new
+    solution on an already-set-up project needs ``gh`` and nothing else.
+    Otherwise (no ``project``, or the record is incomplete) the gcloud path
+    runs: it finds or verifies the project, creates or verifies the pool,
+    provider, service account and binding, and records the Environment so
+    the next solution does not need gcloud.
+
     A private solution repo cannot be cloned with the run's built-in token,
     so its workflow passes the hosting GitHub App's credentials from the CI
-    repo's Actions variable ``app_id_var`` and secret ``app_key_secret``
-    (defaults: ``HOSTING_GITHUB_APP_ID`` and ``HOSTING_GITHUB_APP_PRIVATE_KEY``).
-    Setup checks that both exist and names them in ``next_step`` when not.
+    repo's Actions variable ``HOSTING_GITHUB_APP_ID`` and secret
+    ``HOSTING_GITHUB_APP_PRIVATE_KEY``. Setup checks that both exist and
+    names them in ``next_step`` when not.
     """
     from gapp.admin.sdk.core import GappSDK
 
@@ -845,7 +1029,7 @@ def setup_ci(solution: str | None = None, solution_repo: str | None = None, *,
             "No CI repo configured. Run 'gapp ci init <repo-name>' first."
         )
 
-    # 2. Resolve solution + project
+    # 2. Resolve the solution (local only, no cloud call)
     sdk = GappSDK()
     sol_ctx = sdk.resolve_solution(solution)
     if not sol_ctx or not sol_ctx.get("name"):
@@ -855,14 +1039,22 @@ def setup_ci(solution: str | None = None, solution_repo: str | None = None, *,
         )
     solution_name = sol_ctx["name"]
 
-    try:
-        res = sdk.resolve_project_for_solution(solution_name)
-        project_id = res["project_id"]
-    except RuntimeError as e:
-        raise RuntimeError(
-            f"No GCP project found for '{solution_name}': {e}\n"
-            f"  Run 'gapp setup --project <project-id>' first."
-        )
+    # 3. Decide whether GCP is needed at all. With --project and a complete
+    #    Environment record, everything below is GitHub API only.
+    project_id = project.strip() if project else None
+    record = _read_environment_record(ci_repo, project_id) if project_id else None
+    needs_gcloud = record is None
+
+    if needs_gcloud:
+        require_gcloud_account()
+        try:
+            res = sdk.resolve_project_for_solution(solution_name, project=project_id)
+            project_id = res["project_id"]
+        except RuntimeError as e:
+            raise RuntimeError(
+                f"No GCP project found for '{solution_name}': {e}\n"
+                f"  Run 'gapp setup --project <project-id>' first."
+            )
 
     # Explicit solution-repo wins (deterministic, no checkout needed);
     # otherwise discover it from the current checkout's origin remote.
@@ -883,10 +1075,6 @@ def setup_ci(solution: str | None = None, solution_repo: str | None = None, *,
 
     # Private repos need the hosting app; decide that before touching GCP.
     private = _is_repo_private(full_solution_repo)
-    id_var = key_secret = None
-    if private:
-        id_var = app_id_var or DEFAULT_APP_ID_VAR
-        key_secret = app_key_secret or DEFAULT_APP_KEY_SECRET
 
     # Keep an existing `domain:` unless the caller said otherwise.
     _, existing_content = _read_workflow_file(ci_repo, solution_name)
@@ -903,6 +1091,9 @@ def setup_ci(solution: str | None = None, solution_repo: str | None = None, *,
         "project_id": project_id,
         "ci_repo": ci_repo,
         "domain": effective_domain,
+        "environment": project_id,
+        "environment_record": None,
+        "gcloud_used": needs_gcloud,
         "app_credentials": None,
         "wif_pool": None,
         "wif_provider": None,
@@ -912,30 +1103,43 @@ def setup_ci(solution: str | None = None, solution_repo: str | None = None, *,
         "next_step": None,
     }
 
-    # 3. WIF pool
-    result["wif_pool"] = _ensure_wif_pool(project_id)
+    if needs_gcloud:
+        # 4. WIF pool
+        result["wif_pool"] = _ensure_wif_pool(project_id)
 
-    # 4. WIF provider
-    github_owner = ci_repo.split("/")[0] if "/" in ci_repo else ci_repo
-    result["wif_provider"] = _ensure_wif_provider(project_id, github_owner)
+        # 5. WIF provider
+        github_owner = ci_repo.split("/")[0] if "/" in ci_repo else ci_repo
+        result["wif_provider"] = _ensure_wif_provider(project_id, github_owner)
 
-    # 5. Deploy SA
-    result["service_account"] = _ensure_deploy_sa(project_id)
+        # 6. Deploy SA
+        result["service_account"] = _ensure_deploy_sa(project_id)
 
-    # 6. IAM binding
-    result["binding"] = _ensure_wif_binding(project_id, ci_repo)
+        # 7. IAM binding
+        result["binding"] = _ensure_wif_binding(project_id, ci_repo)
 
-    # 7. Generate and push workflow
+        # 8. Record the deploy identity in the CI repo so the next solution
+        #    on this project needs no gcloud.
+        result["environment_record"] = _write_environment_record(
+            ci_repo, project_id,
+            _wif_provider_path(_get_project_number(project_id)),
+            _deploy_sa_email(project_id),
+        )
+    else:
+        result["wif_pool"] = result["wif_provider"] = "recorded"
+        result["service_account"] = result["binding"] = "recorded"
+        result["environment_record"] = "used"
+
+    # 9. Generate and push workflow
     workflow_content = _generate_workflow(
         solution_name, full_solution_repo, project_id, gapp_repo,
-        domain=effective_domain, app_id_var=id_var, app_key_secret=key_secret,
+        domain=effective_domain, private=private,
     )
     result["workflow"] = _write_workflow_to_ci_repo(ci_repo, solution_name, workflow_content)
 
-    # 8. For a private repo, confirm the CI repo holds the app's credentials.
+    # 10. For a private repo, confirm the CI repo holds the app's credentials.
     readiness = _assess_private_readiness(
         ci_repo, solution_name, full_solution_repo, private,
-        {"app_id_var": id_var, "app_key_secret": key_secret},
+        {"app_id_var": APP_ID_VAR, "app_key_secret": APP_KEY_SECRET} if private else {},
     )
     result["app_credentials"] = readiness["app_credentials"]
     result["next_step"] = readiness["next_step"]

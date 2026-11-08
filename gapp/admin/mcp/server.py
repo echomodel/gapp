@@ -271,6 +271,11 @@ def gapp_ci_status(solution: str | None = None) -> dict:
         solution_repo, solution_repo_private: the repo the workflow
                   deploys and whether it is private.
         domain: the custom domain the workflow passes, if any.
+        environment, environment_record: the project id whose GitHub
+                  Environment the workflow deploys through, and whether
+                  that Environment's GAPP_WIF_PROVIDER and
+                  GAPP_DEPLOY_SERVICE_ACCOUNT variables exist. null for
+                  a workflow that still carries the identity as literals.
         app_credentials: for a private solution repo, the CI repo's
                   Actions variable and secret that hold the hosting
                   GitHub App's id and private key, and whether each
@@ -302,6 +307,13 @@ def gapp_ci_init(repo: str, local_only: bool = False) -> dict:
     gapp_ci_setup. The CI repo is a private GitHub repo that holds
     deployment workflows — it is NOT the solution repo.
 
+    Idempotent and value-free. Unless local_only, it also reports whether
+    the CI repo holds the hosting GitHub App's fixed Actions variable
+    HOSTING_GITHUB_APP_ID and secret HOSTING_GITHUB_APP_PRIVATE_KEY (needed
+    only for private solution repos) and, when either is missing, returns
+    the two `gh` commands to store them as `next_step`. It never sets or
+    overwrites them.
+
     Check current state with gapp_ci_status before calling.
 
     Args:
@@ -317,21 +329,27 @@ def gapp_ci_setup(
     solution: str | None = None,
     solution_repo: str | None = None,
     domain: str | None = None,
-    app_id_var: str | None = None,
-    app_key_secret: str | None = None,
+    project: str | None = None,
 ) -> dict:
     """Wire a solution for CI/CD deployment.
 
-    Creates Workload Identity Federation, service account, IAM bindings,
-    and pushes the GitHub Actions workflow to the CI repo. Idempotent;
-    re-running keeps the workflow's existing domain unless `domain` is
-    passed.
+    The first run on a GCP project needs gcloud with project-admin rights:
+    it creates Workload Identity Federation, the deploy service account
+    and IAM bindings, and records the deploy identity in the CI repo as a
+    GitHub Environment named after the project id. Every run writes the
+    solution's GitHub Actions workflow to the CI repo; the workflow
+    deploys through that Environment. With `project` set and the
+    Environment already recorded, no GCP call is made at all, so a new
+    solution on an already-set-up project needs only GitHub access.
+    Idempotent; re-running keeps the workflow's existing domain unless
+    `domain` is passed.
 
     A private solution repo is detected automatically. Its workflow then
-    passes the hosting GitHub App's credentials from the CI repo's Actions
-    variable and secret; the result's `next_step` names them when they
-    are missing from the CI repo (gapp_ci_trigger refuses until they
-    exist).
+    passes the hosting GitHub App's credentials from the CI repo's fixed
+    Actions variable HOSTING_GITHUB_APP_ID and secret
+    HOSTING_GITHUB_APP_PRIVATE_KEY; the result's `next_step` names them
+    when they are missing from the CI repo (gapp_ci_trigger refuses until
+    they exist).
 
     Prerequisites: gapp_ci_init must have been called first to designate
     the CI repo. The solution must also have been initialized (gapp_init)
@@ -350,16 +368,13 @@ def gapp_ci_setup(
             at deploy time, so a public solution repo can keep a
             placeholder there. None keeps the domain already in the
             workflow; "" removes it.
-        app_id_var: Private repo only. CI repo Actions variable holding the
-            hosting GitHub App's id. Default HOSTING_GITHUB_APP_ID.
-        app_key_secret: Private repo only. CI repo Actions secret holding
-            the hosting GitHub App's private key. Default
-            HOSTING_GITHUB_APP_PRIVATE_KEY.
+        project: GCP project id. With the project's Environment already
+            recorded in the CI repo, setup runs without gcloud. Without
+            it, the project is discovered from its labels (gcloud).
     """
     from gapp.admin.sdk.ci import setup_ci
     return setup_ci(
-        solution=solution, solution_repo=solution_repo, domain=domain,
-        app_id_var=app_id_var, app_key_secret=app_key_secret,
+        solution=solution, solution_repo=solution_repo, domain=domain, project=project,
     )
 
 

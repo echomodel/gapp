@@ -95,16 +95,27 @@ No terraform or gcloud on the deploying machine.
    repo: `gapp ci setup --domain mcp.example.com` writes the custom
    domain, which overrides `gapp.yaml` at deploy time, and a re-run
    without `--domain` keeps it. Never hand-edit the workflow file.
+   The first setup on a project also records the project's deploy
+   identity in the CI repo as a GitHub Environment named after the
+   project id (`GAPP_WIF_PROVIDER`, `GAPP_DEPLOY_SERVICE_ACCOUNT`);
+   every workflow deploys through that Environment instead of
+   carrying the values. So the **second solution on the same project
+   needs no gcloud at all**: `gapp ci setup --solution <s>
+   --solution-repo <owner>/<repo> --project <project-id>` runs with
+   `gh` alone, from any machine, including this one. Use that form
+   whenever the project already hosts a gapp solution.
 3. **Private solution repo.** The runner's built-in token can read
    only the CI repo, so a private solution repo is cloned with a
    one-hour token from a GitHub App the user installs on the repo's
    owner (a browser step, `references/environment.md`). `gapp ci
    setup` detects the private repo, wires the app's id and key into
    the workflow from the CI repo's Actions variable
-   `HOSTING_GITHUB_APP_ID` and secret `HOSTING_GITHUB_APP_PRIVATE_KEY`,
-   and names whichever is missing in `next_step`. `gapp ci status`
-   shows the same; `gapp ci trigger` refuses until both exist. A
-   public solution repo needs none of this.
+   `HOSTING_GITHUB_APP_ID` and secret `HOSTING_GITHUB_APP_PRIVATE_KEY`
+   (fixed names, one pair per CI repo, never renamed per solution),
+   and names whichever is missing in `next_step`. `gapp ci init`
+   reports the same two and prints the commands to store them;
+   `gapp ci status` shows the same; `gapp ci trigger` refuses until
+   both exist. A public solution repo needs none of this.
 4. `gapp ci trigger` dispatches that workflow and streams the run;
    it needs `gh` logged in. Any GitHub tool that can dispatch a
    workflow and read the run does the same job.
@@ -117,9 +128,13 @@ shared by every solution on it; only the workflow file is per
 solution. A second solution on an already-wired project costs one
 `ci setup`, which finds the shared pieces and adds one workflow.
 
-The two setup commands need a project-admin identity and write
-access to the CI repo, so they usually happen on the workstation
-once.
+`ci init` and the first `ci setup` on a project need a project-admin
+identity and write access to the CI repo, so they usually happen on
+the workstation once; later solutions on that project need only
+`gh` (`--project`). Every gcloud call these commands make runs as
+the account from `gapp config account` when one is set; if that
+account has no login, they stop and name it rather than fall back
+to whatever account gcloud has active.
 Everything after is credential-free for the operator.
 
 Recommend CI whenever the user deploys from more than one machine,

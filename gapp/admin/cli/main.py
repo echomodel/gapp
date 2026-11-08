@@ -424,6 +424,15 @@ def ci_status_cmd(solution):
         click.echo(f"Source:    {result['solution_repo']} ({visibility})")
     if result.get("domain"):
         click.echo(f"Domain:    {result['domain']}")
+    if result.get("environment"):
+        record = result.get("environment_record") or {}
+        def _rec(present):
+            return "present" if present else "missing"
+        click.echo(
+            f"Environment: {result['environment']} (GAPP_WIF_PROVIDER "
+            f"{_rec(record.get('wif_provider_present'))}, GAPP_DEPLOY_SERVICE_ACCOUNT "
+            f"{_rec(record.get('service_account_present'))})"
+        )
     if creds := result.get("app_credentials"):
         def _state(present):
             return "present" if present else "missing" if present is False else "unverified"
@@ -463,6 +472,16 @@ def ci_init_cmd(repo, local_only):
     if result.get("repo_created"):
         click.echo("    repo created (private) ✓")
     click.echo(f"    topic {result['topic_status']} ✓")
+    if app := result.get("hosting_app"):
+        def _state(present):
+            return "present" if present else "missing" if present is False else "unverified"
+        click.echo(
+            f"    Hosting app (private solution repos only): variable {app['app_id_var']} "
+            f"{_state(app['app_id_present'])}, secret {app['app_key_secret']} "
+            f"{_state(app['private_key_present'])}"
+        )
+    if next_step := result.get("next_step"):
+        click.echo(f"\n  {next_step['hint']}")
     click.echo("\nNext Step: gapp ci setup\n")
 
 
@@ -478,35 +497,33 @@ def ci_init_cmd(repo, local_only):
          "domain already in the workflow; pass an empty string to remove it.",
 )
 @click.option(
-    "--app-id-var", default=None, metavar="NAME",
-    help="Private solution repo: CI repo Actions variable holding the hosting GitHub "
-         "App's id. Default HOSTING_GITHUB_APP_ID.",
+    "--project", default=None, metavar="PROJECT_ID",
+    help="GCP project id. When the CI repo already records this project's deploy "
+         "identity (its GitHub Environment), setup needs gh only, no gcloud.",
 )
-@click.option(
-    "--app-key-secret", default=None, metavar="NAME",
-    help="Private solution repo: CI repo Actions secret holding the hosting GitHub "
-         "App's private key. Default HOSTING_GITHUB_APP_PRIVATE_KEY.",
-)
-def ci_setup_cmd(solution, solution_repo, domain, app_id_var, app_key_secret):
+def ci_setup_cmd(solution, solution_repo, domain, project):
     """Wire one solution for CI deploys (once per solution, idempotent).
 
-    Creates the project's Workload Identity pool and provider and the
-    gapp-deploy service account if missing (shared by every solution on
-    the project), binds the pool to the CI repo, and writes this
-    solution's workflow file into the CI repo through the GitHub API
-    (no clone, commit, or push on this machine). Requires `gapp ci init`
-    and `gapp setup` first.
+    The first run on a project needs gcloud with project-admin rights: it
+    creates the Workload Identity pool and provider and the gapp-deploy
+    service account if missing (shared by every solution on the project),
+    binds the pool to the CI repo, and records the deploy identity in the
+    CI repo as a GitHub Environment named after the project id. Every run
+    writes this solution's workflow file into the CI repo through the
+    GitHub API (no clone, commit, or push on this machine); the workflow
+    deploys through that Environment. With --project and the Environment
+    already recorded, setup makes no GCP call at all.
 
     A private solution repo gets the hosting GitHub App's credentials
-    wired into its workflow; the output names the Actions variable and
-    secret the CI repo must hold. Re-running keeps an existing domain
-    unless --domain is passed.
+    wired into its workflow from the CI repo's HOSTING_GITHUB_APP_ID
+    variable and HOSTING_GITHUB_APP_PRIVATE_KEY secret; the output names
+    whichever is missing. Re-running keeps an existing domain unless
+    --domain is passed. Requires `gapp ci init` and `gapp setup` first.
     """
     from gapp.admin.sdk.ci import setup_ci
     try:
         result = setup_ci(
-            solution=solution, solution_repo=solution_repo, domain=domain,
-            app_id_var=app_id_var, app_key_secret=app_key_secret,
+            solution=solution, solution_repo=solution_repo, domain=domain, project=project,
         )
     except (RuntimeError, ValueError) as e:
         click.echo(f"  Error: {e}", err=True)
@@ -515,10 +532,14 @@ def ci_setup_cmd(solution, solution_repo, domain, app_id_var, app_key_secret):
     click.echo()
     click.echo(f"  {result['solution']} ({result['solution_repo']}, {visibility}) → {result['project_id']} via {result['ci_repo']}")
     click.echo()
-    click.echo(f"    WIF pool {result['wif_pool']} ✓")
-    click.echo(f"    WIF provider {result['wif_provider']} ✓")
-    click.echo(f"    Service account {result['service_account']} ✓")
-    click.echo(f"    Binding {result['binding']} ✓")
+    if result.get("gcloud_used"):
+        click.echo(f"    WIF pool {result['wif_pool']} ✓")
+        click.echo(f"    WIF provider {result['wif_provider']} ✓")
+        click.echo(f"    Service account {result['service_account']} ✓")
+        click.echo(f"    Binding {result['binding']} ✓")
+        click.echo(f"    Environment {result['environment']} {result['environment_record']} ✓")
+    else:
+        click.echo(f"    Environment {result['environment']} recorded; no gcloud call made ✓")
     click.echo(f"    Workflow {result['workflow']} ✓")
     if result.get("domain"):
         click.echo(f"    Domain {result['domain']} ✓")

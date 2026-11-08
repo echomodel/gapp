@@ -26,8 +26,10 @@ class FakeGitHub:
         self.files = {}         # ("owner/repo", path) -> content
         self.variables = set()  # ("owner/repo", NAME)
         self.secrets = set()    # ("owner/repo", NAME)
+        self.environments = {}  # ("owner/repo", env) -> {VAR: value}
         self.calls = []         # every command seen
         self.puts = []          # (repo, path, content) for every write
+        self.env_writes = []    # (method, repo, env, VAR or None)
 
     def run(self, cmd, **kwargs):
         self.calls.append((cmd, kwargs))
@@ -35,11 +37,59 @@ class FakeGitHub:
         assert "clone" not in cmd
         if cmd[:2] != ["gh", "api"]:
             return self.other(cmd, kwargs)
-        if "-X" in cmd and "PUT" in cmd:
-            endpoint = cmd[cmd.index("PUT") + 1]
-            return self._put(endpoint, json.loads(kwargs["input"]))
+        if "-X" in cmd:
+            method = cmd[cmd.index("-X") + 1]
+            endpoint = cmd[cmd.index("-X") + 2]
+            payload = json.loads(kwargs["input"]) if kwargs.get("input") else None
+            if "/environments/" in endpoint:
+                return self._environment_write(method, endpoint, payload)
+            assert method == "PUT", f"unexpected method {method} for {endpoint}"
+            return self._put(endpoint, payload)
         endpoint = cmd[2]
         return self._get(endpoint, cmd)
+
+    # -- GitHub Environments and their variables --
+
+    def _split_env(self, endpoint):
+        parts = endpoint.split("/")
+        repo = "/".join(parts[1:3])
+        env = parts[4]
+        var = parts[6] if len(parts) > 6 else None
+        return repo, env, var
+
+    def _environment_write(self, method, endpoint, payload):
+        repo, env, var = self._split_env(endpoint)
+        if method == "PUT":                      # create or update the environment
+            self.environments.setdefault((repo, env), {})
+            self.env_writes.append(("PUT", repo, env, None))
+            return _Result(0, json.dumps({"name": env}))
+        if (repo, env) not in self.environments:
+            return _Result(1, "", "gh: Not Found (HTTP 404)")
+        store = self.environments[(repo, env)]
+        if method == "POST":                     # create a variable
+            if payload["name"] in store:
+                return _Result(1, "", "gh: Variable already exists (HTTP 409)")
+            store[payload["name"]] = payload["value"]
+            self.env_writes.append(("POST", repo, env, payload["name"]))
+            return _Result(0, "")
+        if method == "PATCH":                    # update a variable
+            if var not in store:
+                return _Result(1, "", "gh: Not Found (HTTP 404)")
+            store[var] = payload["value"]
+            self.env_writes.append(("PATCH", repo, env, var))
+            return _Result(0, "")
+        raise AssertionError(f"unexpected method {method} for {endpoint}")
+
+    def _environment_get(self, endpoint):
+        repo, env, var = self._split_env(endpoint)
+        store = self.environments.get((repo, env))
+        if store is None:
+            return _Result(1, "", "gh: Not Found (HTTP 404)")
+        if var is None:
+            return _Result(0, json.dumps({"name": env}))
+        if var not in store:
+            return _Result(1, "", "gh: Not Found (HTTP 404)")
+        return _Result(0, json.dumps({"name": var, "value": store[var]}))
 
     def other(self, cmd, kwargs):
         raise AssertionError(f"unexpected gh command {cmd}")
@@ -54,6 +104,8 @@ class FakeGitHub:
             if "--jq" in cmd and cmd[cmd.index("--jq") + 1] == ".private":
                 return _Result(0, "true\n" if self.private[repo] else "false\n")
             return _Result(0, json.dumps({"private": self.private[repo]}))
+        if rest[0] == "environments":
+            return self._environment_get(endpoint)
         if rest[0] == "contents":
             path = "/".join(rest[1:])
             content = self.files.get((repo, path))

@@ -155,8 +155,10 @@ jobs:
     with:
       solution-repo: <owner>/example-app
       ref: ${{ inputs.ref }}
-      workload-identity-provider: projects/123/locations/global/workloadIdentityPools/github/providers/github
-      service-account: gapp-deploy@<your-project-id>.iam.gserviceaccount.com
+      # The CI repo's GitHub Environment named after the GCP project; it holds
+      # the deploy identity (GAPP_WIF_PROVIDER, GAPP_DEPLOY_SERVICE_ACCOUNT),
+      # recorded by the first `gapp ci setup` on that project:
+      environment: <your-project-id>
       gapp-repo: <gapp-owner>/gapp
       gapp-ref: <gapp-release-tag>
       solution-name: example-app
@@ -168,7 +170,7 @@ jobs:
       solution-repo-app-private-key: ${{ secrets.HOSTING_GITHUB_APP_PRIVATE_KEY }}
 ```
 
-That's it. No boilerplate. Each file says something different — which solution, which project, which identity, which domain. The reusable workflow in gapp handles all the logic.
+That's it. No boilerplate. Each file says something different — which solution, which project (through its Environment), which domain. The reusable workflow in gapp handles all the logic, and the per-project identity lives once, in the Environment, not copied into every file (see "Per-project deploy identity: the Environment record").
 
 Deployment values such as the domain belong here, not in the solution repo's `gapp.yaml`: the `domain:` input wins over `gapp.yaml` at deploy time, so a public solution repo can carry a placeholder or no domain at all. Set it with `gapp ci setup --domain`, never by hand-editing the workflow: `gapp ci setup` rewrites the whole file, and it keeps the existing `domain:` only because it reads it back from the file first. Passing `--domain ""` removes it.
 
@@ -268,10 +270,11 @@ A private solution repo is supported. The principle "public repos must not depen
    rm <downloaded-key>.pem
    ```
 
-`HOSTING_GITHUB_APP_ID` and `HOSTING_GITHUB_APP_PRIVATE_KEY` are gapp's default names. `gapp ci setup --app-id-var NAME --app-key-secret NAME` writes other names into the workflow.
+`HOSTING_GITHUB_APP_ID` and `HOSTING_GITHUB_APP_PRIVATE_KEY` are fixed names, like `GITHUB_TOKEN`: the credentials belong to the CI repo, one pair per operator, and nothing about a solution could want different ones, so there is no option to rename them. `gapp ci init` checks for both and prints the two commands above when either is missing, so the operator learns about the step before the first private solution repo needs it; it never sets or overwrites them. A second credential pair, if one were ever needed, would be per solution-repo owner (a second organization with its own app), not per solution; that is not supported.
 
 **What gapp does with it.**
 
+- `gapp ci init` reports whether the CI repo holds the variable and secret and, when either is missing, returns the two `gh` commands as `next_step`, noting that only private solution repos need them.
 - `gapp ci setup` reads the solution repo's visibility from the GitHub API. For a private repo it writes the two lines into the caller workflow (`solution-repo-app-id` from the Actions variable, `solution-repo-app-private-key` from the Actions secret), checks that the variable and secret exist in the CI repo, and returns a `next_step` naming the missing one. The workflow is written either way; only the trigger has to wait.
 - `gapp ci status` reports the solution repo's visibility, the variable and secret the workflow names, and whether each exists in the CI repo. A workflow written before this feature, for a repo that is now private, gets `next_step: ci setup`.
 - `gapp ci trigger` refuses up front, with the same `next_step`, for a private repo whose workflow lacks the app inputs or whose CI repo lacks the variable or secret, instead of dispatching a run that fails at checkout.
@@ -331,6 +334,8 @@ What it does:
 
 This is the prerequisite for all other `gapp ci` commands. It establishes "where do my deployment workflows live?" — locally via XDG config (always), and remotely via GitHub topic (optionally).
 
+Unless `--local-only`, it also reports whether the CI repo holds the hosting app's fixed Actions variable `HOSTING_GITHUB_APP_ID` and secret `HOSTING_GITHUB_APP_PRIVATE_KEY`, which only private solution repos need, and prints the two commands that store them when either is missing (see "Private solution repos"). It reads, never writes, those values; re-running changes nothing.
+
 Prerequisites: `gh` CLI authenticated (unless `--local-only`).
 
 #### `gapp ci setup <repo>`
@@ -340,20 +345,30 @@ Per-solution CI wiring. The `<repo>` argument is the solution repo to wire up �
 Does everything needed to deploy this solution via CI:
 
 1. Discovers the operator's CI repo from local XDG config (errors if `gapp ci init` hasn't been run)
-2. Reads the solution repo's visibility; a private repo gets the hosting
+2. Decides whether GCP is needed. With `--project <id>` and that project's
+   Environment already recorded in the CI repo (see "Per-project deploy
+   identity: the Environment record"), steps 4 to 8 are skipped and no
+   gcloud call is made. Otherwise the configured gapp account must be
+   logged in, and the project is found by label (or verified, with
+   `--project`)
+3. Reads the solution repo's visibility; a private repo gets the hosting
    app's credentials wired in (see "Private solution repos")
-3. Reads the existing workflow file, if any, so its `domain:` survives a
-   re-run; `--domain <host>` sets or changes it, `--domain ""` removes it
 4. Creates WIF pool + provider in the GCP project (idempotent, first run only per project)
 5. Creates `gapp-deploy` service account with scoped permissions (idempotent, first run only per project)
 6. Adds IAM binding: CI repo can impersonate the deploy SA (idempotent)
-7. Generates workflow file for this solution with WIF references, project ID, solution repo, domain, and (private repo) app inputs baked in
-8. Writes the workflow file to the CI repo through the GitHub Contents API
-   (create or update by path; see "Why the workflow file is written through
-   the API, not git" below)
-9. For a private repo, checks that the CI repo holds the Actions variable and secret the workflow names, and returns a `next_step` naming any that is missing
+7. Records the deploy identity in the CI repo: a GitHub Environment named
+   after the project id with `GAPP_WIF_PROVIDER` and
+   `GAPP_DEPLOY_SERVICE_ACCOUNT` (created or updated through the API)
+8. Reads the existing workflow file, if any, so its `domain:` survives a
+   re-run; `--domain <host>` sets or changes it, `--domain ""` removes it
+9. Generates the workflow file for this solution: `environment: <project-id>`,
+   solution repo, domain, and (private repo) the app inputs; no per-project literals
+10. Writes the workflow file to the CI repo through the GitHub Contents API
+    (create or update by path; see "Why the workflow file is written through
+    the API, not git" below)
+11. For a private repo, checks that the CI repo holds the fixed Actions variable and secret, and returns a `next_step` naming any that is missing
 
-Prerequisites: `gapp ci init` completed, `gapp setup <project-id>` completed for this solution, `gh` and `gcloud` authenticated.
+Prerequisites: `gapp ci init` completed, `gapp setup <project-id>` completed for this solution, `gh` authenticated; `gcloud` authenticated as the configured account unless `--project` names an already-recorded project.
 
 #### Resource scoping decisions
 
@@ -366,6 +381,21 @@ Prerequisites: `gapp ci init` completed, `gapp setup <project-id>` completed for
 **Workflow file: one per solution.** Generated by `gapp ci setup` and written to the operator's CI repo through the GitHub API.
 
 Steps 2-4 are idempotent and skip if already done.
+
+#### Per-project deploy identity: the Environment record
+
+A project's deploy identity is two values every solution on that project shares: the WIF provider resource path and the deploy service account email. They are recorded once, as a GitHub **Environment in the CI repo, named after the GCP project id**, holding two Environment variables, rather than copied into each leaf workflow:
+
+| Variable | Value |
+|---|---|
+| `GAPP_WIF_PROVIDER` | `projects/<project-number>/locations/global/workloadIdentityPools/github/providers/github` |
+| `GAPP_DEPLOY_SERVICE_ACCOUNT` | `gapp-deploy@<project-id>.iam.gserviceaccount.com` |
+
+- The first `gapp ci setup` on a project (gcloud required) creates or verifies the four GCP resources and writes the Environment through the GitHub API, the same way it writes the workflow file. Re-running is idempotent: unchanged values are left alone.
+- Every generated workflow passes `environment: <project-id>` to the reusable workflow. A job that calls a reusable workflow cannot declare an environment itself, so the reusable workflow's job does (`environment: ${{ inputs.environment }}`), and reads the two variables from that Environment of the caller repo. The caller carries no per-project literals.
+- `gapp ci setup --project <id>` on a project whose Environment is complete makes **no GCP call**: it writes the workflow and nothing else, so a new solution on an already-set-up project needs `gh` only. Without `--project`, or when the Environment or a variable is missing, the gcloud path runs and records (or repairs) the Environment on the way.
+- Nothing is parsed out of existing workflows. The Environment, written by gapp and read by gapp, is the record. Existing workflows that carry literals keep working until regenerated; regenerating one moves it to the Environment form.
+- `gapp ci status` shows the Environment a workflow deploys through and whether its two variables exist, and `gapp ci trigger` refuses up front when one is missing.
 
 #### Why the workflow file is written through the API, not git
 
@@ -410,6 +440,7 @@ Shows the state of CI configuration. Discovers the CI repo from local config, th
 - Whether this solution has a workflow file
 - The solution repo the workflow deploys and whether it is private
 - The `domain:` the workflow passes, if any
+- The GitHub Environment (project id) the workflow deploys through and whether its `GAPP_WIF_PROVIDER` and `GAPP_DEPLOY_SERVICE_ACCOUNT` variables exist
 - For a private solution repo, the Actions variable and secret the workflow names and whether each exists in the CI repo
 - `next_step`, when a CI deploy would fail as things stand
 
@@ -485,7 +516,7 @@ The operator pattern is simple enough to be copy/paste documentation in gapp's R
 
 1. Run `gapp setup <project-id>` (GCP foundation, same as always)
 2. Run `gapp ci init <your-repo-name>` (designate your CI repo, once per operator)
-3. Run `gapp ci setup --solution-repo <owner>/<repo> [--domain mcp.example.com]` (wire this solution for CI — creates WIF, SA, binding, workflow; a private solution repo also needs the hosting app from "Private solution repos")
+3. Run `gapp ci setup --solution-repo <owner>/<repo> [--domain mcp.example.com]` (wire this solution for CI — creates WIF, SA, binding, records the project's Environment, writes the workflow; a private solution repo also needs the hosting app from "Private solution repos"). For the next solution on the same project, `gapp ci setup --project <id> ...` needs `gh` only.
 4. Done. Trigger deployments from GitHub UI, CLI, or API. Check with `gapp ci status`.
 
 For someone else using your public solution repo: clone nothing, fork nothing. Copy the example workflow from gapp's docs into your own repo, fill in your project ID and WIF config, and you're running. Two public products, one private glue repo of your own.

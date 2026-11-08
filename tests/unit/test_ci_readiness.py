@@ -167,3 +167,56 @@ def test_trigger_dispatches_public_repo_as_before(trigger_env):
     res = ci_mod.trigger_ci(watch=False)
     assert res["run_id"] == "42"
     assert len(trigger_env.dispatched) == 1
+
+
+# -- the Environment a workflow deploys through --
+
+
+def _env_workflow(environment="my-proj"):
+    return yaml.dump({"name": "Deploy my-app", "on": {"workflow_dispatch": {}}, "jobs": {"deploy": {
+        "uses": "example-org/gapp/.github/workflows/deploy.yml@v3.9.0",
+        "with": {"solution-repo": "me/my-app", "ref": "${{ inputs.ref }}",
+                 "environment": environment, "solution-name": "my-app"},
+    }}})
+
+
+def test_status_reports_the_environment_and_its_variables(ci):
+    ci.private["me/my-app"] = False
+    ci.files[(CI_REPO, WORKFLOW_PATH)] = _env_workflow()
+    ci.environments[(CI_REPO, "my-proj")] = {
+        "GAPP_WIF_PROVIDER": "projects/1/locations/global/workloadIdentityPools/github/providers/github",
+        "GAPP_DEPLOY_SERVICE_ACCOUNT": "@".join(["gapp-deploy", "my-proj.iam.gserviceaccount.com"]),
+    }
+    res = ci_mod.get_ci_status()
+    assert res["environment"] == "my-proj"
+    assert res["environment_record"] == {"wif_provider_present": True, "service_account_present": True}
+    assert res["next_step"] is None
+
+
+def test_status_names_a_missing_environment_variable(ci):
+    ci.private["me/my-app"] = False
+    ci.files[(CI_REPO, WORKFLOW_PATH)] = _env_workflow()
+    ci.environments[(CI_REPO, "my-proj")] = {"GAPP_WIF_PROVIDER": "projects/1/..."}
+    res = ci_mod.get_ci_status()
+    assert res["environment_record"] == {"wif_provider_present": True, "service_account_present": False}
+    assert res["next_step"]["action"] == "ci setup"
+    assert "GAPP_DEPLOY_SERVICE_ACCOUNT" in res["next_step"]["hint"]
+    assert "gapp ci setup --solution my-app" in res["next_step"]["hint"]
+
+
+def test_status_of_a_literal_workflow_has_no_environment(ci):
+    ci.private["me/my-app"] = False
+    ci.files[(CI_REPO, WORKFLOW_PATH)] = _workflow()
+    res = ci_mod.get_ci_status()
+    assert res["environment"] is None and res["environment_record"] is None
+    assert res["next_step"] is None
+
+
+def test_trigger_refuses_when_the_environment_record_is_incomplete(trigger_env):
+    gh = trigger_env.gh
+    gh.private["me/my-app"] = False
+    gh.files[(CI_REPO, WORKFLOW_PATH)] = _env_workflow()
+    gh.environments[(CI_REPO, "my-proj")] = {}
+    with pytest.raises(RuntimeError, match="GAPP_WIF_PROVIDER"):
+        ci_mod.trigger_ci(watch=False)
+    assert trigger_env.dispatched == []
