@@ -529,3 +529,132 @@ def test_materialize_generated_secrets_idempotent(monkeypatch):
     assert results == [{"name": "app-key", "secret_id": "my-app-app-key", "status": "exists"}]
     assert calls["ensure_secret"] == []
     assert calls["add_secret_version"] == []
+
+
+# -- custom domain safety --
+#
+# Terraform replaces a changed domain mapping by destroying the old one
+# first, so a typo, a placeholder, or an omitted `domain:` would take the
+# live domain down. deploy() refuses those before any build or apply unless
+# replace_domain=True, and refuses an unverified domain before terraform.
+
+
+def _domain_deploy(tmp_path, monkeypatch, sdk, manifest, live_domain=None, verified=()):
+    """A deployable repo with `manifest`, a recorded live mapping, and a verified-domain list."""
+    _repo(tmp_path, monkeypatch, contents=manifest)
+    sdk.provider.project_labels["proj-123"] = {"gapp__my-app": "v-3"}
+    sdk.provider.buckets["gapp-my-app-proj-123"] = {"project": "proj-123"}
+    if live_domain is not None:
+        sdk.provider.tf_outputs[("gapp-my-app-proj-123", "terraform/state")] = {
+            "service_url": "https://my-app.a.run.app", "custom_domain": live_domain,
+        }
+    sdk.provider.verified_domains.update(verified)
+
+    monkeypatch.setattr(GappSDK, "_resolve_ref", lambda self, p, r: "abc123")
+    import gapp.admin.sdk.core as core_mod
+    monkeypatch.setattr(
+        core_mod, "_prepare_build_dir",
+        lambda path, image, ep, ref="HEAD": (str(tmp_path / "build"), ep),
+    )
+    (tmp_path / "build").mkdir(exist_ok=True)
+    _patch_secret_calls(monkeypatch, present_ids=())
+
+    builds = {"count": 0}
+    original = sdk.provider.submit_build_sync
+
+    def counting(*a, **kw):
+        builds["count"] += 1
+        return original(*a, **kw)
+
+    sdk.provider.submit_build_sync = counting
+    sdk.provider.image_exists = lambda *a, **kw: False
+    return builds
+
+
+def test_deploy_refuses_to_replace_live_domain_without_flag(tmp_path, monkeypatch, sdk):
+    builds = _domain_deploy(
+        tmp_path, monkeypatch, sdk, "name: my-app\ndomain: mcp.example.com\n",
+        live_domain="mcp.example.net", verified={"example.com"},
+    )
+    with pytest.raises(RuntimeError, match="replace the live domain mapping") as exc:
+        sdk.deploy()
+    assert "mcp.example.net" in str(exc.value)          # names the domain that would go
+    assert "mcp.example.com" in str(exc.value)
+    assert "--replace-domain" in str(exc.value)
+    assert builds["count"] == 0                        # refused before the build
+    assert sdk.provider.last_tfvars is None            # and before terraform
+
+
+def test_deploy_refuses_to_remove_live_domain_without_flag(tmp_path, monkeypatch, sdk):
+    builds = _domain_deploy(
+        tmp_path, monkeypatch, sdk, "name: my-app\n", live_domain="mcp.example.com",
+    )
+    with pytest.raises(RuntimeError, match="remove the live domain mapping mcp.example.com"):
+        sdk.deploy()
+    assert builds["count"] == 0
+    assert sdk.provider.last_tfvars is None
+
+
+def test_deploy_replace_domain_flag_allows_the_change(tmp_path, monkeypatch, sdk):
+    _domain_deploy(
+        tmp_path, monkeypatch, sdk, "name: my-app\ndomain: mcp.example.com\n",
+        live_domain="mcp.example.net", verified={"example.com"},
+    )
+    sdk.deploy(replace_domain=True)
+    assert sdk.provider.last_tfvars["custom_domain"] == "mcp.example.com"
+
+
+def test_deploy_replace_domain_flag_allows_removal(tmp_path, monkeypatch, sdk):
+    _domain_deploy(tmp_path, monkeypatch, sdk, "name: my-app\n", live_domain="mcp.example.com")
+    sdk.deploy(replace_domain=True)
+    assert sdk.provider.last_tfvars["custom_domain"] == ""
+
+
+def test_deploy_refuses_unverified_domain_before_build(tmp_path, monkeypatch, sdk):
+    builds = _domain_deploy(
+        tmp_path, monkeypatch, sdk, "name: my-app\ndomain: mcp.example.com\n",
+        live_domain=None, verified={"example.net"},
+    )
+    with pytest.raises(RuntimeError, match="not verified ownership of mcp.example.com") as exc:
+        sdk.deploy()
+    assert "gcloud domains verify example.com" in str(exc.value)
+    assert "gapp-deploy@" in str(exc.value)          # names the CI deploy identity
+    assert "verified owner" in str(exc.value)        # and the Search Console step
+    assert builds["count"] == 0
+    assert sdk.provider.last_tfvars is None
+
+
+def test_deploy_accepts_domain_verified_at_a_parent(tmp_path, monkeypatch, sdk):
+    _domain_deploy(
+        tmp_path, monkeypatch, sdk, "name: my-app\ndomain: mcp.app.example.com\n",
+        live_domain="", verified={"example.com"},
+    )
+    sdk.deploy()
+    assert sdk.provider.last_tfvars["custom_domain"] == "mcp.app.example.com"
+
+
+def test_redeploy_with_same_domain_needs_no_verification_or_flag(tmp_path, monkeypatch, sdk):
+    """The mapping is untouched, so an identity that never verified the domain
+    (a CI service account, say) can still redeploy."""
+    _domain_deploy(
+        tmp_path, monkeypatch, sdk, "name: my-app\ndomain: mcp.example.com\n",
+        live_domain="mcp.example.com", verified=set(),
+    )
+    sdk.deploy()
+    assert sdk.provider.last_tfvars["custom_domain"] == "mcp.example.com"
+
+
+def test_first_deploy_without_domain_runs_unguarded(tmp_path, monkeypatch, sdk):
+    _domain_deploy(tmp_path, monkeypatch, sdk, "name: my-app\n", live_domain=None)
+    sdk.deploy()
+    assert sdk.provider.last_tfvars["custom_domain"] == ""
+
+
+def test_domain_is_verified_matches_exact_and_parent_only():
+    from gapp.admin.sdk.core import _domain_is_verified
+    assert _domain_is_verified("mcp.example.com", ["example.com"])
+    assert _domain_is_verified("mcp.example.com", ["MCP.example.com."])
+    assert _domain_is_verified("a.b.example.com", ["b.example.com"])
+    assert not _domain_is_verified("mcp.example.com", ["ample.com"])      # not a label boundary
+    assert not _domain_is_verified("mcp.example.com", ["mcp.example.com.au"])
+    assert not _domain_is_verified("mcp.example.com", [])

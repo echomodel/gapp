@@ -32,7 +32,7 @@ from typing import Optional, List, Dict
 
 from gapp import __version__, MIN_SUPPORTED_MAJOR
 from gapp.admin.sdk.cloud import get_provider
-from gapp.admin.sdk.cloud.base import CloudProvider
+from gapp.admin.sdk.cloud.base import CloudProvider, CloudAccessError
 from gapp.admin.sdk.config import load_config, save_config, get_active_config
 from gapp.admin.sdk.manifest import (
     get_solution_name, load_manifest, save_manifest, get_required_apis,
@@ -57,6 +57,9 @@ UNDEFINED_ENV_DISPLAY = "<undefined>"
 
 # Display literal for global-namespace owners.
 GLOBAL_OWNER_DISPLAY = "<global>"
+
+# Region every gapp service, image, and domain mapping lives in.
+REGION = "us-central1"
 
 
 def _validate_env_name(env: Optional[str]) -> Optional[str]:
@@ -351,6 +354,10 @@ class GappSDK:
                 ctx["name"], env=env, project=project,
             )
             ctx["project_id"] = res["project_id"]
+        except CloudAccessError:
+            # An expired login or a wrong account is not "no project";
+            # let the caller report the real error.
+            raise
         except RuntimeError:
             ctx["project_id"] = None
         return ctx
@@ -790,7 +797,14 @@ class GappSDK:
         dry_run: bool = False,
         project_id: Optional[str] = None,
         rebuild: bool = False,
+        replace_domain: bool = False,
     ) -> dict:
+        """Build the image and apply Terraform for one solution.
+
+        replace_domain: a deploy that would replace or remove a live custom
+        domain mapping is refused unless this is True, because Terraform
+        destroys the old mapping before creating the new one.
+        """
         ctx = self.resolve_solution(solution)
         if not ctx:
             raise RuntimeError("Could not determine solution name.")
@@ -858,13 +872,13 @@ class GappSDK:
                 self._deploy_single_service(
                     s["name"], target_project, repo_path, load_manifest(repo_path / s["path"]),
                     service_path=s["path"], env=project_env, parent_solution=solution_name,
-                    ref=build_ref, rebuild=rebuild,
+                    ref=build_ref, rebuild=rebuild, replace_domain=replace_domain,
                 )
                 for s in preview["services"]
             ]}
         return self._deploy_single_service(
             solution_name, target_project, repo_path, load_manifest(repo_path), env=project_env,
-            ref=build_ref, rebuild=rebuild,
+            ref=build_ref, rebuild=rebuild, replace_domain=replace_domain,
         )
 
     def status(self, name: str | None = None, env: Optional[str] = None) -> StatusResult:
@@ -917,19 +931,104 @@ class GappSDK:
                     ServiceStatus(name=svc["name"], url=url, healthy=self.provider.check_http_health(url))
                 )
                 result.deployment.pending = False
+            # The mapping Terraform last applied is the live one; report its state.
+            if outputs and result.domain is None and (live := (outputs.get("custom_domain") or "").strip()):
+                result.domain = self._domain_status(project_id, live)
         return result
+
+    def _domain_status(self, project_id: str, domain: str) -> DomainStatus:
+        """Fill DomainStatus from the Cloud Run domain mapping's conditions."""
+        mapping = self.provider.get_domain_mapping(project_id, REGION, domain)
+        if not mapping:
+            return DomainStatus(
+                name=domain, status="error",
+                detail="Terraform state records this domain, but Cloud Run has no "
+                       "mapping for it. Redeploy to recreate the mapping.",
+            )
+        status_block = mapping.get("status") or {}
+        state, detail = _domain_status_from_conditions(status_block.get("conditions") or [])
+        cname = next(
+            (r.get("rrdata") for r in status_block.get("resourceRecords") or []
+             if (r.get("type") or "").upper() == "CNAME" and r.get("rrdata")),
+            None,
+        )
+        kwargs = {"cname_target": cname.rstrip(".")} if cname else {}
+        return DomainStatus(name=domain, status=state, detail=detail, **kwargs)
 
     # -- Internal helpers --
 
+    def _check_domain_safety(self, service_name, project_id, requested_domain,
+                             bucket_name, state_prefix, replace_domain):
+        """Refuse a deploy that would take a live custom domain down.
+
+        Terraform replaces a changed `google_cloud_run_domain_mapping` by
+        destroying the old one first, so a typo, a placeholder, or an omitted
+        `domain:` silently removes the live mapping. Two guards, both before
+        any build or apply:
+
+        1. A live mapping exists (recorded in Terraform state) and this deploy
+           maps a different domain or none: refuse unless replace_domain.
+        2. This deploy creates or replaces a mapping: the deploying identity
+           must have verified the domain or a parent, or Cloud Run rejects
+           the mapping after the old one is already gone.
+
+        A redeploy that keeps the same domain changes nothing about the
+        mapping, so neither guard applies to it.
+        """
+        requested = (requested_domain or "").strip().lower()
+        outputs = self.provider.get_infrastructure_outputs(
+            _get_staging_dir(service_name), bucket_name, state_prefix,
+        ) or {}
+        live = (outputs.get("custom_domain") or "").strip().lower()
+
+        if live and live != requested and not replace_domain:
+            if requested:
+                raise RuntimeError(
+                    f"Refusing to replace the live domain mapping of '{service_name}': "
+                    f"{live} is mapped now and this deploy would map {requested} instead. "
+                    f"Terraform destroys the old mapping before creating the new one, so "
+                    f"{live} would stop serving. If the change is intended, re-run with "
+                    f"--replace-domain (replace_domain=True); otherwise fix `domain:` in "
+                    f"gapp.yaml or the CI workflow's `domain:` input."
+                )
+            raise RuntimeError(
+                f"Refusing to remove the live domain mapping {live} of '{service_name}': "
+                f"this deploy sets no domain (none in gapp.yaml and none passed by CI). "
+                f"If removing it is intended, re-run with --replace-domain "
+                f"(replace_domain=True); otherwise set `domain: {live}` in gapp.yaml or "
+                f"pass it through the CI workflow's `domain:` input."
+            )
+
+        if requested and requested != live:
+            verified = self.provider.list_verified_domains()
+            if not _domain_is_verified(requested, verified):
+                parent = requested.split(".", 1)[1] if requested.count(".") >= 2 else requested
+                raise RuntimeError(
+                    f"The deploying identity has not verified ownership of {requested} or a "
+                    f"parent domain, so Cloud Run would refuse the domain mapping. Verify "
+                    f"once, then redeploy:\n"
+                    f"  gcloud domains verify {parent}      # opens Search Console; verify "
+                    f"{parent} or the narrowest parent you control\n"
+                    f"  gcloud domains list-user-verified   # must list it afterwards\n"
+                    f"A domain is verified per identity. For CI deploys, also add the deploy "
+                    f"service account (gapp-deploy@{project_id}.iam.gserviceaccount.com) as a "
+                    f"verified owner of that Search Console property."
+                )
+
     def _deploy_single_service(self, name, project_id, repo_path, manifest,
                                service_path=".", env=None, parent_solution=None,
-                               ref="HEAD", rebuild=False):
+                               ref="HEAD", rebuild=False, replace_domain=False):
+        bucket_name = self.get_bucket_name(parent_solution or name, project_id)
+        state_prefix = f"terraform/state/{name}" if parent_solution else "terraform/state"
+        self._check_domain_safety(
+            name, project_id, get_domain(manifest), bucket_name, state_prefix, replace_domain,
+        )
         service_root = repo_path / service_path
         entrypoint, _ = _resolve_entrypoint(manifest, service_root, repo_path)
         sha = self._resolve_ref(repo_path, ref)
-        self.provider.ensure_artifact_registry(project_id, "us-central1")
-        image = f"us-central1-docker.pkg.dev/{project_id}/gapp/{name}:{sha}"
-        if rebuild or not self.provider.image_exists(project_id, "us-central1", name, sha):
+        self.provider.ensure_artifact_registry(project_id, REGION)
+        image = f"{REGION}-docker.pkg.dev/{project_id}/gapp/{name}:{sha}"
+        if rebuild or not self.provider.image_exists(project_id, REGION, name, sha):
             build_dir, build_ep = _prepare_build_dir(repo_path, image, entrypoint, ref=ref)
             try:
                 self.provider.submit_build_sync(project_id, Path(build_dir), image, build_ep)
@@ -946,8 +1045,6 @@ class GappSDK:
         validate_declared_secrets(project_id, parent_solution or name, manifest)
         materialize_generated_secrets(project_id, parent_solution or name, manifest)
 
-        bucket_name = self.get_bucket_name(parent_solution or name, project_id)
-        state_prefix = f"terraform/state/{name}" if parent_solution else "terraform/state"
         tfvars = _build_tfvars(
             name, project_id, image, get_service_config(manifest),
             get_prerequisite_secrets(manifest), Path(repo_path) / service_path,
@@ -979,6 +1076,49 @@ class GappSDK:
             ["git", "rev-parse", "--short=12", ref],
             capture_output=True, text=True, cwd=path, check=True,
         ).stdout.strip()
+
+
+def _domain_is_verified(domain: str, verified: List[str]) -> bool:
+    """True when `domain` or one of its parents is in the verified list."""
+    d = domain.strip().rstrip(".").lower()
+    for v in verified:
+        v = (v or "").strip().rstrip(".").lower()
+        if v and (d == v or d.endswith("." + v)):
+            return True
+    return False
+
+
+def _domain_status_from_conditions(conditions: list) -> tuple[str, Optional[str]]:
+    """Map a Cloud Run domain mapping's conditions to gapp's DomainStatus.
+
+    Cloud Run reports three conditions: `DomainRoutable`, `CertificateProvisioned`
+    and the summary `Ready`. Returns (status, detail) where status is one of
+    pending_dns, pending_cert, active, error.
+    """
+    by_type = {c.get("type"): c for c in conditions if isinstance(c, dict)}
+
+    def _status(kind):
+        return (by_type.get(kind) or {}).get("status")
+
+    def _detail(kind):
+        c = by_type.get(kind) or {}
+        return c.get("message") or c.get("reason") or None
+
+    if not by_type:
+        return "pending_dns", "The mapping reports no conditions yet; check again shortly."
+    if _status("Ready") == "True":
+        return "active", None
+    if "DomainRoutable" in by_type and _status("DomainRoutable") != "True":
+        return "pending_dns", _detail("DomainRoutable")
+    cert = by_type.get("CertificateProvisioned")
+    if cert and cert.get("status") != "True":
+        detail = _detail("CertificateProvisioned") or ""
+        # Cloud Run words a missing CNAME as a certificate condition:
+        # "You must configure your DNS records for certificate issuance to begin."
+        if "dns" in detail.lower() or "record" in detail.lower():
+            return "pending_dns", detail or None
+        return "pending_cert", detail or None
+    return "error", _detail("Ready") or "The mapping is not ready."
 
 
 def _resolve_entrypoint(manifest, root, repo):

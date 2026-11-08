@@ -112,12 +112,17 @@ gapp list --all
 Wire a solution to GitHub Actions once, then deploy from your phone, a CI runner, or an agent session, with no `gcloud` or `terraform` on the deploying machine. The runner authenticates with Workload Identity Federation, so no key is stored anywhere.
 ```bash
 gapp ci init <owner>/<private-ci-repo>   # once per operator: the repo that holds deploy workflows
-gapp ci setup                            # once per solution: WIF pool, deploy service account, workflow
+gapp ci setup --domain mcp.example.com   # once per solution: WIF pool, deploy service account, workflow
 gapp ci trigger --ref main               # any time, from any machine with `gh` logged in
 ```
-Scope: the pool, provider, and `gapp-deploy` service account are per project and shared by every solution on it; the workflow file is per solution, so a second solution on the same project costs one `gapp ci setup`. `gapp ci init` and `gapp ci setup` need a `gcloud` login with project-admin rights; after that your workstation is optional. Without `gh`, press **Run workflow** on the CI repo's Actions tab instead. Design notes: [CI/CD setup](docs/CI.md).
+Scope: the pool, provider, and `gapp-deploy` service account are per project and shared by every solution on it; the workflow file is per solution, so a second solution on the same project costs one `gapp ci setup`. `gapp ci init` and `gapp ci setup` need a `gcloud` login with project-admin rights; after that your workstation is optional. Without `gh`, press **Run workflow** on the CI repo's Actions tab instead.
 
-### **9. Expert Mode (Explicit Management)**
+Deployment values stay out of the solution repo: `--domain` writes the custom domain into the workflow, where it overrides `gapp.yaml` at deploy time, and re-running `gapp ci setup` keeps it. Private solution repos work too: install a read-only GitHub App on the organization that holds them, store its id and key in the CI repo, and `gapp ci setup` wires the rest; `gapp ci status` says what is missing. Design notes: [CI/CD setup](docs/CI.md).
+
+### **9. Custom Domains**
+Map a subdomain to the service with `domain:` in `gapp.yaml` (or `gapp ci setup --domain` for CI deploys), deploy, and add the CNAME `gapp status` shows. Cloud Run only maps a domain for an identity that has verified it, so verify once per domain (`gcloud domains verify example.com`, which opens Search Console; for CI deploys, add the `gapp-deploy` service account as a verified owner there too). Deploys guard the live mapping: one that would replace or remove it is refused unless you pass `gapp deploy --replace-domain`, because Terraform destroys the old mapping before creating the new one.
+
+### **10. Expert Mode (Explicit Management)**
 Use this when you use a configuration repository or external fleet management tool to track environment locations. In this mode, `gapp` acts as a **stateless deployment tool** where commands leverage only the local `gapp.yaml` and explicit command-line overrides.
 ```bash
 # Turn off the cloud search registry
@@ -145,7 +150,8 @@ gapp deploy --project <project-id>
 *   `gapp projects list`: View projects with env bindings.
 
 ### **Development**
-*   `gapp status`: Check infrastructure health and service URLs.
+*   `gapp deploy [--ref <ref>] [--env <env>] [--project <id>] [--rebuild] [--replace-domain]`: Build with Cloud Build and apply Terraform. `--replace-domain` is required for a deploy that would replace or remove the live custom domain mapping.
+*   `gapp status`: Check infrastructure health, service URLs, and the custom domain's state (`pending_dns`, `pending_cert`, `active`, `error`).
 *   `gapp secrets list`: Show declared secrets, deploy-readiness, and remediation hints. See [Secrets, ownership, and recovery scenarios](docs/SECRETS.md) for the full label model and conflict-resolution guide.
 *   `gapp secrets get <name>`: Fetch a secret value or its hash + length.
 *   `gapp secrets set <name> [<value>]`: Store secrets in GCP Secret Manager.
@@ -153,9 +159,9 @@ gapp deploy --project <project-id>
 
 ### **CI/CD (`gapp ci`)**
 *   `gapp ci init <owner/repo> [--local-only]`: Designate the private CI repo that holds deploy workflows (once per operator).
-*   `gapp ci setup [--solution <name>] [--solution-repo <owner/name>]`: Create the project's WIF pool and deploy service account if missing and write this solution's workflow into the CI repo via the GitHub API (once per solution).
-*   `gapp ci trigger [--solution <name>] [--ref <ref>] [--no-watch]`: Dispatch the deploy workflow and stream the run.
-*   `gapp ci status [--solution <name>]`: Show the CI repo, whether the workflow exists, and the next step.
+*   `gapp ci setup [--solution <name>] [--solution-repo <owner/name>] [--domain <host>] [--app-id-var NAME] [--app-key-secret NAME]`: Create the project's WIF pool and deploy service account if missing and write this solution's workflow into the CI repo via the GitHub API (once per solution, idempotent). `--domain` sets the workflow's domain input and is kept on re-runs when omitted. A private solution repo gets the hosting GitHub App's credentials wired in from the CI repo's Actions variable and secret (defaults `HOSTING_GITHUB_APP_ID` and `HOSTING_GITHUB_APP_PRIVATE_KEY`).
+*   `gapp ci trigger [--solution <name>] [--ref <ref>] [--no-watch]`: Dispatch the deploy workflow and stream the run. Refuses up front when a private solution repo's credentials are not in place.
+*   `gapp ci status [--solution <name>]`: Show the CI repo, whether the workflow exists, the solution repo's visibility, the domain, the hosting app's variable and secret, and the next step.
 
 ---
 

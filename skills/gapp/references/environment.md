@@ -14,6 +14,8 @@ something only their other machine can do.
 | projects set-env / clear-env | yes | project admin | no | no | one label write |
 | setup | yes | project admin: enable services, create bucket, edit IAM, write labels | no | no | once per solution per project, idempotent |
 | ci init / ci setup | yes | project admin: WIF pool, service account, IAM | no | yes, to the private CI repo | once per solution; pool and SA are shared per project |
+| ci setup, private solution repo | yes | as above | no | as above, plus the hosting GitHub App's id and key stored in the CI repo | the app is created and installed by the user in a browser, once per operator; see below |
+| custom domain | yes | the deploying identity must have verified the domain or a parent | no | no | verification happens in Search Console, a browser step for the user; see below |
 | secrets list / get / set | yes | Secret Manager | no | no | |
 | status / list | yes | read-only | no | no | |
 | deploy, local | yes | deploy roles | yes | no | clean tree |
@@ -76,6 +78,25 @@ terraform, and a service-account credential in its setup; suggest it
 when the user keeps hitting outcome 3, and note that a stored key is a
 tradeoff against gapp's no-stored-credentials principle. It is their
 call.
+
+Two more steps are the user's, in a browser, and no tool replaces them:
+
+- **The hosting GitHub App** that lets CI clone a private solution repo.
+  The user creates it on the GitHub organization that holds their
+  deployable repos (Contents read-only, no webhook, installable only on
+  that account), installs it there, and generates a private key. Then,
+  from a terminal with `gh`, they store the id and the key in the CI
+  repo (`gh variable set HOSTING_GITHUB_APP_ID ...`,
+  `gh secret set HOSTING_GITHUB_APP_PRIVATE_KEY < key.pem`) and delete
+  the key file. Never ask for the key in chat and never store it
+  anywhere else. `gapp ci status` tells you when this is still missing.
+  Say explicitly: install the app on an org of deployable repos, never
+  on all repositories of a personal account.
+- **Domain ownership verification** for a custom domain. The user runs
+  `gcloud domains verify <parent-domain>` and finishes in Search
+  Console, and for CI deploys adds the `gapp-deploy` service account as
+  a verified owner there. `references/lifecycle.md`, "Custom domain",
+  has the order of steps.
 
 ### 3. Something is missing and this machine cannot get it: route elsewhere
 

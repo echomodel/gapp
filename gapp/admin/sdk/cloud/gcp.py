@@ -8,10 +8,23 @@ import time
 from pathlib import Path
 from typing import Optional, List, Dict
 
-from gapp.admin.sdk.cloud.base import CloudProvider
+from gapp.admin.sdk.cloud.base import CloudProvider, CloudAccessError, ProjectNotFoundError
 
 
 _GAPP_PKG_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+_CRM_PROJECTS = "https://cloudresourcemanager.googleapis.com/v3/projects"
+
+
+def _api_error_message(body: str) -> str:
+    """Pull the human-readable message out of a Google API error body."""
+    try:
+        err = json.loads(body or "{}").get("error", {})
+    except json.JSONDecodeError:
+        return (body or "").strip()[:300]
+    if isinstance(err, dict):
+        parts = [p for p in (err.get("status"), err.get("message")) if p]
+        return ": ".join(parts) if parts else (body or "").strip()[:300]
+    return str(err)
 _BUNDLED_TF_DIR = _GAPP_PKG_ROOT / "terraform"
 _BUNDLED_MODULES_DIR = _GAPP_PKG_ROOT / "modules"
 
@@ -97,21 +110,67 @@ class GCPProvider(CloudProvider):
                 "--condition=None"
             ], capture_output=True)
 
-    def get_project_labels(self, project_id: str) -> Dict[str, str]:
+    def _identity_hint(self) -> str:
+        who = f" as {self.account}" if self.account else ""
+        return (
+            f"  gapp is calling Google Cloud{who}. Check `gcloud auth list`, and run "
+            f"`gcloud auth login` (or `gapp config account <email>`) if the login "
+            f"is missing, expired, or the wrong account."
+        )
+
+    def _crm_request(self, project_id: str, args: List[str]) -> tuple[str, str]:
+        """Run one Cloud Resource Manager call with curl.
+
+        Returns (http_status, body). curl runs without `-f` so the API's own
+        error body is kept: a 401 must say "re-authenticate", not look like
+        a project with no labels.
+        """
         token = self.get_auth_token()
-        # Fallback to direct API for label retrieval to ensure we get a fresh dictionary
         env = os.environ.copy()
         if self.account: env["CLOUDSDK_CORE_ACCOUNT"] = self.account
-        res = subprocess.run(["curl", "-sf", "-H", f"Authorization: Bearer {token}", f"https://cloudresourcemanager.googleapis.com/v3/projects/{project_id}"], capture_output=True, text=True, env=env)
-        if res.returncode == 0:
-            return json.loads(res.stdout).get("labels", {})
-        return {}
+        res = subprocess.run(
+            ["curl", "-s", "-w", "\n%{http_code}", "-H", f"Authorization: Bearer {token}"] + args,
+            capture_output=True, text=True, env=env,
+        )
+        if res.returncode != 0:
+            raise CloudAccessError(
+                f"Could not reach Cloud Resource Manager for project '{project_id}' "
+                f"(curl exit {res.returncode}): {(res.stderr or '').strip()}"
+            )
+        body, _, code = res.stdout.rpartition("\n")
+        return code.strip(), body
+
+    def _raise_crm_error(self, project_id: str, verb: str, code: str, body: str) -> None:
+        message = _api_error_message(body)
+        if code == "404":
+            raise ProjectNotFoundError(
+                f"Project '{project_id}' was not found, or this identity cannot see it "
+                f"(HTTP 404): {message}\n{self._identity_hint()}"
+            )
+        if code in ("401", "403"):
+            raise CloudAccessError(
+                f"Not authorized to {verb} project '{project_id}' (HTTP {code}): "
+                f"{message}\n{self._identity_hint()}"
+            )
+        raise CloudAccessError(
+            f"Failed to {verb} project '{project_id}' (HTTP {code}): {message}"
+        )
+
+    def get_project_labels(self, project_id: str) -> Dict[str, str]:
+        # Direct API read so the label dictionary is fresh, not cached by gcloud.
+        code, body = self._crm_request(project_id, [f"{_CRM_PROJECTS}/{project_id}"])
+        if code == "200":
+            return json.loads(body or "{}").get("labels", {}) or {}
+        self._raise_crm_error(project_id, "read labels of", code, body)
 
     def set_project_labels(self, project_id: str, labels: Dict[str, str]) -> None:
-        token = self.get_auth_token()
-        env = os.environ.copy()
-        if self.account: env["CLOUDSDK_CORE_ACCOUNT"] = self.account
-        subprocess.run(["curl", "-sf", "-X", "PATCH", "-H", f"Authorization: Bearer {token}", "-H", "Content-Type: application/json", "-d", json.dumps({"labels": labels}), f"https://cloudresourcemanager.googleapis.com/v3/projects/{project_id}?updateMask=labels"], capture_output=True, env=env, check=True)
+        code, body = self._crm_request(project_id, [
+            "-X", "PATCH", "-H", "Content-Type: application/json",
+            "-d", json.dumps({"labels": labels}),
+            f"{_CRM_PROJECTS}/{project_id}?updateMask=labels",
+        ])
+        if code != "200":
+            self._raise_crm_error(project_id, "write labels of", code, body)
 
     def list_projects(self, filter_query: Optional[str] = None, limit: Optional[int] = None) -> List[Dict]:
         args = ["projects", "list", "--format", "json(projectId,labels)"]
@@ -119,11 +178,54 @@ class GCPProvider(CloudProvider):
             args.extend(["--filter", filter_query])
         if limit:
             args.extend(["--limit", str(limit)])
-        
+
         res = self._run_gcloud(args, capture_output=True, text=True)
-        if res.returncode == 0:
-            return json.loads(res.stdout)
-        return []
+        if res.returncode != 0:
+            raise CloudAccessError(
+                f"Could not list projects (gcloud exit {res.returncode}): "
+                f"{(res.stderr or '').strip()}\n{self._identity_hint()}"
+            )
+        return json.loads(res.stdout or "[]")
+
+    # -- Custom domains --
+
+    def list_verified_domains(self) -> List[str]:
+        res = self._run_gcloud(
+            ["domains", "list-user-verified", "--format", "json"],
+            capture_output=True, text=True,
+        )
+        if res.returncode != 0:
+            raise CloudAccessError(
+                f"Could not list the domains this identity has verified "
+                f"(gcloud exit {res.returncode}): {(res.stderr or '').strip()}\n"
+                f"{self._identity_hint()}"
+            )
+        domains = []
+        for item in json.loads(res.stdout or "[]"):
+            if isinstance(item, str):
+                domains.append(item)
+            elif isinstance(item, dict):
+                value = item.get("id") or item.get("domain") or item.get("name")
+                if value:
+                    domains.append(str(value))
+        return [d.strip().rstrip(".").lower() for d in domains if d]
+
+    def get_domain_mapping(self, project_id: str, region: str, domain: str) -> Optional[Dict]:
+        # Domain mappings for fully managed Cloud Run live under the beta track.
+        res = self._run_gcloud(
+            ["beta", "run", "domain-mappings", "describe", "--domain", domain,
+             "--region", region, "--project", project_id, "--format", "json", "--quiet"],
+            capture_output=True, text=True,
+        )
+        if res.returncode != 0:
+            stderr = (res.stderr or "").strip()
+            if "not found" in stderr.lower() or "NOT_FOUND" in stderr:
+                return None
+            raise CloudAccessError(
+                f"Could not describe the domain mapping for {domain} on project "
+                f"'{project_id}' (gcloud exit {res.returncode}): {stderr}\n{self._identity_hint()}"
+            )
+        return json.loads(res.stdout or "{}") or None
 
     # -- Cloud Build & Artifact Registry --
 
@@ -266,7 +368,12 @@ class GCPProvider(CloudProvider):
     # -- Miscellaneous --
 
     def get_auth_token(self) -> str:
-        res = self._run_gcloud(["auth", "print-access-token"], capture_output=True, text=True, check=True)
+        res = self._run_gcloud(["auth", "print-access-token"], capture_output=True, text=True)
+        if res.returncode != 0 or not res.stdout.strip():
+            raise CloudAccessError(
+                f"gcloud could not produce an access token: "
+                f"{(res.stderr or '').strip() or 'empty token'}\n{self._identity_hint()}"
+            )
         return res.stdout.strip()
 
     def check_http_health(self, url: str) -> bool:

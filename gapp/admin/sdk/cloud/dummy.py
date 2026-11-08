@@ -21,6 +21,8 @@ class DummyCloudProvider(CloudProvider):
         self.tf_outputs = {} # (bucket, prefix) -> outputs_dict
         self.iam_bindings = [] # list of dicts
         self.last_tfvars = None
+        self.verified_domains = set() # domains the identity has verified
+        self.domain_mappings = {} # (project_id, domain) -> mapping resource dict
 
     # -- GCP Foundation --
 
@@ -78,6 +80,14 @@ class DummyCloudProvider(CloudProvider):
                 break
         return results
 
+    # -- Custom domains --
+
+    def list_verified_domains(self) -> List[str]:
+        return sorted(self.verified_domains)
+
+    def get_domain_mapping(self, project_id: str, region: str, domain: str) -> Optional[Dict]:
+        return self.domain_mappings.get((project_id, domain))
+
     # -- Cloud Build & Artifact Registry --
 
     def ensure_artifact_registry(self, project_id: str, region: str) -> None:
@@ -101,7 +111,10 @@ class DummyCloudProvider(CloudProvider):
 
     def apply_infrastructure(self, staging_dir: Path, bucket_name: str, state_prefix: str, auto_approve: bool, tfvars: Dict) -> Dict:
         self.last_tfvars = tfvars
-        outputs = {"service_url": f"https://{tfvars['service_name']}.a.run.app"}
+        outputs = {
+            "service_url": f"https://{tfvars['service_name']}.a.run.app",
+            "custom_domain": tfvars.get("custom_domain", ""),
+        }
         self.tf_outputs[(bucket_name, state_prefix)] = outputs
         return outputs
 
