@@ -3,9 +3,11 @@
 
 Usage:
     scripts/release.py X.Y.Z
+    scripts/release.py X.Y.ZrcN      (a release candidate, PEP 440)
 
 What it does:
-    1. Validates the new version is strictly greater than the current one.
+    1. Validates the new version is strictly greater than the current one
+       (an rc precedes the final version it is a candidate for).
     2. Updates `__version__` in gapp/__init__.py.
     3. (pyproject.toml is dynamic — it sources its version from
        gapp.__version__ — so no further edit is needed.)
@@ -34,7 +36,10 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 INIT_PY = REPO_ROOT / "gapp" / "__init__.py"
 PYPROJECT_TOML = REPO_ROOT / "pyproject.toml"
-VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
+# X.Y.Z, or a PEP 440 release candidate X.Y.ZrcN. The tag is `v` plus the
+# version string as written, so an rc tags as `vX.Y.ZrcN`, which is also
+# what `gapp ci init` pins installed workflows to (`v` + __version__).
+VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:rc(\d+))?$")
 
 
 def fatal(msg: str) -> None:
@@ -50,10 +55,14 @@ def read_current_version() -> str:
     return match.group(1)
 
 
-def parse_version(v: str) -> tuple[int, int, int]:
-    if not VERSION_RE.match(v):
-        fatal(f"Version must be X.Y.Z (got {v!r})")
-    return tuple(int(p) for p in v.split("."))  # type: ignore[return-value]
+def parse_version(v: str) -> tuple[int, int, int, int, int]:
+    """Sort key: a release candidate orders before the final release it precedes."""
+    match = VERSION_RE.match(v)
+    if not match:
+        fatal(f"Version must be X.Y.Z or X.Y.ZrcN (got {v!r})")
+    major, minor, patch, rc = match.groups()
+    is_final = rc is None
+    return (int(major), int(minor), int(patch), 1 if is_final else 0, int(rc or 0))
 
 
 def update_init_py(new_version: str) -> None:
