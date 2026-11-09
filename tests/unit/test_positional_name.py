@@ -109,7 +109,7 @@ def test_setup_outside_a_checkout_refuses_and_writes_nothing(tmp_path, monkeypat
     """Without the checkout's gapp.yaml, setup could not enable the app's required APIs."""
     monkeypatch.chdir(tmp_path)
     sdk = GappSDK(provider=DummyCloudProvider())
-    with pytest.raises(RuntimeError, match="Not inside a gapp solution."):
+    with pytest.raises(RuntimeError, match="Not inside an app's folder."):
         sdk.setup("p1")
     assert not sdk.provider.apis_enabled and not sdk.provider.buckets
 

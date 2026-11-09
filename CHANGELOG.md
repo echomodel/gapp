@@ -17,16 +17,21 @@ Other changes:
 
 - `gapp list` counts in the singular when there is one: "Summary: 1 app
   across 1 project (this build: v-4)."
-- `gapp deploy` and `gapp secrets` outside an app's folder say: "Not inside
-  an app's folder. Run this in the app's repo, or run gapp init there
-  first." (was "Could not determine solution name." for deploy, and "Not
-  inside a gapp solution. Run 'gapp init' first, or cd into a solution
-  repo." for secrets).
+- `gapp setup`, `gapp deploy` and `gapp secrets` outside an app's folder
+  say: "Not inside an app's folder. Run this in the app's repo, or run gapp
+  init there first." (was "Not inside a gapp solution." for setup, "Could
+  not determine solution name." for deploy, and "Not inside a gapp
+  solution. Run 'gapp init' first, or cd into a solution repo." for
+  secrets).
 - Re-running `gapp ci setup <name> --repo <repo> --project <project>` on an
   existing deployment drops any key in its entry that gapp.yaml does not
   have, keeping the known keys and the domain.
 - `gapp ci setup <new> --copy-of <existing>` no longer copies keys gapp.yaml
   does not have.
+- `gapp ci setup --copy-of` no longer lists "Env copied" and "Secrets …
+  needs set" (and its result drops `copied_env` and `secrets`): both came
+  from the entry alone and missed the app's own gapp.yaml.
+- `gapp deploy --dry-run` labels the name "Deployment:" (was "Solution:").
 - `gapp ci status <name>` no longer says "Deploy it" for an entry a deploy
   would refuse because it has keys gapp.yaml does not have. It says:
   "Next: rewrite the entry: gapp ci setup <name> --repo <repo> --project

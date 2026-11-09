@@ -137,7 +137,7 @@ def test_copy_takes_repo_and_keys_but_never_id_domain_or_secret_values():
     assert entry["id"] == "my-app-staging" and entry["repo"] == "me/my-app" and entry["project"] == "staging-proj"
     assert "domain" not in entry
     assert entry["env"] == doc["my-app"]["env"] and entry["service"] == {"memory": "1Gi"}
-    assert info["copied_env"] == ["LOG_LEVEL", "API_KEY"] and info["secrets"] == ["api-key"]
+    assert info == {"project_from_source": False}
     assert doc["my-app"]["domain"] == "mcp.example.com"               # the source is untouched
 
 

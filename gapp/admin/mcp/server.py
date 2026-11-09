@@ -334,8 +334,7 @@ def gapp_ci_setup(
     refused: update that deployment, or add another with `copy_of`, which
     copies the source's repo and gapp.yaml keys but never its id, domain,
     deploy history or secret values, and defaults `project` to the
-    source's. The result lists the env names copied (`copied_env`) and the
-    secret names the new deployment needs set on its project (`secrets`).
+    source's.
 
     The change is written by the fleet repo's register run with its own
     token, so this machine needs only a gh that can dispatch workflows.

@@ -253,7 +253,7 @@ def test_setup_without_the_register_workflow_or_the_deployments_file_points_at_c
 # -- copy-of --
 
 
-def test_copy_of_makes_an_independent_deployment_and_echoes_env_and_secrets(wired):
+def test_copy_of_makes_an_independent_deployment(wired):
     _setup(domain="mcp.example.com")
     wired.deploy(FLEET, "my-app", "me/my-app", "my-proj", domain="mcp.example.com", env=[
         {"name": "LOG_LEVEL", "value": "INFO"}, {"name": "API_KEY", "secret": {"name": "api-key"}}])
@@ -262,7 +262,7 @@ def test_copy_of_makes_an_independent_deployment_and_echoes_env_and_secrets(wire
     assert res["ok"] is True and res["action"] == "added"
     assert res["repo"] == "me/my-app" and res["project"] == "staging-proj" and res["id"] == "my-app-staging"
     assert res["domain"] is None and res["project_from_source"] is False
-    assert res["copied_env"] == ["LOG_LEVEL", "API_KEY"] and res["secrets"] == ["api-key"]
+    assert "copied_env" not in res and "secrets" not in res
     assert wired.dispatched[-1][2]["operation"] == "copy" and wired.dispatched[-1][2]["source"] == "my-app"
     docs = wired.deployments(FLEET)
     assert docs["my-app-staging"]["env"] == docs["my-app"]["env"] and "domain" not in docs["my-app-staging"]
@@ -356,7 +356,6 @@ def test_copy_of_does_not_copy_unknown_keys():
     _, entry, info = fleet.copy_entry(doc, "b", "a")
     assert entry == {"id": "b", "repo": "me/a", "project": "my-proj", "service": {"memory": "1Gi"},
                      "env": [{"name": "A", "value": "1"}]}
-    assert info["copied_env"] == ["A"]
 
 
 def test_set_entry_drops_unknown_keys_at_any_depth():

@@ -45,3 +45,18 @@ def test_secrets_outside_an_app_folder(call, tmp_path, monkeypatch):
     with pytest.raises(RuntimeError) as exc:
         call()
     assert str(exc.value) == NOT_IN_APP
+
+
+def test_setup_outside_an_app_folder(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(RuntimeError) as exc:
+        GappSDK(provider=DummyCloudProvider()).setup("p1")
+    assert str(exc.value) == NOT_IN_APP
+
+
+def test_deploy_dry_run_labels_the_deployment(monkeypatch):
+    monkeypatch.setattr(GappSDK, "deploy", lambda self, **k: {
+        "name": "my-app", "labels": "gapp-deployment=my-app, gapp-version=4", "project_id": "p1",
+        "bucket": "gapp-my-app-p1", "status": "ready", "services": [], "dry_run": True})
+    out = CliRunner().invoke(main, ["deploy", "--dry-run"]).output.splitlines()
+    assert "    Deployment:  my-app" in out and not [l for l in out if "Solution:" in l]

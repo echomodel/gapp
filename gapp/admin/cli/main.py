@@ -180,7 +180,7 @@ def deploy(sdk: GappSDK, ref, project, dry_run, rebuild, replace_domain):
     if dry_run:
         click.echo()
         click.echo("  DRY RUN: Project Deployment Preview")
-        click.echo(f"    Solution:    {result['name']}")
+        click.echo(f"    Deployment:  {result['name']}")
         click.echo(f"    Labels:      {result['labels']}")
         if result["project_id"]:
             click.echo(f"    Project:     {result['project_id']}")
@@ -590,10 +590,6 @@ def ci_setup_cmd(name, repo, project, domain, copy_of, no_watch, verbose, json_o
         elif copy_of:
             lines.append(f"{nm} is set up as a copy of {copy_of}: {rp} deploys to {pj}"
                          + (" (the same project as the source)." if result.get("project_from_source") else "."))
-            if result.get("copied_env"):
-                lines.append("Env copied (check them for this environment): " + ", ".join(result["copied_env"]))
-            if result.get("secrets"):
-                lines.append(f"Secrets {nm} needs set on {pj} before its first deploy: " + ", ".join(result["secrets"]))
             lines.append("The repo's own gapp.yaml secrets, if any, must be set on that project too.")
         else:
             lines.append(f"{rp} is set up to deploy to {pj} as {nm}.")

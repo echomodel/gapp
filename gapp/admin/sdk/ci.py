@@ -1141,7 +1141,7 @@ def setup_deployment(name: str | None = None, *, repo: str | None = None, projec
     """
     result = {"ok": True, "name": None, "repo": None, "project": None, "domain": None, "id": None,
               "fleet_repo": None, "copy_of": copy_of, "action": None, "changes": None,
-              "copied_env": [], "secrets": [], "project_from_source": False,
+              "project_from_source": False,
               "workflow": REGISTER_WORKFLOW, "dispatched": False, "run_id": None, "run_url": None,
               "conclusion": None, "result_code": None, "messages": [], "next_step": None}
     changes = {}
@@ -1184,8 +1184,7 @@ def setup_deployment(name: str | None = None, *, repo: str | None = None, projec
     try:
         if copy_of:
             new_doc, entry, info = fleet.copy_entry(doc, name, copy_of, project=project, changes=changes)
-            result.update(repo=entry["repo"], project=entry["project"], copied_env=info["copied_env"],
-                          secrets=info["secrets"], project_from_source=not project)
+            result.update(repo=entry["repo"], project=entry["project"], project_from_source=not project)
             action = "added"
             operation = "copy"
         else:

@@ -108,17 +108,6 @@ def deployments_of_repo(doc: dict, repo: str) -> list[str]:
     return sorted(name for name, entry in doc.items() if (entry.get("repo") or "").lower() == repo.lower())
 
 
-def secrets_declared(manifest: dict) -> list[str]:
-    """Secret names a manifest (or an entry's gapp.yaml keys) declares."""
-    names = []
-    for item in manifest.get("env") or []:
-        if isinstance(item, dict) and isinstance(item.get("secret"), dict) and item["secret"].get("name"):
-            names.append(item["secret"]["name"])
-    for name in (manifest.get("prerequisites") or {}).get("secrets") or {}:
-        names.append(name)
-    return names
-
-
 # --- validation ---
 
 
@@ -274,8 +263,7 @@ def copy_entry(doc: dict, new: str, source: str, *, project: str | None = None,
                changes: dict | None = None) -> tuple[dict, dict, dict]:
     """A new deployment from an existing one: the same repo and gapp.yaml
     keys, never its id, domain, deploy history or secret values. Returns
-    (doc, entry, info) where info names the env vars copied and the
-    secrets the new deployment needs set on its project.
+    (doc, entry, info) where info says whether the project is the source's.
     """
     new = validate_name(new)
     changes = validate_changes(changes)
@@ -298,8 +286,6 @@ def copy_entry(doc: dict, new: str, source: str, *, project: str | None = None,
     entry = _apply_changes(entry, changes)
     doc[new] = entry
     info = {
-        "copied_env": [e.get("name") for e in (keys.get("env") or []) if isinstance(e, dict) and e.get("name")],
-        "secrets": secrets_declared(entry),
         "project_from_source": not bool(project) or project == src.get("project"),
     }
     return doc, entry, info

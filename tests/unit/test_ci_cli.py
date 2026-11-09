@@ -82,7 +82,7 @@ def test_verbose_adds_the_fleet_detail_and_default_output_hides_it(monkeypatch):
 
 def _setup_result(**over):
     base = {"ok": True, "name": "my-app", "repo": "me/my-app", "project": "my-proj", "domain": None, "id": "my-app",
-            "fleet_repo": FLEET, "copy_of": None, "action": "added", "changes": {}, "copied_env": [], "secrets": [],
+            "fleet_repo": FLEET, "copy_of": None, "action": "added", "changes": {},
             "project_from_source": False, "workflow": "gapp-register.yml", "dispatched": True, "run_id": "42",
             "run_url": f"https://github.com/{FLEET}/actions/runs/42", "conclusion": "success", "result_code": "added",
             "messages": [], "next_step": None}
@@ -142,13 +142,13 @@ def test_setup_refusals_print_their_sentence(monkeypatch):
     assert result.exit_code == 1 and result.output.strip() == hint
 
 
-def test_setup_copy_of_lists_env_copied_and_secrets_needed(monkeypatch):
+def test_setup_copy_of_reports_no_env_or_secret_lists(monkeypatch):
+    """Lists built from the entry alone would miss the app's own gapp.yaml, so a copy reports none."""
     monkeypatch.setattr(ci_mod, "setup_deployment", lambda name=None, **kw: _setup_result(
-        name="my-app-staging", project="staging-proj", copy_of="my-app", copied_env=["LOG_LEVEL", "API_KEY"], secrets=["api-key"]))
+        name="my-app-staging", project="staging-proj", copy_of="my-app"))
     out = _run(["ci", "setup", "my-app-staging", "--copy-of", "my-app", "--project", "staging-proj"]).output.splitlines()
     assert out[0] == "my-app-staging is set up as a copy of my-app: me/my-app deploys to staging-proj."
-    assert out[1] == "Env copied (check them for this environment): LOG_LEVEL, API_KEY"
-    assert out[2] == "Secrets my-app-staging needs set on staging-proj before its first deploy: api-key"
+    assert not [l for l in out if l.startswith(("Env copied", "Secrets "))]
     assert out[-1] == "Deploy it: gapp ci deploy my-app-staging"
 
 
