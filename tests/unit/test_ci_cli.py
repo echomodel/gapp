@@ -347,7 +347,7 @@ def test_setup_update_flag_and_its_output(monkeypatch):
     def fake(name=None, **kw):
         calls.update(kw)
         return _setup_result(action="updated", result_code="updated", domain="new.example.com",
-                             changes_shown=["domain: old.example.com → new.example.com", "would drop: colour"])
+                             changes_shown=["domain: old.example.com → new.example.com", "dropped: colour"])
     monkeypatch.setattr(ci_mod, "setup_deployment", fake)
     out = _run(["ci", "setup", "my-app", "--repo", "me/my-app", "--project", "my-proj",
                 "--domain", "new.example.com", "--update"]).output.splitlines()

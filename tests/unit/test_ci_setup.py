@@ -348,6 +348,7 @@ def test_rerunning_setup_drops_unknown_keys_and_keeps_known_ones_and_the_domain(
     assert res["changes_shown"] == ["would drop: env.0.bogus", "would drop: service.memroy", "would drop: colour"]
     res = _setup(update=True)
     assert res["ok"] is True and res["action"] == "updated" and res["dispatched"] is True
+    assert res["changes_shown"] == ["dropped: env.0.bogus", "dropped: service.memroy", "dropped: colour"]
     entry = wired.deployments(FLEET)["my-app"]
     assert entry == {"id": "my-app", "repo": "me/my-app", "project": "my-proj", "domain": "mcp.example.com",
                      "service": {"memory": "1Gi"}, "env": [{"name": "A", "value": "1"}]}

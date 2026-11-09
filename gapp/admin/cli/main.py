@@ -596,7 +596,7 @@ def ci_setup_cmd(name, repo, project, domain, copy_of, update, no_watch, verbose
                          f"gapp secrets list shows them from the app's folder.")
         elif result.get("action") == "updated" and result.get("changes_shown"):
             lines.append(f"{nm} updated ({rp} to {pj}):")
-            lines += ["  " + c.replace("would drop:", "dropped:", 1) for c in result["changes_shown"]]
+            lines += ["  " + c for c in result["changes_shown"]]
         else:
             lines.append(f"{rp} is set up to deploy to {pj} as {nm}.")
         if result.get("domain"):

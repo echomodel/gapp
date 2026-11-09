@@ -1133,6 +1133,11 @@ def _entry_changes(before: dict, after: dict) -> list[str]:
     return lines
 
 
+def _applied(line: str) -> str:
+    """A change line as done rather than proposed: "would drop: k" becomes "dropped: k"."""
+    return "dropped:" + line[len("would drop:"):] if line.startswith("would drop:") else line
+
+
 def setup_deployment(name: str | None = None, *, repo: str | None = None, project: str | None = None,
                      domain: str | None = None, copy_of: str | None = None,
                      watch: bool = True, command: str | None = None, update: bool = False) -> dict:
@@ -1228,8 +1233,11 @@ def setup_deployment(name: str | None = None, *, repo: str | None = None, projec
     inputs = {"operation": operation, "name": name, "repo": entry["repo"] if operation == "set" else "",
               "project": project or "", "changes": json.dumps(changes), "source": copy_of or ""}
     result["id"] = None                                    # the run allocates the id against the live file
-    return _register(fleet_repo, result, inputs, watch=watch, command=command,
-                     owner=entry["repo"].split("/")[0], project=entry["project"])
+    result = _register(fleet_repo, result, inputs, watch=watch, command=command,
+                       owner=entry["repo"].split("/")[0], project=entry["project"])
+    if result.get("action") == "updated":
+        result["changes_shown"] = [_applied(line) for line in result.get("changes_shown") or []]
+    return result
 
 
 def rename_deployment(old: str, new: str, *, watch: bool = True) -> dict:
