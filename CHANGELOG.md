@@ -42,7 +42,9 @@ clean break from 3.x's project labels.
   and the keys gapp knows. `gapp ci setup` (before dispatching) and the
   register run check an entry's gapp.yaml keys with the gapp.yaml
   validator, and `gapp ci status <name>` names an entry that holds an
-  unknown key.
+  unknown key. `gapp status` still answers for a gapp.yaml with unknown
+  fields, but returns a warning naming them (a new `warnings` list in its
+  result, printed one line each).
 - On a CI runner, a refused Google Cloud call no longer suggests
   `gcloud auth login`; it says signing in does not apply and names
   `gapp ci project setup <project>` as the fix.

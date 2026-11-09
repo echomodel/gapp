@@ -285,3 +285,33 @@ def test_status_on_a_ci_runner_never_suggests_signing_in(sdk, monkeypatch):
     assert res.next_step.hint.startswith("This is a CI run as ")
     assert "`gapp ci project setup proj-123` grants the deploy identity its roles" in res.next_step.hint
     assert "gcloud auth login" not in res.next_step.hint
+
+
+def test_status_warns_about_unknown_gapp_yaml_fields_but_still_answers(tmp_path, monkeypatch, sdk):
+    repo = tmp_path / "app"
+    repo.mkdir()
+    (repo / ".git").mkdir()
+    (repo / "gapp.yaml").write_text("name: my-app\nmemroy: 1Gi\npublik: true\n")
+    monkeypatch.chdir(repo)
+    sdk.provider.host("proj-123", "my-app")
+    res = sdk.status()
+    assert res.deployment.project == "proj-123"
+    assert res.warnings == ["gapp.yaml has unknown field(s) memroy, publik (check for typos); "
+                            "`gapp setup` and `gapp deploy` refuse it until they are fixed."]
+
+
+def test_status_has_no_warnings_for_a_valid_gapp_yaml(tmp_path, monkeypatch, sdk):
+    repo = tmp_path / "app"
+    repo.mkdir()
+    (repo / ".git").mkdir()
+    (repo / "gapp.yaml").write_text("name: my-app\n")
+    monkeypatch.chdir(repo)
+    assert sdk.status().warnings == []
+    assert sdk.status(name="remote-app").warnings == []
+
+
+def test_status_prints_each_warning_as_one_line():
+    from gapp.admin.cli.main import _render_status
+    lines = _render_status({"initialized": True, "name": "my-app", "warnings": ["w1", "w2"],
+                            "next_step": {"action": "setup", "hint": "h"}})
+    assert lines.index("w1") + 1 == lines.index("w2") and lines.index("w2") < lines.index("\nNext Step: setup")

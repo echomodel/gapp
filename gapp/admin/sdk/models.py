@@ -36,3 +36,4 @@ class StatusResult(BaseModel):
     deployment: DeploymentInfo | None = None
     domain: DomainStatus | None = None
     next_step: NextStep | None = None
+    warnings: list[str] = Field(default_factory=list)

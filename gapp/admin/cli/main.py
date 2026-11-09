@@ -283,6 +283,8 @@ def _render_status(data: dict) -> list[str]:
             lines.append(f"  CNAME:   {domain.get('name')} -> {domain.get('cname_target')}")
         if domain.get("detail"):
             lines.append(f"  {domain['detail']}")
+    for warning in data.get("warnings") or []:
+        lines.append(warning)
     if next_step := data.get("next_step"):
         lines.append(f"\nNext Step: {next_step.get('action')}")
         if next_step.get("hint"):
