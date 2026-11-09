@@ -15,6 +15,13 @@ Breaking changes:
 
 Other changes:
 
+- `gapp list` counts in the singular when there is one: "Summary: 1 app
+  across 1 project (this build: v-4)."
+- `gapp deploy` and `gapp secrets` outside an app's folder say: "Not inside
+  an app's folder. Run this in the app's repo, or run gapp init there
+  first." (was "Could not determine solution name." for deploy, and "Not
+  inside a gapp solution. Run 'gapp init' first, or cd into a solution
+  repo." for secrets).
 - Re-running `gapp ci setup <name> --repo <repo> --project <project>` on an
   existing deployment drops any key in its entry that gapp.yaml does not
   have, keeping the known keys and the domain.

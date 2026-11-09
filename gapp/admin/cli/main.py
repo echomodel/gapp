@@ -266,9 +266,10 @@ def list_cmd(sdk: GappSDK, project_limit):
             contract = "legacy" if app["is_legacy"] else f"v-{app['contract_major']}"
             click.echo(f"  {app['name']:<20} {app['project']:<20} {contract:<10}")
 
+    apps, projects = res['metadata']['apps']['count'], res['metadata']['projects']['count']
     click.echo(
-        f"\nSummary: {res['metadata']['apps']['count']} apps across "
-        f"{res['metadata']['projects']['count']} projects "
+        f"\nSummary: {apps} app{'s' if apps != 1 else ''} across "
+        f"{projects} project{'s' if projects != 1 else ''} "
         f"(this build: v-{res['metadata']['contract_major']})."
     )
     for warn in res["warnings"]:

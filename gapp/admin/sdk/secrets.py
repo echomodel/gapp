@@ -30,7 +30,7 @@ def add_secret(secret_name: str, description: str, value: str | None = None, sol
     ctx = GappSDK().resolve_solution_with_project(solution)
     if not ctx:
         raise RuntimeError(
-            "Not inside a gapp solution. Run 'gapp init' first, or cd into a solution repo."
+            "Not inside an app's folder. Run this in the app's repo, or run gapp init there first."
         )
 
     repo_path = ctx.get("repo_path")
@@ -72,7 +72,7 @@ def remove_secret(secret_name: str, solution: str | None = None) -> dict:
     ctx = GappSDK().resolve_solution_with_project(solution)
     if not ctx:
         raise RuntimeError(
-            "Not inside a gapp solution. Run 'gapp init' first, or cd into a solution repo."
+            "Not inside an app's folder. Run this in the app's repo, or run gapp init there first."
         )
 
     repo_path = ctx.get("repo_path")
@@ -140,7 +140,7 @@ def list_secrets(name: str | None = None) -> dict:
     ctx = GappSDK().resolve_solution_with_project(name)
     if not ctx:
         raise RuntimeError(
-            "Not inside a gapp solution. Run 'gapp init' first, or cd into a solution repo."
+            "Not inside an app's folder. Run this in the app's repo, or run gapp init there first."
         )
 
     solution_name = ctx["name"]
@@ -430,7 +430,7 @@ def _find_secret(name: str) -> dict:
     ctx = GappSDK().resolve_solution_with_project()
     if not ctx:
         raise RuntimeError(
-            "Not inside a gapp solution. Run 'gapp init' first, or cd into a solution repo."
+            "Not inside an app's folder. Run this in the app's repo, or run gapp init there first."
         )
 
     repo_path = ctx.get("repo_path")
