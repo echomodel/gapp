@@ -42,19 +42,28 @@ def test_set_env_overwrite_with_force_succeeds(sdk):
 
 def test_set_env_force_refuses_on_cross_project_corruption(sdk):
     """force=True still refuses if the rebind would create cross-project duplication."""
-    sdk.provider.project_labels["p1"] = {
-        "gapp-env": "prod",
-        "gapp_alice_my-app": "v-3",
-    }
-    sdk.provider.project_labels["p2"] = {
-        "gapp-env": "dev",
-        "gapp_alice_my-app": "v-3",
-    }
+    sdk.provider.host("p1", "my-app", owner="alice", env="prod")
+    sdk.provider.host("p2", "my-app", owner="alice", env="dev")
 
     # Trying to rebind p2 from dev → prod would create alice/my-app/prod on
     # both p1 and p2. Refuse even with force.
-    with pytest.raises(RuntimeError, match="cross-project"):
+    with pytest.raises(RuntimeError, match="cross-project") as exc:
         sdk.set_project_env("p2", env="prod", force=True)
+    assert "deployment 'my-app' also exists on project 'p1'" in str(exc.value)
+    assert "gcloud storage buckets update gs://gapp-my-app-p1 --remove-labels=gapp-deployment" in str(exc.value)
+
+
+def test_set_env_force_allows_a_rebind_with_no_duplicate(sdk):
+    sdk.provider.host("p1", "other-app", env="prod")
+    sdk.provider.host("p2", "my-app", env="dev")
+    assert sdk.set_project_env("p2", env="prod", force=True)["status"] == "updated"
+
+
+def test_set_env_refusal_counts_the_projects_deployments(sdk):
+    sdk.provider.host("p1", "a", env="prod")
+    sdk.provider.host("p1", "b", env="prod")
+    with pytest.raises(RuntimeError, match=r"\(2 solution\(s\) on this project would be reclassified"):
+        sdk.set_project_env("p1", env="dev")
 
 
 def test_set_env_reserved_name_rejected(sdk):
@@ -65,22 +74,19 @@ def test_set_env_reserved_name_rejected(sdk):
 
 def test_clear_env_removes_label(sdk):
     """clear_project_env deletes the gapp-env label."""
-    sdk.provider.project_labels["p1"] = {
-        "gapp-env": "prod",
-        "gapp__my-app": "v-3",
-    }
+    sdk.provider.host("p1", "my-app", env="prod")
 
     res = sdk.clear_project_env("p1")
     assert res["status"] == "removed"
     assert res["previous"] == "prod"
     assert "gapp-env" not in sdk.provider.project_labels["p1"]
-    # Solution label untouched.
-    assert "gapp__my-app" in sdk.provider.project_labels["p1"]
+    # The hosted mark is untouched.
+    assert sdk.provider.project_labels["p1"]["gapp"] == "hosted"
 
 
 def test_clear_env_absent_is_noop(sdk):
     """clear_project_env on an undefined-env project is harmless."""
-    sdk.provider.project_labels["p1"] = {"gapp__my-app": "v-3"}
+    sdk.provider.host("p1", "my-app")
     res = sdk.clear_project_env("p1")
     assert res["status"] == "absent"
 
@@ -88,7 +94,7 @@ def test_clear_env_absent_is_noop(sdk):
 def test_read_project_env(sdk):
     """read_project_env returns env or None."""
     sdk.provider.project_labels["p1"] = {"gapp-env": "prod"}
-    sdk.provider.project_labels["p2"] = {"gapp__my-app": "v-3"}
+    sdk.provider.host("p2", "my-app")
 
     assert sdk.read_project_env("p1") == "prod"
     assert sdk.read_project_env("p2") is None

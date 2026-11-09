@@ -2,22 +2,25 @@
 
 The label / identity / env model:
 
-  Solution label (per project, per (owner, solution)):
-    gapp_<owner>_<solution>=v-N    (owned)
-    gapp__<solution>=v-N           (global, no owner — double underscore)
+  Project labels (written only by an Owner: `gapp setup` on a workstation,
+  or `gapp ci project setup`):
+    gapp=hosted                    the project hosts gapp deployments
+    gapp-env=<env>                 optional env binding (gapp projects set-env)
 
-  Project env label (per project, optional):
-    gapp-env=<env>                 (no owner segment)
-    Missing = undefined env.
+  Deployment labels (written by every setup and deploy, in both modes, on
+  the deployment's own resources: its bucket, by gapp, and its Cloud Run
+  services, by Terraform):
+    gapp-deployment=<id>
+    gapp-version=<contract major>
+    gapp-owner=<owner>             only when an owner is configured
 
-  No role labels. No defaults. No env in solution label keys.
-
-Owner is optional in the profile ("global mode" vs "owned mode"). Identity
-surfaces in solution label keys (single vs double underscore) and in tfstate
-metadata when written. Env is a project property, set/changed only by
+No per-deployment project labels. A deployment is found by its project
+(--project, or the fleet entry in CI) or by searching the projects marked
+gapp=hosted for its bucket. The version guard reads gapp-version from the
+deployment's services. Env is a project property, set/changed only by
 gapp_projects_set_env. Setup and deploy never write gapp-env.
 
-See CONTRIBUTING.md for the full model and resolution truth table.
+See CONTRIBUTING.md for the full model.
 """
 
 import os
@@ -25,13 +28,14 @@ import shutil
 import tempfile
 import time
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import subprocess
 from pathlib import Path
 from typing import Optional, List, Dict
 
-from gapp import __version__, MIN_SUPPORTED_MAJOR
+from gapp import __version__
 from gapp.admin.sdk.cloud import get_provider
-from gapp.admin.sdk.cloud.base import CloudProvider, CloudAccessError
+from gapp.admin.sdk.cloud.base import CloudProvider, CloudAccessError, ci_identity_hint, on_ci_runner
 from gapp.admin.sdk.config import load_config, save_config, get_active_config
 from gapp.admin.sdk.manifest import (
     get_solution_name, load_manifest, save_manifest, get_required_apis,
@@ -41,6 +45,20 @@ from gapp.admin.sdk.manifest import (
 from gapp.admin.sdk.models import StatusResult, DeploymentInfo, NextStep, ServiceStatus, DomainStatus
 
 CURRENT_MAJOR = int(__version__.split(".")[0])
+
+# The project label that marks a project as hosting gapp deployments. Only an
+# Owner writes it (`gapp setup`, `gapp ci project setup`); a CI run never does.
+HOSTED_LABEL = "gapp"
+HOSTED_VALUE = "hosted"
+
+# Labels every setup and deploy writes on the deployment's own resources
+# (its bucket and its Cloud Run services).
+DEPLOYMENT_LABEL = "gapp-deployment"
+VERSION_LABEL = "gapp-version"
+OWNER_LABEL = "gapp-owner"
+
+# How many projects the search for a deployment asks at once.
+SEARCH_WORKERS = 8
 
 # The single project-level label that binds a project to a named env.
 # No owner segment — env is project-wide.
@@ -144,19 +162,80 @@ class GappSDK:
         """
         return f"gapp-{solution_name}-{project_id}".lower()
 
-    def get_label_key(self, solution_name: str) -> str:
-        """Solution label key. Env-blind.
+    def deployment_labels(self, deployment: str) -> Dict[str, str]:
+        """The labels every setup and deploy writes on a deployment's bucket and services."""
+        labels = {DEPLOYMENT_LABEL: deployment.lower(), VERSION_LABEL: str(CURRENT_MAJOR)}
+        if owner := self.get_owner():
+            labels[OWNER_LABEL] = owner.lower()
+        return labels
 
-        Owned:  gapp_<owner>_<solution>
-        Global: gapp__<solution>   (double underscore — no-owner sentinel)
+    def _owner_matches(self, labels: Dict[str, str]) -> bool:
+        """A deployment's labels belong to the active owner namespace (no owner: global)."""
+        return (labels.get(OWNER_LABEL) or None) == ((self.get_owner() or "").lower() or None)
+
+    def _hosted_projects(self, limit: Optional[int] = None) -> List[Dict]:
+        """Projects marked gapp=hosted, with their labels."""
+        return self.provider.list_projects(filter_query=f"labels.{HOSTED_LABEL}={HOSTED_VALUE}", limit=limit)
+
+    def _deployments_on(self, project_id: str) -> Dict[str, Dict[str, str]]:
+        """The labels of every deployment bucket on a project, by bucket name."""
+        return {name: labels for name, labels in self.provider.list_bucket_labels(project_id).items()
+                if labels.get(DEPLOYMENT_LABEL)}
+
+    def _search_hosted(self, projects: List[Dict], match, first_only: bool = False) -> List[Dict]:
+        """Ask each hosted project for its deployment buckets, in parallel.
+
+        `match(project, bucket_labels)` returns a result dict or None. With
+        first_only, returns as soon as one project answers with a match.
         """
-        owner = self.get_owner()
-        owner_seg = owner if owner else ""
-        return f"gapp_{owner_seg}_{solution_name}".lower()
+        if not projects:
+            return []
 
-    def get_label_value(self) -> str:
-        """Solution label value: contract major only, derived from __version__."""
-        return f"v-{CURRENT_MAJOR}"
+        def ask(project):
+            found = []
+            for labels in self._deployments_on(project["projectId"]).values():
+                if (hit := match(project, labels)) is not None:
+                    found.append(hit)
+            return found
+
+        results: List[Dict] = []
+        with ThreadPoolExecutor(max_workers=min(SEARCH_WORKERS, len(projects))) as pool:
+            futures = [pool.submit(ask, p) for p in projects]
+            for future in as_completed(futures):
+                results.extend(future.result())
+                if first_only and results:
+                    for f in futures:
+                        f.cancel()
+                    break
+        return results
+
+    def _service_names(self, deployment: str, repo_path: Optional[Path], strict: bool = True) -> List[str]:
+        """The Cloud Run service names a deployment's manifest produces."""
+        if not repo_path:
+            return [deployment]
+        manifest = load_manifest(repo_path, strict=strict)
+        if paths := get_paths(manifest):
+            names = []
+            for p in paths:
+                sub_m = load_manifest(repo_path / p, strict=strict) if (repo_path / p).is_dir() else {}
+                names.append(get_name(sub_m) or f"{deployment}-{p.replace('/', '-')}")
+            return names
+        return [deployment]
+
+    def _check_version(self, project_id: str, deployment: str, service_names: List[str]) -> None:
+        """Refuse when a newer gapp deployed this deployment (its services' gapp-version)."""
+        for svc in service_names:
+            labels = self.provider.get_service_labels(project_id, REGION, svc) or {}
+            try:
+                n = int(labels.get(VERSION_LABEL, ""))
+            except ValueError:
+                continue
+            if n > CURRENT_MAJOR:
+                raise RuntimeError(
+                    f"Deployment '{deployment}' on project '{project_id}' was deployed by gapp {n}.x "
+                    f"(service label {VERSION_LABEL}={n}); this gapp is v{__version__}. "
+                    f"Upgrade gapp to deploy it."
+                )
 
     # -- Project env label operations --
 
@@ -189,10 +268,7 @@ class GappSDK:
             return {"project_id": project_id, "env": env_norm, "status": "exists"}
 
         if existing and not force:
-            solution_count = sum(
-                1 for k in labels.keys()
-                if k.startswith("gapp_") and not k.startswith("gapp-")
-            )
+            solution_count = len(self._deployments_on(project_id))
             raise RuntimeError(
                 f"Project '{project_id}' is already bound to env='{existing}'. "
                 f"Refusing to change to env='{env_norm}' without force=True. "
@@ -201,7 +277,7 @@ class GappSDK:
 
         # On force-overwrite, check for cross-project duplicates the rebind would create.
         if existing and force:
-            self._check_rebind_duplicates(project_id, labels, env_norm)
+            self._check_rebind_duplicates(project_id, env_norm)
 
         labels[PROJECT_ENV_LABEL] = env_norm
         self.provider.set_project_labels(project_id, labels)
@@ -222,30 +298,29 @@ class GappSDK:
         self.provider.set_project_labels(project_id, labels)
         return {"project_id": project_id, "status": "removed", "previous": existing}
 
-    def _check_rebind_duplicates(self, project_id: str, labels: dict, target_env: str) -> None:
+    def _check_rebind_duplicates(self, project_id: str, target_env: str) -> None:
         """When set_project_env is forcing an env rebind, refuse if any
-        solution on this project would end up on >1 project under target_env.
+        deployment on this project would end up on >1 project under target_env.
         """
-        for key in labels.keys():
-            if not key.startswith("gapp_") or key.startswith("gapp-"):
-                continue
-            # Same solution label on another project?
-            other_projects = self.provider.list_projects(
-                filter_query=f"labels:{key}", limit=10
+        here = {(l[DEPLOYMENT_LABEL], l.get(OWNER_LABEL)) for l in self._deployments_on(project_id).values()}
+        if not here:
+            return
+        others = [p for p in self._hosted_projects()
+                  if p["projectId"] != project_id and (p.get("labels") or {}).get(PROJECT_ENV_LABEL) == target_env]
+
+        def match(project, labels):
+            key = (labels[DEPLOYMENT_LABEL], labels.get(OWNER_LABEL))
+            return {"project": project["projectId"], "deployment": key[0]} if key in here else None
+
+        for hit in self._search_hosted(others, match, first_only=True):
+            other, dep = hit["project"], hit["deployment"]
+            raise RuntimeError(
+                f"Refusing rebind: deployment '{dep}' also exists on project '{other}' which is "
+                f"already bound to env='{target_env}'. Setting '{project_id}' to env='{target_env}' "
+                f"would create cross-project duplication. Resolve manually: remove the "
+                f"{DEPLOYMENT_LABEL} label from the stray copy's bucket (gcloud storage buckets update "
+                f"gs://{self.get_bucket_name(dep, other)} --remove-labels={DEPLOYMENT_LABEL})."
             )
-            for p in other_projects:
-                if p["projectId"] == project_id:
-                    continue
-                other_env = p.get("labels", {}).get(PROJECT_ENV_LABEL)
-                if other_env == target_env:
-                    raise RuntimeError(
-                        f"Refusing rebind: solution label '{key}' also exists "
-                        f"on project '{p['projectId']}' which is already "
-                        f"bound to env='{target_env}'. Setting '{project_id}' "
-                        f"to env='{target_env}' would create cross-project "
-                        f"duplication. Resolve manually with `gcloud projects "
-                        f"update --remove-labels=...`."
-                    )
 
     # -- Solution & project resolution --
 
@@ -284,6 +359,7 @@ class GappSDK:
         env: Optional[str] = None,
         project: Optional[str] = None,
         strict: bool = True,
+        first_only: bool = False,
     ) -> dict | None:
         """Resolve a solution AND best-effort attach its GCP project_id.
 
@@ -304,7 +380,7 @@ class GappSDK:
             return None
         try:
             res = self.resolve_project_for_solution(
-                ctx["name"], env=env, project=project,
+                ctx["name"], env=env, project=project, first_only=first_only,
             )
             ctx["project_id"] = res["project_id"]
         except CloudAccessError:
@@ -315,23 +391,32 @@ class GappSDK:
             ctx["project_id"] = None
         return ctx
 
-    def discover_projects_for_solution(self, solution_name: str) -> List[Dict]:
-        """Find all projects hosting the given solution under the active owner.
+    def discover_projects_for_solution(self, solution_name: str, env: Optional[str] = None,
+                                       first_only: bool = False) -> List[Dict]:
+        """Find the projects hosting a deployment under the active owner.
 
-        Returns a list of dicts: {projectId, env (str|None), labels}.
-        Env is the project's gapp-env value (or None if undefined).
+        Searches the projects marked gapp=hosted for the deployment's bucket
+        (labeled gapp-deployment=<id>), asking the projects in parallel.
+        With env, only projects bound to that env are asked. With
+        first_only, stops at the first match.
+
+        Returns a list of dicts: {projectId, env (str|None), labels}, where
+        labels are the project's and env is its gapp-env (None if undefined).
         """
-        label_key = self.get_label_key(solution_name)
-        projects = self.provider.list_projects(filter_query=f"labels:{label_key}")
-        result = []
-        for p in projects:
-            labels = p.get("labels", {})
-            result.append({
-                "projectId": p["projectId"],
-                "env": labels.get(PROJECT_ENV_LABEL) or None,
-                "labels": labels,
-            })
-        return result
+        deployment = solution_name.lower()
+        projects = self._hosted_projects()
+        if env is not None:
+            projects = [p for p in projects if (p.get("labels") or {}).get(PROJECT_ENV_LABEL) == env]
+
+        def match(project, labels):
+            if labels.get(DEPLOYMENT_LABEL) != deployment or not self._owner_matches(labels):
+                return None
+            plabels = project.get("labels") or {}
+            return {"projectId": project["projectId"], "env": plabels.get(PROJECT_ENV_LABEL) or None,
+                    "labels": plabels}
+
+        found = self._search_hosted(projects, match, first_only=first_only)
+        return sorted(found, key=lambda c: c["projectId"])
 
     def resolve_project_for_solution(
         self,
@@ -339,42 +424,31 @@ class GappSDK:
         env: Optional[str] = None,
         project: Optional[str] = None,
         allow_zero: bool = False,
+        first_only: bool = False,
     ) -> Dict:
-        """Single-source resolver per CONTRIBUTING.md truth table.
+        """Single-source resolver.
 
         Inputs are caller-provided; owner comes from the active profile.
-        Returns a dict with: project_id, env, labels, status ("resolved"
-        or "first_setup" when allow_zero and zero matches with explicit project).
+        Returns a dict with: project_id, env, labels (the project's), status.
+
+        An explicit project is taken as given (no search): only its env is
+        checked. Whether the deployment is set up there is the caller's
+        check (its bucket). Without a project, the hosted projects are
+        searched; first_only stops at the first match (status).
 
         Raises RuntimeError on any unresolvable case.
         """
         env_norm = _validate_env_name(env)
 
-        # Explicit project: bypass discovery, verify state.
+        # Explicit project: no search; verify the env.
         if project:
             labels = self.provider.get_project_labels(project)
             project_env = labels.get(PROJECT_ENV_LABEL) or None
-            label_key = self.get_label_key(solution_name)
-            has_solution = label_key in labels
-
             if env_norm is not None and env_norm != project_env:
                 raise RuntimeError(
                     f"Project '{project}' is bound to env="
                     f"'{project_env or UNDEFINED_ENV_DISPLAY}'. "
                     f"You passed --env='{env_norm}'. Pick one."
-                )
-
-            if not has_solution:
-                if allow_zero:
-                    return {
-                        "project_id": project,
-                        "env": project_env,
-                        "labels": labels,
-                        "status": "first_setup",
-                    }
-                raise RuntimeError(
-                    f"Solution '{solution_name}' is not deployed on project "
-                    f"'{project}'. Run setup first."
                 )
             return {
                 "project_id": project,
@@ -383,14 +457,19 @@ class GappSDK:
                 "status": "resolved",
             }
 
-        # Discovery path: query by solution label.
+        # Discovery path: search the hosted projects.
         if not self.is_discovery_on():
             raise RuntimeError(
                 "Discovery is OFF for this profile. Pass --project explicitly "
                 "or run `gapp config discovery on`."
             )
 
-        candidates = self.discover_projects_for_solution(solution_name)
+        # Status stops at the first match, so it asks only the projects of
+        # the env it was given; a full search keeps every match so that an
+        # ambiguous name is refused rather than guessed.
+        candidates = self.discover_projects_for_solution(
+            solution_name, env=env_norm if first_only else None, first_only=first_only,
+        )
         if not candidates:
             if allow_zero:
                 raise RuntimeError(
@@ -398,8 +477,8 @@ class GappSDK:
                     f"Pass --project to install for the first time."
                 )
             raise RuntimeError(
-                f"Solution '{solution_name}' is not deployed. Run "
-                f"`gapp setup --project <project-id>` first."
+                f"No deployment '{solution_name}' found in any project marked {HOSTED_LABEL}={HOSTED_VALUE}. "
+                f"Pass --project, or run `gapp setup --project <project-id>` first."
             )
 
         # Filter by --env if given.
@@ -429,15 +508,15 @@ class GappSDK:
         )
         if env_norm is not None:
             raise RuntimeError(
-                f"Solution '{solution_name}' exists on multiple projects "
+                f"Deployment '{solution_name}' exists on multiple projects "
                 f"under env='{env_norm}' — corruption requires manual "
                 f"cleanup:\n  {rows}\n"
-                f"Use `gcloud projects update <pid> --remove-labels="
-                f"{self.get_label_key(solution_name)}` on whichever "
-                f"project should not own this solution."
+                f"Use `gcloud storage buckets update gs://gapp-{solution_name}-<pid> "
+                f"--remove-labels={DEPLOYMENT_LABEL}` on whichever "
+                f"project should not own this deployment."
             )
         raise RuntimeError(
-            f"Solution '{solution_name}' exists on multiple projects:\n"
+            f"Deployment '{solution_name}' exists on multiple projects:\n"
             f"  {rows}\nPass --env or --project to disambiguate."
         )
 
@@ -465,48 +544,41 @@ class GappSDK:
         }
 
     def list_apps(self, all_owners: bool = False, project_limit: int = 50) -> dict:
-        """List deployed apps via project labels.
+        """List deployments on the projects marked gapp=hosted.
 
         Args:
             all_owners: When False (default), scope listing to the active
                 owner namespace (or global if no owner is set). When True,
                 ignore the active owner and return apps across every owner
                 namespace. Backs the CLI flag `--all`.
-            project_limit: Max projects to scan in one call.
+            project_limit: Max hosted projects to scan in one call.
 
-        Returns one entry per (project × solution-label). Solution labels are
-        env-blind; env comes from the project's gapp-env label (or None when
-        the project has no env binding). Contract major is parsed from the
-        value.
+        Returns one entry per (project x deployment), from the deployment
+        buckets' labels (gapp-deployment, gapp-version, gapp-owner), asked
+        of the hosted projects in parallel. Env comes from the project's
+        gapp-env label (or None when the project has no env binding).
         """
         owner = self.get_owner()
-        is_global_mode = not all_owners and not owner
+        projects_data = self._hosted_projects(limit=project_limit)
 
-        if all_owners:
-            filter_query = "labels:gapp*"
-        elif owner:
-            filter_query = f"labels:gapp_{owner}_*"
-        else:
-            filter_query = "labels:gapp__*"
+        def match(project, labels):
+            app_owner = labels.get(OWNER_LABEL) or "global"
+            if not all_owners and app_owner != ((owner or "").lower() or "global"):
+                return None
+            try:
+                major = int(labels.get(VERSION_LABEL, ""))
+            except ValueError:
+                major = None
+            return {
+                "name": labels[DEPLOYMENT_LABEL],
+                "project": project["projectId"],
+                "owner": app_owner,
+                "env": (project.get("labels") or {}).get(PROJECT_ENV_LABEL) or None,
+                "contract_major": major,
+                "is_legacy": False,
+            }
 
-        projects_data = self.provider.list_projects(
-            filter_query=filter_query, limit=project_limit
-        )
-
-        apps = []
-        for project in projects_data:
-            pid = project["projectId"]
-            labels = project.get("labels", {})
-            project_env = labels.get(PROJECT_ENV_LABEL) or None
-            for key, val in labels.items():
-                app = self._parse_app_label(key, val, pid, project_env)
-                if app is None:
-                    continue
-                if not all_owners and owner and app["owner"] != owner:
-                    continue
-                if is_global_mode and app["owner"] != "global":
-                    continue
-                apps.append(app)
+        apps = self._search_hosted(projects_data, match)
 
         # Detect cross-project duplicates (same owner+name+named env on >1 project).
         dup_keys: Dict[tuple, list] = {}
@@ -550,55 +622,6 @@ class GappSDK:
             )
         return result
 
-    @staticmethod
-    def _parse_app_label(key: str, val: str, project_id: str, project_env: Optional[str]) -> Optional[dict]:
-        """Parse a project label into an app dict, or None if not a solution label.
-
-        Recognized formats (env-blind):
-          gapp_<owner>_<solution>=v-N
-          gapp__<solution>=v-N         (global)
-          gapp-<solution>=<env>        (legacy v-2 default-env label)
-
-        Project labels gapp-env, gapp-env_*, and other non-solution gapp-*
-        labels are skipped. Env on the result comes from the project's
-        gapp-env (passed in as project_env), not from the solution label.
-        """
-        if key.startswith(PROJECT_ENV_LABEL):  # gapp-env or gapp-env_<owner>
-            return None
-        if key.startswith("gapp_"):
-            parts = key.split("_")
-            if len(parts) < 3:
-                return None
-            l_owner = parts[1] if parts[1] else "global"
-            # Solutions with underscores break the parser; accept everything
-            # after segment 2 as the name to maintain legacy parity.
-            l_name = "_".join(parts[2:])
-            major = None
-            if val.startswith("v-"):
-                try:
-                    major = int(val.split("-")[1].split("_")[0])
-                except (IndexError, ValueError):
-                    pass
-            return {
-                "name": l_name,
-                "project": project_id,
-                "owner": l_owner,
-                "env": project_env,   # may be None (undefined)
-                "contract_major": major,
-                "is_legacy": False,
-            }
-        if key.startswith("gapp-") and not key.startswith(PROJECT_ENV_LABEL):
-            # legacy v-2 form: gapp-<solution>=<env>
-            return {
-                "name": key[5:],
-                "project": project_id,
-                "owner": "global",
-                "env": val or None,
-                "contract_major": None,
-                "is_legacy": True,
-            }
-        return None
-
     # -- Setup / deploy --
 
     def setup(
@@ -610,11 +633,14 @@ class GappSDK:
     ) -> dict:
         """Provision GCP foundation for a solution on a project.
 
-        Setup writes ONLY the solution label (gapp_<owner>_<solution>=v-N).
-        It NEVER writes gapp-env. Use gapp projects set-env to bind an env.
+        Labels the deployment's bucket (gapp-deployment, gapp-version and,
+        with an owner, gapp-owner) and marks the project gapp=hosted when it
+        is not yet. A CI run never writes project labels: there the mark is
+        left to `gapp ci project setup`, which runs as an Owner. Setup NEVER
+        writes gapp-env. Use gapp projects set-env to bind an env.
 
         Layer-1 cross-owner check: refuses if a different owner already
-        has the same solution name on the target project, unless force=True.
+        has the same deployment on the target project, unless force=True.
         """
         ctx = self.resolve_solution(solution)
         if not ctx:
@@ -636,29 +662,26 @@ class GappSDK:
         labels = res["labels"]
         project_env = res["env"]
 
-        # Layer-1 cross-owner check.
-        own_owner = self.get_owner() or ""
-        for k in labels.keys():
-            if not k.startswith("gapp_") or k.startswith("gapp-"):
-                continue
-            parts = k.split("_")
-            if len(parts) < 3:
-                continue
-            other_owner = parts[1]
-            other_name = "_".join(parts[2:])
-            if other_name == solution_name and other_owner != own_owner:
-                if not force:
-                    other_label = f"owner='{other_owner or GLOBAL_OWNER_DISPLAY}'"
-                    raise RuntimeError(
-                        f"Project '{target_project}' already has a solution "
-                        f"named '{solution_name}' under {other_label}. "
-                        f"Resources (bucket, Cloud Run service) are owner-blind "
-                        f"and would clobber. Re-run with force=True to proceed "
-                        f"only if intentional."
-                    )
+        repo_path = Path(ctx["repo_path"]) if ctx.get("repo_path") else None
+        bucket_name = self.get_bucket_name(solution_name, target_project)
 
-        # Contract gating on the target solution label.
-        self._check_contract(labels, solution_name, target_project)
+        # Layer-1 cross-owner check, on the deployment bucket's labels.
+        own_owner = (self.get_owner() or "").lower()
+        existing = self.provider.list_bucket_labels(target_project).get(bucket_name) or {}
+        if existing.get(DEPLOYMENT_LABEL):
+            other_owner = existing.get(OWNER_LABEL) or ""
+            if other_owner != own_owner and not force:
+                other_label = f"owner='{other_owner or GLOBAL_OWNER_DISPLAY}'"
+                raise RuntimeError(
+                    f"Project '{target_project}' already has a solution "
+                    f"named '{solution_name}' under {other_label}. "
+                    f"Resources (bucket, Cloud Run service) are owner-blind "
+                    f"and would clobber. Re-run with force=True to proceed "
+                    f"only if intentional."
+                )
+
+        # Version gating on the deployment's services.
+        self._check_version(target_project, solution_name, self._service_names(solution_name, repo_path))
 
         # Verify --env vs project env (already done in resolver, but
         # recheck after resolver path for explicit-project zero-match).
@@ -672,7 +695,6 @@ class GappSDK:
                     f"to a different env: gapp projects set-env."
                 )
 
-        repo_path = Path(ctx["repo_path"]) if ctx.get("repo_path") else None
         manifest = load_manifest(repo_path) if repo_path else {}
 
         apis_enabled = []
@@ -691,21 +713,22 @@ class GappSDK:
             self.provider.enable_api(target_project, api)
             apis_enabled.append(api)
 
-        bucket_name = self.get_bucket_name(solution_name, target_project)
         bucket_status = "exists" if self.provider.bucket_exists(target_project, bucket_name) else "created"
         if bucket_status == "created":
             self.provider.create_bucket(target_project, bucket_name)
 
         self.provider.ensure_build_permissions(target_project)
 
-        label_key = self.get_label_key(solution_name)
-        label_value = self.get_label_value()
-        if labels.get(label_key) != label_value:
-            labels[label_key] = label_value
-            self.provider.set_project_labels(target_project, labels)
-            label_status = "added"
-        else:
+        self.provider.set_bucket_labels(target_project, bucket_name, self.deployment_labels(solution_name))
+
+        # The project mark, once per project, by an Owner only.
+        if labels.get(HOSTED_LABEL) == HOSTED_VALUE:
             label_status = "exists"
+        elif on_ci_runner():
+            label_status = "skipped"
+        else:
+            self.provider.set_project_labels(target_project, {**labels, HOSTED_LABEL: HOSTED_VALUE})
+            label_status = "added"
 
         return {
             "name": solution_name,
@@ -716,31 +739,6 @@ class GappSDK:
             "label_status": label_status,
             "apis": apis_enabled,
         }
-
-    def _check_contract(self, labels: dict, solution_name: str, project_id: str) -> None:
-        """Refuse setup/deploy if the project's stamped contract for this solution
-        is outside the supported window."""
-        target_key = self.get_label_key(solution_name)
-        existing = labels.get(target_key)
-        if not existing or not existing.startswith("v-"):
-            return
-        try:
-            n = int(existing.split("-")[1])
-        except (IndexError, ValueError):
-            return
-        if n > CURRENT_MAJOR:
-            raise RuntimeError(
-                f"Project '{project_id}' has '{solution_name}' stamped at v{n}.x; "
-                f"this gapp build is v{__version__} (contract major {CURRENT_MAJOR}). "
-                f"Upgrade gapp to manage this project."
-            )
-        if n < MIN_SUPPORTED_MAJOR:
-            raise RuntimeError(
-                f"Project '{project_id}' has '{solution_name}' stamped at v{n}.x; "
-                f"below MIN_SUPPORTED_MAJOR={MIN_SUPPORTED_MAJOR}. "
-                f"Migrate the label manually (gcloud projects update --update-labels=...) "
-                f"or use an older gapp build."
-            )
 
     def deploy(
         self,
@@ -767,14 +765,12 @@ class GappSDK:
         # Try to resolve a project. For dry-run we tolerate "no project yet."
         target_project = None
         project_env = None
-        labels: Dict[str, str] = {}
         try:
             res = self.resolve_project_for_solution(
                 solution_name, env=env, project=project_id, allow_zero=False
             )
             target_project = res["project_id"]
             project_env = res["env"]
-            labels = res["labels"]
         except RuntimeError:
             if not dry_run:
                 raise
@@ -784,7 +780,7 @@ class GappSDK:
             "owner": self.get_owner(),
             "env": project_env,
             "project_id": target_project,
-            "label": self.get_label_key(solution_name),
+            "labels": ", ".join(f"{k}={v}" for k, v in self.deployment_labels(solution_name).items()),
             "bucket": self.get_bucket_name(solution_name, target_project) if target_project else None,
             "repo_path": str(repo_path) if repo_path else None,
             "status": "ready" if target_project and repo_path else "pending_setup",
@@ -807,17 +803,11 @@ class GappSDK:
         if not target_project:
             raise RuntimeError(f"No GCP project resolved for '{solution_name}'.")
 
-        self._check_contract(labels, solution_name, target_project)
-        label_key = self.get_label_key(solution_name)
-        if not labels.get(label_key, "").startswith("v-"):
-            raise RuntimeError(
-                f"Project '{target_project}' does not host '{solution_name}'. "
-                f"Run 'gapp setup' first."
-            )
-
         bucket_name = self.get_bucket_name(solution_name, target_project)
         if not self.provider.bucket_exists(target_project, bucket_name):
             raise RuntimeError(f"Foundation missing. Run 'gapp setup'.")
+        self._check_version(target_project, solution_name, [s["name"] for s in preview["services"]])
+        self.provider.set_bucket_labels(target_project, bucket_name, self.deployment_labels(solution_name))
 
         build_ref = ref or "HEAD"
         if paths := get_paths(load_manifest(repo_path)):
@@ -853,14 +843,15 @@ class GappSDK:
                 )),
             )
         try:
-            ctx = self.resolve_solution_with_project(name, env=env, project=project, strict=False)
+            ctx = self.resolve_solution_with_project(name, env=env, project=project, strict=False,
+                                                     first_only=True)
         except CloudAccessError:
             return StatusResult(
                 initialized=True,
                 name=local["name"],
                 repo_path=local.get("repo_path"),
                 deployment=DeploymentInfo(project=None, pending=True),
-                next_step=NextStep(action="sign in", hint=self._identity_hint()),
+                next_step=NextStep(action="sign in", hint=self._identity_hint(project)),
             )
         solution_name = ctx["name"]
         repo_path = ctx.get("repo_path")
@@ -910,9 +901,11 @@ class GappSDK:
                 result.domain = self._domain_status(project_id, live)
         return result
 
-    def _identity_hint(self) -> str:
+    def _identity_hint(self, project_id: Optional[str] = None) -> str:
         """What to do when no Google Cloud identity this machine holds works."""
         account = self.get_account()
+        if on_ci_runner():
+            return ci_identity_hint(account, project_id)
         who = f" for the configured account {account}" if account else ""
         login = f"gcloud auth login {account}" if account else "gcloud auth login"
         return (
@@ -1046,6 +1039,7 @@ class GappSDK:
             get_public(manifest), get_domain(manifest),
             bucket_name,
             solution_name=parent_solution or name,
+            labels=self.deployment_labels(parent_solution or name),
         )
         outputs = self.provider.apply_infrastructure(
             staging_dir=_get_staging_dir(name), bucket_name=bucket_name,
@@ -1139,7 +1133,7 @@ def _prepare_build_dir(path, image, ep, ref="HEAD"):
 
 
 def _build_tfvars(name, pid, img, cfg, secrets, repo_path, public, domain,
-                  bucket_name, solution_name=None):
+                  bucket_name, solution_name=None, labels=None):
     # Every key returned here corresponds to a structurally-required tfvar in
     # modules/cloud-run-service/variables.tf. None of them have defaults, so
     # dropping a key fails terraform plan instead of silently mis-deploying.
@@ -1167,6 +1161,7 @@ def _build_tfvars(name, pid, img, cfg, secrets, repo_path, public, domain,
         "secrets": secrets_map,
         "public": bool(public), "custom_domain": custom_domain,
         "data_bucket": bucket_name,
+        "labels": dict(labels or {}),
     }
 
 

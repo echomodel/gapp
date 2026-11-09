@@ -8,7 +8,9 @@ import time
 from pathlib import Path
 from typing import Optional, List, Dict
 
-from gapp.admin.sdk.cloud.base import CloudProvider, CloudAccessError, ProjectNotFoundError
+from gapp.admin.sdk.cloud.base import (
+    CloudProvider, CloudAccessError, ProjectNotFoundError, ci_identity_hint, on_ci_runner,
+)
 
 
 _GAPP_PKG_ROOT = Path(__file__).resolve().parent.parent.parent.parent
@@ -110,7 +112,9 @@ class GCPProvider(CloudProvider):
                 "--condition=None"
             ], capture_output=True)
 
-    def _identity_hint(self) -> str:
+    def _identity_hint(self, project_id: Optional[str] = None) -> str:
+        if on_ci_runner():
+            return f"  {ci_identity_hint(self.account, project_id)}"
         who = f" as {self.account}" if self.account else ""
         return (
             f"  gapp is calling Google Cloud{who}. Check `gcloud auth list`, and run "
@@ -145,12 +149,12 @@ class GCPProvider(CloudProvider):
         if code == "404":
             raise ProjectNotFoundError(
                 f"Project '{project_id}' was not found, or this identity cannot see it "
-                f"(HTTP 404): {message}\n{self._identity_hint()}"
+                f"(HTTP 404): {message}\n{self._identity_hint(project_id)}"
             )
         if code in ("401", "403"):
             raise CloudAccessError(
                 f"Not authorized to {verb} project '{project_id}' (HTTP {code}): "
-                f"{message}\n{self._identity_hint()}"
+                f"{message}\n{self._identity_hint(project_id)}"
             )
         raise CloudAccessError(
             f"Failed to {verb} project '{project_id}' (HTTP {code}): {message}"
@@ -186,6 +190,54 @@ class GCPProvider(CloudProvider):
                 f"{(res.stderr or '').strip()}\n{self._identity_hint()}"
             )
         return json.loads(res.stdout or "[]")
+
+    # -- Deployment labels on buckets and services --
+
+    def list_bucket_labels(self, project_id: str) -> Dict[str, Dict[str, str]]:
+        res = self._run_gcloud(
+            ["storage", "buckets", "list", "--project", project_id, "--format", "json(name,labels)"],
+            capture_output=True, text=True,
+        )
+        if res.returncode != 0:
+            raise CloudAccessError(
+                f"Could not list the buckets of project '{project_id}' (gcloud exit {res.returncode}): "
+                f"{(res.stderr or '').strip()}\n{self._identity_hint(project_id)}"
+            )
+        out = {}
+        for item in json.loads(res.stdout or "[]"):
+            name = (item.get("name") or "").removeprefix("gs://").rstrip("/")
+            if name:
+                out[name] = dict(item.get("labels") or {})
+        return out
+
+    def set_bucket_labels(self, project_id: str, bucket_name: str, labels: Dict[str, str]) -> None:
+        pairs = ",".join(f"{k}={v}" for k, v in sorted(labels.items()))
+        res = self._run_gcloud(
+            ["storage", "buckets", "update", f"gs://{bucket_name}", f"--update-labels={pairs}"],
+            capture_output=True, text=True,
+        )
+        if res.returncode != 0:
+            raise CloudAccessError(
+                f"Could not label bucket {bucket_name} (gcloud exit {res.returncode}): "
+                f"{(res.stderr or '').strip()}\n{self._identity_hint(project_id)}"
+            )
+
+    def get_service_labels(self, project_id: str, region: str, service_name: str) -> Optional[Dict[str, str]]:
+        res = self._run_gcloud(
+            ["run", "services", "describe", service_name, "--region", region, "--project", project_id,
+             "--format", "json"],
+            capture_output=True, text=True,
+        )
+        if res.returncode != 0:
+            stderr = (res.stderr or "").strip()
+            if "could not be found" in stderr.lower() or "not found" in stderr.lower():
+                return None
+            raise CloudAccessError(
+                f"Could not read Cloud Run service '{service_name}' on project '{project_id}' "
+                f"(gcloud exit {res.returncode}): {stderr}\n{self._identity_hint(project_id)}"
+            )
+        data = json.loads(res.stdout or "{}") or {}
+        return dict((data.get("metadata") or {}).get("labels") or {})
 
     # -- Custom domains --
 
@@ -223,7 +275,7 @@ class GCPProvider(CloudProvider):
                 return None
             raise CloudAccessError(
                 f"Could not describe the domain mapping for {domain} on project "
-                f"'{project_id}' (gcloud exit {res.returncode}): {stderr}\n{self._identity_hint()}"
+                f"'{project_id}' (gcloud exit {res.returncode}): {stderr}\n{self._identity_hint(project_id)}"
             )
         return json.loads(res.stdout or "{}") or None
 

@@ -727,7 +727,7 @@ def setup_ci_project(project: str) -> dict:
     project_id = (project or "").strip()
     result = {"ok": True, "project_id": project_id, "fleet_repo": None,
               "wif_pool": None, "wif_provider": None, "service_account": None, "binding": None,
-              "environment": project_id, "environment_record": None, "changed": None, "next_step": None}
+              "hosted": None, "environment": project_id, "environment_record": None, "changed": None, "next_step": None}
     if not project_id:
         return {**result, **_outcome("pass the project", "Name the GCP project: `gapp ci project setup <project>`.")}
     fleet_repo, stop = _require(result)
@@ -760,6 +760,7 @@ def setup_ci_project(project: str) -> dict:
          lambda: _ensure_wif_provider(project_id, fleet_repo.split("/")[0])),
         ("service_account", "create or confirm the gapp-deploy service account", lambda: _ensure_deploy_sa(project_id)),
         ("binding", "bind the Workload Identity pool to the fleet repo", lambda: _ensure_wif_binding(project_id, fleet_repo)),
+        ("hosted", "mark the project as hosting gapp deployments (gapp=hosted)", lambda: _mark_project_hosted(project_id)),
     )
     for key, step, fn in steps:
         try:
@@ -1712,6 +1713,16 @@ def _ensure_wif_binding(project_id: str, fleet_repo: str) -> str:
               f"workloadIdentityPools/{_WIF_POOL_ID}/attribute.repository/{fleet_repo}")
     result = run_gcloud(["iam", "service-accounts", "add-iam-policy-binding", sa_email, "--project", project_id,
                          "--role", "roles/iam.workloadIdentityUser", "--member", member], capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip())
+    return "set"
+
+
+def _mark_project_hosted(project_id: str) -> str:
+    """Label the project gapp=hosted, keeping its other labels. Only an Owner
+    writes project labels; a deploy never does."""
+    result = run_gcloud(["projects", "update", project_id, "--update-labels=gapp=hosted"],
+                        capture_output=True, text=True)
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip())
     return "set"

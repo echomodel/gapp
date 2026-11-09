@@ -111,6 +111,9 @@ jobs:
       solution-repo: ${{ needs.resolve.outputs.repo }}
       ref: ${{ inputs.ref }}
       environment: ${{ needs.resolve.outputs.project }}
+      # The project comes from the fleet entry, so gapp setup and deploy run
+      # with --project and never search for it on the runner.
+      project-id: ${{ needs.resolve.outputs.project }}
       gapp-repo: __GAPP_REPO__
       gapp-ref: __GAPP_REF__
       solution-name: ${{ needs.resolve.outputs.id }}

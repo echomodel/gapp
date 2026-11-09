@@ -14,7 +14,7 @@ This ties the operator to their laptop. You can't deploy from your phone, from C
 
 gapp has **two fleet systems that do not talk to each other**:
 
-- **Root commands** (`gapp setup`, `deploy`, `status`, `list`, `secrets`) deploy the local checkout to GCP with gcloud. Their record of where a solution lives is the GCP project label. They never read GitHub.
+- **Root commands** (`gapp setup`, `deploy`, `status`, `list`, `secrets`) deploy the local checkout to GCP with gcloud. Their record of where a solution lives is its labels in GCP (`gapp=hosted` on the project, `gapp-deployment` on its bucket and services). They never read GitHub.
 - **`gapp ci` commands** manage the fleet through GitHub only. They never use gcloud (except `gapp ci project setup`, once per project) and **never read the working directory**. Their record is `gapp/deployments.yaml` in the fleet repo and the project's GitHub Environment.
 
 No command consults the other system's state, there is no shared local store, and no `--force` reconciliation. Every command's requirements are fixed by its name; nothing is conditional on hidden state. The `ci` group mirrors the root group's verbs (`setup`, `deploy`, `status`, `list`) wherever both have the operation, and differs only where the systems really differ: `ci` has no working-directory default, so it takes names. CONTRIBUTING, "Two fleet systems" and "Rules of the CI system", records how this was decided, what was rejected and what is deferred.
@@ -26,7 +26,7 @@ No command consults the other system's state, there is no shared local store, an
 | `gapp ci init <owner>/<repo>` | Sets an existing repo as the fleet repo for this machine and installs or updates gapp's files in it; a repo that does not exist stops with the `--create` command | `gh` that can write to the repo |
 | `gapp ci init <owner>/<repo> --create` | Creates a private fleet repo, tagged, with the workflows and an empty deployments file, and sets it; a repo that exists stops with the plain `init` command | `gh` that can create repos |
 | `gapp ci sources add\|remove\|list <owner>` | The GitHub owners whose repos may be deployed from the fleet | `gh` write |
-| `gapp ci project setup <project>` | Once per GCP project: trust between the fleet repo and the project (WIF pool, provider, deploy account, binding, the project's Environment) | gcloud as an Owner, `gh` as an admin |
+| `gapp ci project setup <project>` | Once per GCP project: trust between the fleet repo and the project (WIF pool, provider, deploy account, binding, the project's Environment), and the project's `gapp=hosted` mark | gcloud as an Owner, `gh` as an admin |
 | `gapp ci setup [<name>] --repo <owner>/<repo> --project <p> [--domain <d>] [--config <file>]` | Adds or updates a deployment; the name defaults to the repo's name | `gh` that can dispatch |
 | `gapp ci setup <name> --copy-of <existing> [--project <p>] [--domain <d>]` | A new deployment from an existing one | `gh` that can dispatch |
 | `gapp ci rename <old> <new>` | Changes the name only | `gh` that can dispatch |
@@ -173,7 +173,7 @@ This three-layer separation is standard:
 
 gapp uses GCP authentication in two ways:
 
-1. **Ambient gcloud CLI auth** — the vast majority of operations. Every `subprocess.run(["gcloud", ...])` call relies on whatever `gcloud auth login` session is active. Used by: `core.py` (setup, deploy, status, project labels, Artifact Registry, Cloud Build, GCS) and `secrets.py` (Secret Manager CRUD).
+1. **Ambient gcloud CLI auth** — the vast majority of operations. Every `subprocess.run(["gcloud", ...])` call relies on whatever `gcloud auth login` session is active. Used by: `core.py` (setup, deploy, status, project and deployment labels, Artifact Registry, Cloud Build, GCS) and `secrets.py` (Secret Manager CRUD).
 
 2. **Explicit OAuth token for Terraform** — gapp calls `gcloud auth print-access-token` once during deploy and passes the result to Terraform via the `GOOGLE_OAUTH_ACCESS_TOKEN` env var. This is the only place gapp extracts a token explicitly.
 
@@ -269,7 +269,7 @@ The fleet repo is plain GitHub Actions configuration. gapp's three workflows are
 ### Security model
 
 - **WIF scoping**: GCP only trusts the specific fleet repo. Forks can't authenticate.
-- **Service account scoping**: The deploy service account has only the permissions needed for deployment. It cannot run `gapp ci project setup` or access other GCP projects.
+- **Service account scoping**: The deploy service account has only the permissions needed for deployment. It cannot run `gapp ci project setup` or access other GCP projects. It never writes project labels: a deploy labels only the deployment's own bucket and services, and the deploy workflow passes the project from the fleet entry, so the runner never searches for it.
 - **Workflow pinning**: The deploy workflow pins gapp's reusable workflow to a release tag, written once per fleet repo by `gapp ci init` and moved only by re-running it. Nothing in the deployments file can point a deploy at another copy of the reusable workflow, and the register run installs the same pinned gapp.
 - **Who can dispatch**: Dispatching a workflow in the fleet repo requires write access to it. So "who can deploy" and "who can add a deployment" are both exactly "who can write to the fleet repo", and GitHub's audit log records every dispatch with its actor and inputs.
 - **The source allowlist**: The register run accepts a repo only when its owner is listed in the fleet repo's repository variable `GAPP_ALLOWED_SOURCES` (comma-separated; managed by `gapp ci sources`). Someone with write access to the fleet repo cannot add, and therefore cannot deploy, code from an owner the operator has not named.

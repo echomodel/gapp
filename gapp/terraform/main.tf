@@ -20,6 +20,7 @@ module "service" {
   secrets       = var.secrets
   data_bucket   = var.data_bucket
   public        = var.public
+  labels        = var.labels
 }
 
 resource "google_cloud_run_domain_mapping" "custom" {

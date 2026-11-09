@@ -42,10 +42,7 @@ def test_status_ready(tmp_path, monkeypatch, sdk):
     monkeypatch.chdir(repo)
 
     # Register project (env-blind label, optional gapp-env)
-    sdk.provider.project_labels["proj-123"] = {
-        "gapp-env": "prod",
-        "gapp__my-app": "v-3",
-    }
+    sdk.provider.host("proj-123", "my-app", env="prod")
 
     # Bucket name: gapp-{solution}-{project_id} — owner-blind, env-blind
     sdk.provider.tf_outputs[("gapp-my-app-proj-123", "terraform/state")] = {"service_url": "https://my-app.run.app"}
@@ -64,7 +61,7 @@ def test_status_with_explicit_solution_skips_local_discovery(tmp_path, monkeypat
     must still resolve cleanly via cloud labels and TF outputs.
     """
     monkeypatch.chdir(tmp_path)  # no gapp.yaml here
-    sdk.provider.project_labels["proj-123"] = {"gapp__remote-app": "v-3"}
+    sdk.provider.host("proj-123", "remote-app")
     sdk.provider.tf_outputs[("gapp-remote-app-proj-123", "terraform/state")] = {
         "service_url": "https://remote-app.run.app",
     }
@@ -96,7 +93,7 @@ def test_status_tolerates_invalid_local_manifest(tmp_path, monkeypatch, sdk):
     )
     monkeypatch.chdir(repo)
 
-    sdk.provider.project_labels["proj-123"] = {"gapp__stale-app": "v-3"}
+    sdk.provider.host("proj-123", "stale-app")
     sdk.provider.tf_outputs[("gapp-stale-app-proj-123", "terraform/state")] = {
         "service_url": "https://stale-app.run.app",
     }
@@ -169,7 +166,7 @@ def _deployed_with_domain(tmp_path, monkeypatch, sdk, domain="mcp.example.com"):
     (repo / ".git").mkdir()
     (repo / "gapp.yaml").write_text(f"name: my-app\ndomain: {domain}\n")
     monkeypatch.chdir(repo)
-    sdk.provider.project_labels["proj-123"] = {"gapp__my-app": "v-3"}
+    sdk.provider.host("proj-123", "my-app")
     sdk.provider.tf_outputs[("gapp-my-app-proj-123", "terraform/state")] = {
         "service_url": "https://my-app.run.app", "custom_domain": domain,
     }
@@ -215,7 +212,7 @@ def test_status_without_domain_leaves_domain_unset(tmp_path, monkeypatch, sdk):
     (repo / ".git").mkdir()
     (repo / "gapp.yaml").write_text("name: my-app\n")
     monkeypatch.chdir(repo)
-    sdk.provider.project_labels["proj-123"] = {"gapp__my-app": "v-3"}
+    sdk.provider.host("proj-123", "my-app")
     sdk.provider.tf_outputs[("gapp-my-app-proj-123", "terraform/state")] = {
         "service_url": "https://my-app.run.app", "custom_domain": "",
     }
@@ -265,3 +262,26 @@ def test_resolve_with_explicit_project_surfaces_label_read_errors(sdk):
     sdk.provider.get_project_labels = failing_labels
     with pytest.raises(CloudAccessError, match="HTTP 401"):
         sdk.resolve_project_for_solution("my-app", project="proj-123")
+
+
+def test_status_stops_at_the_first_match_instead_of_refusing_an_ambiguous_name(sdk):
+    sdk.provider.host("proj-1", "my-app", env="prod")
+    sdk.provider.host("proj-2", "my-app", env="dev")
+    res = sdk.status(name="my-app")
+    assert res.deployment.project in ("proj-1", "proj-2")
+    assert sdk.status(name="my-app", env="dev").deployment.project == "proj-2"
+
+
+def test_status_on_a_ci_runner_never_suggests_signing_in(sdk, monkeypatch):
+    from gapp.admin.sdk.cloud.base import CloudAccessError
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+
+    def refused(project_id):
+        raise CloudAccessError("Not authorized to read labels of project 'proj-123' (HTTP 403)")
+
+    sdk.provider.get_project_labels = refused
+    res = sdk.status(name="my-app", project="proj-123")
+    assert res.next_step.action == "sign in"
+    assert res.next_step.hint.startswith("This is a CI run as ")
+    assert "`gapp ci project setup proj-123` grants the deploy identity its roles" in res.next_step.hint
+    assert "gcloud auth login" not in res.next_step.hint

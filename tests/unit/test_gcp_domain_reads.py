@@ -18,7 +18,7 @@ def _done(rc, stdout="", stderr=""):
 @pytest.fixture
 def provider(monkeypatch):
     p = GCPProvider()
-    monkeypatch.setattr(p, "_identity_hint", lambda: "(sign-in hint)")
+    monkeypatch.setattr(p, "_identity_hint", lambda *a: "(sign-in hint)")
     return p
 
 

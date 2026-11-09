@@ -57,7 +57,7 @@ def config_account(sdk: GappSDK, email):
 @click.option("--unset", is_flag=True, help="Clear the current owner setting.")
 @click.pass_obj
 def config_owner(sdk: GappSDK, name, unset):
-    """View or set the global app owner for project labels."""
+    """View or set the global app owner for deployment labels."""
     if unset:
         sdk.set_owner(None)
         click.echo("  App owner cleared.")
@@ -74,7 +74,7 @@ def config_owner(sdk: GappSDK, name, unset):
 @click.argument("state", type=click.Choice(["on", "off"]), required=False)
 @click.pass_obj
 def config_discovery(sdk: GappSDK, state):
-    """Enable (on) or disable (off) GCP label discovery."""
+    """Enable (on) or disable (off) discovery of hosted projects (gapp=hosted)."""
     if state:
         sdk.set_discovery(state)
         click.echo(f"  Discovery turned {state.upper()}")
@@ -200,12 +200,12 @@ def init(sdk: GappSDK):
 @click.option("--force", is_flag=True, help="Override Layer-1 cross-owner check.")
 @click.pass_obj
 def setup_cmd(sdk: GappSDK, project_id, solution, env, project_arg, force):
-    """GCP foundation: enable APIs, create the solution bucket, label the project.
+    """GCP foundation: enable APIs, create and label the solution bucket, mark the project hosted.
 
     Once per solution per project, idempotent. Needs a gcloud login with
     project-admin rights (enable services, create buckets, edit IAM). The
-    project id is required the first time; later runs discover it from
-    the project label. Next: `gapp secrets set` for any declared secrets,
+    project id is required the first time; later runs find it among the
+    projects marked gapp=hosted. Next: `gapp secrets set` for any declared secrets,
     then `gapp deploy`. (CI deploys are the other fleet system: `gapp ci`.)
     """
     pid = project_arg or project_id
@@ -223,7 +223,11 @@ def setup_cmd(sdk: GappSDK, project_id, solution, env, project_arg, force):
         for api in result["apis"]:
             click.echo(f"    API {api} enabled ✓")
     click.echo(f"    Bucket gs://{result['bucket']} {result['bucket_status']} ✓")
-    click.echo(f"    Project label {result['project_id']} {result['label_status']} ✓")
+    if result["label_status"] == "skipped":
+        click.echo(f"    Project {result['project_id']} not marked hosted: a CI run never writes project labels "
+                   f"(`gapp ci project setup {result['project_id']}` marks it)")
+    else:
+        click.echo(f"    Project {result['project_id']} marked hosted (gapp=hosted) {result['label_status']} ✓")
     click.echo()
 
 
@@ -272,7 +276,7 @@ def deploy(sdk: GappSDK, ref, solution, env, project, dry_run, rebuild, replace_
             click.echo(f"    Owner:       {result['owner']}")
         else:
             click.echo(f"    Owner:       {GLOBAL_OWNER_DISPLAY}")
-        click.echo(f"    GCP Label:   {result['label']}")
+        click.echo(f"    Labels:      {result['labels']}")
         click.echo(f"    Environment: {env_str}")
         if result["project_id"]:
             click.echo(f"    Project:     {result['project_id']}")
@@ -324,7 +328,7 @@ def _render_status(data: dict) -> list[str]:
          "lets status run from any directory against any deployed solution.",
 )
 @click.option("--env", default=None, help="Verify project's gapp-env matches.")
-@click.option("--project", default=None, help="Explicit GCP project id; skips label discovery.")
+@click.option("--project", default=None, help="Explicit GCP project id; skips the hosted-project search.")
 @click.pass_obj
 def status(sdk: GappSDK, solution, env, project):
     """Infrastructure health check.
@@ -352,7 +356,7 @@ def status(sdk: GappSDK, solution, env, project):
 @click.option("--project-limit", default=50, help="Max projects to scan.")
 @click.pass_obj
 def list_cmd(sdk: GappSDK, all_owners, project_limit):
-    """List deployed apps from GCP labels.
+    """List deployments found on projects marked gapp=hosted.
 
     Without --all, listing is scoped to the active owner namespace (or to
     global apps when no owner is configured). --all overrides that scope

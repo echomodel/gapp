@@ -3,6 +3,39 @@
 Notable changes to gapp. Versions are git tags (`vX.Y.Z`); the version
 source is `gapp/__init__.py`.
 
+## Unreleased (4.0.0rc4)
+
+A CI deploy of a 3.x deployment failed at `gapp setup` on the runner: the
+v-3 to v-4 project label restamp needs a permission the deploy identity
+lacks. rc4 moves every per-deployment label off the project, which is a
+clean break from 3.x's project labels.
+
+- **New label model.** A project carries at most two gapp labels:
+  `gapp=hosted`, written only by an Owner (`gapp setup` from a workstation,
+  once per project, or `gapp ci project setup`), and `gapp-env`. Every setup
+  and deploy, in both modes, labels the deployment's own bucket (by gapp)
+  and Cloud Run services (by Terraform) with `gapp-deployment=<id>`,
+  `gapp-version=<major>` and, with an owner, `gapp-owner=<owner>`. A CI run
+  never writes a project label.
+- **Version guard** reads `gapp-version` from the deployment's services: a
+  deployment a newer gapp deployed is refused. The 3.x floor
+  (`MIN_SUPPORTED_MAJOR`) is gone.
+- **Finding a deployment.** `--project` (and CI, always) skips the search.
+  Otherwise gapp lists the projects marked `gapp=hosted` and asks each for
+  the deployment's bucket, in parallel; `gapp status` stops at the first
+  match. `gapp list` reads every hosted project's deployment buckets.
+- **Clean break.** No 4.x code reads `gapp__<name>` or
+  `gapp_<owner>_<name>` project labels. Move a 3.x fleet once with the
+  "Migration 3.x → 4.x" steps in CONTRIBUTING.md: mark each project hosted,
+  redeploy each deployment with its project, then set each old label to
+  `v-4` as a tripwire for any leftover 3.x install.
+- The fleet's deploy workflow passes the project from the fleet entry to
+  gapp's reusable workflow, so `gapp setup` and `gapp deploy` run with
+  `--project` on the runner. Re-run `gapp ci init <fleet-repo>`.
+- On a CI runner, a refused Google Cloud call no longer suggests
+  `gcloud auth login`; it says signing in does not apply and names
+  `gapp ci project setup <project>` as the fix.
+
 ## 4.0.0rc3 (pre-release of 4.0.0)
 
 Fixes found by the first real run of 4.0.0rc2:

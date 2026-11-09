@@ -18,7 +18,7 @@ def test_discovery_policy_enforcement(tmp_path, monkeypatch, sdk):
     (repo / ".git").mkdir()
     monkeypatch.chdir(repo)
 
-    sdk.provider.project_labels["proj-123"] = {"gapp__project-status": "v-3"}
+    sdk.provider.host("proj-123", "project-status")
 
     sdk.set_discovery("off")
     with pytest.raises(RuntimeError, match="Discovery is OFF"):

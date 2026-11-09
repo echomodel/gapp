@@ -11,7 +11,8 @@ something only their other machine can do.
 gapp has two fleet systems, kept apart, and the line decides what a
 machine needs. The **direct** system (root commands) deploys the local
 checkout: it needs a Google Cloud identity and records a solution's
-home in the GCP project label. The **CI** system (`gapp ci`) manages a
+home in GCP labels (`gapp=hosted` on the project, `gapp-deployment`
+on the solution's bucket and services). The **CI** system (`gapp ci`) manages a
 fleet through GitHub only: its record is the fleet repo's
 `gapp/deployments.yaml` (one entry per deployment: a repo deployed to a
 project under a chosen name) and the project's GitHub Environment. No
