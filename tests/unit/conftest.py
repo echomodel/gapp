@@ -13,6 +13,7 @@ Nothing touches the network.
 """
 
 import base64
+import datetime
 import json
 import subprocess
 import time
@@ -82,6 +83,12 @@ class FakeGitHub:
         # When set, every workflow dispatch fails with this stderr.
         self.dispatch_refusal = None
         self.default_branch = "main"
+        # How many run listings a newly dispatched run stays invisible for
+        # (GitHub lists a run some seconds after the dispatch), and whether
+        # a dispatch creates a run at all.
+        self.run_appears_after = 0
+        self.dispatch_creates_run = True
+        self.request_ids = []   # the request id each dispatch carried
         # What a dispatched status run reports: a callable taking the inputs
         # and returning (conclusion, log lines); the default reports a
         # healthy service for the deployment.
@@ -160,25 +167,28 @@ class FakeGitHub:
         parts = endpoint.split("/")
         repo, workflow = "/".join(parts[1:3]), parts[5]
         inputs = dict(payload.get("inputs") or {})
+        request_id = inputs.pop("request_id", "")
         assert payload.get("ref") == self.default_branch, f"dispatch must name the default branch, got {payload}"
         if self.dispatch_refusal:
             return _Result(1, "", self.dispatch_refusal)
         if (repo, f".github/workflows/{workflow}") not in self.files:
             return _Result(1, "", "gh: Not Found (HTTP 404)")
         self.dispatched.append((repo, workflow, inputs))
+        self.request_ids.append(request_id)
+        if not self.dispatch_creates_run:
+            return _Result(0, "")
         run_id = str(self._next_run)
         self._next_run += 1
         if workflow == "gapp-register.yml":
             conclusion, log = self._register(repo, inputs)
-            name = f"Register {inputs.get('name')}"
+            name = f"Register {inputs.get('name')} {request_id}"
         elif workflow == "gapp-status.yml":
             conclusion, log = self._status(repo, inputs)
-            name = f"Status {inputs.get('deployment')}"
+            name = f"Status {inputs.get('deployment')} {request_id}"
         else:
             conclusion, log = "success", job_log(["gapp-deploy: dispatched"], script='echo "gapp-deploy: $DEPLOYMENT -> $repo"')
-            name = f"Deploy {inputs.get('deployment')} ({inputs.get('ref', 'main')})"
-        self.runs[run_id] = {"repo": repo, "workflow": workflow, "status": "completed", "conclusion": conclusion,
-                             "log": log, "name": name, "created_at": f"2026-01-01T00:00:{int(run_id) % 60:02d}Z"}
+            name = f"Deploy {inputs.get('deployment')} ({inputs.get('ref', 'main')}) {request_id}"
+        self.add_run(run_id, repo, workflow, name, conclusion, log, hidden_polls=self.run_appears_after)
         return _Result(0, "")
 
     def _register(self, repo, inputs):
@@ -230,9 +240,22 @@ class FakeGitHub:
             return _Result(0, f"{run['conclusion']}\n")
         return _Result(0, json.dumps(run))
 
+    def add_run(self, run_id, repo, workflow, name, conclusion, log="", hidden_polls=0, created_at=None):
+        """A run GitHub knows of; `created_at` defaults to now, `hidden_polls` delays its listing."""
+        created = created_at or datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        self.runs[str(run_id)] = {"repo": repo, "workflow": workflow, "status": "completed", "conclusion": conclusion,
+                                  "log": log, "name": name, "created_at": created, "hidden_polls": hidden_polls}
+        self._next_run = max(self._next_run, int(run_id) + 1)
+
     def _runs_list(self, repo, workflow, cmd):
-        runs = [(i, r) for i, r in sorted(self.runs.items(), key=lambda kv: int(kv[0]), reverse=True)
-                if r["repo"] == repo and r["workflow"] == workflow]
+        runs = []
+        for i, r in sorted(self.runs.items(), key=lambda kv: int(kv[0]), reverse=True):
+            if r["repo"] != repo or r["workflow"] != workflow:
+                continue
+            if r.get("hidden_polls", 0) > 0:
+                r["hidden_polls"] -= 1
+                continue
+            runs.append((i, r))
         if "--jq" in cmd:
             return _Result(0, f"{runs[0][0]}\n" if runs else "null\n")
         return _Result(0, json.dumps({"total_count": len(runs), "workflow_runs": [

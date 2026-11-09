@@ -35,7 +35,9 @@ import shutil
 import subprocess
 import sys
 import time
+import uuid
 import zipfile
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
 from importlib import resources
 
@@ -874,28 +876,76 @@ def _default_branch(repo: str) -> tuple[str | None, str]:
     return (branch, "") if rc == 0 and branch and branch != "null" else (None, err or "GitHub did not report a default branch")
 
 
-def _dispatch(fleet_repo: str, workflow_file: str, fields: dict[str, str]) -> tuple[str, str] | None:
-    """Dispatch a workflow on the fleet repo's default branch (REST); returns
-    None, or (GitHub's refusal in words, the raw stderr for choosing the fix)."""
+# How far a runner's clock may lag this machine's when matching a run to its
+# dispatch, and how long to wait for GitHub to list the new run.
+RUN_CLOCK_SKEW = timedelta(seconds=120)
+RUN_APPEAR_TIMEOUT = 120
+
+
+@dataclass
+class Dispatch:
+    """One workflow dispatch: the id its run carries in its run name, and when it was sent."""
+    request_id: str
+    sent_at: datetime
+    refused: str | None = None
+    stderr: str = ""
+
+
+def _dispatch(fleet_repo: str, workflow_file: str, fields: dict[str, str]) -> Dispatch:
+    """Dispatch a workflow on the fleet repo's default branch (REST).
+
+    Every dispatch carries a fresh `request_id` input, which each fleet
+    workflow puts at the end of its run name, so the run is found by that id
+    (`_find_run`), never as "the latest run". `refused` is GitHub's refusal
+    in words; `stderr` is kept for choosing the fix.
+    """
+    request_id = uuid.uuid4().hex[:12]
+    sent_at = datetime.now(timezone.utc)
     branch, err = _default_branch(fleet_repo)
     if branch is None:
-        return f"its default branch could not be read: {_refused(err)}", err
+        return Dispatch(request_id, sent_at, f"its default branch could not be read: {_refused(err)}", err)
     rc, _, err = _gh_api(["-X", "POST", f"repos/{fleet_repo}/actions/workflows/{workflow_file}/dispatches"],
-                         {"ref": branch, "inputs": dict(fields)})
-    return None if rc == 0 else (_refused(err), err)
+                         {"ref": branch, "inputs": {**fields, "request_id": request_id}})
+    if rc == 0:
+        return Dispatch(request_id, sent_at)
+    said = _refused(err)
+    if "unexpected inputs" in (err or "").lower():
+        said += (f" (the fleet repo's {workflow_file} is older than this gapp and does not take a request id; "
+                 f"update gapp's files with `gapp ci init {fleet_repo}`)")
+    return Dispatch(request_id, sent_at, said, err)
 
 
-def _latest_run_id(fleet_repo: str, workflow_file: str) -> str | None:
-    """The newest dispatch run of a workflow, once GitHub lists it."""
-    for _ in range(5):
-        time.sleep(2)
-        rc, out, _ = _gh_api([
-            f"repos/{fleet_repo}/actions/workflows/{workflow_file}/runs?event=workflow_dispatch&per_page=1",
-            "--jq", ".workflow_runs[0].id",
-        ])
-        if rc == 0 and out.strip() and out.strip() != "null":
-            return out.strip()
-    return None
+def _parse_time(value: str | None) -> datetime | None:
+    try:
+        return datetime.fromisoformat((value or "").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _find_run(fleet_repo: str, workflow_file: str, dispatch: Dispatch, timeout: int | None = None) -> str | None:
+    """The run that this dispatch created, by the request id in its run name.
+
+    Polls the workflow's dispatch runs (REST) until one created after the
+    dispatch (less the clock skew) carries the id, or the timeout passes.
+    An older run is never accepted, whatever its name.
+    """
+    earliest = dispatch.sent_at - RUN_CLOCK_SKEW
+    deadline = time.monotonic() + (RUN_APPEAR_TIMEOUT if timeout is None else timeout)
+    while True:
+        rc, out, _ = _gh_api([f"repos/{fleet_repo}/actions/workflows/{workflow_file}/runs?event=workflow_dispatch&per_page=30"])
+        if rc == 0:
+            try:
+                runs = json.loads(out or "{}").get("workflow_runs") or []
+            except (json.JSONDecodeError, AttributeError):
+                runs = []
+            for run in runs:
+                title = run.get("display_title") or run.get("name") or ""
+                created = _parse_time(run.get("created_at"))
+                if title.split()[-1:] == [dispatch.request_id] and created is not None and created >= earliest:
+                    return str(run.get("id"))
+        if time.monotonic() >= deadline:
+            return None
+        time.sleep(3)
 
 
 def _wait_for_run(fleet_repo: str, run_id: str, timeout: int = 900) -> tuple[str | None, str | None]:
@@ -970,7 +1020,7 @@ def _run_conclusion(fleet_repo: str, run_id: str) -> str | None:
 
 def _last_deploy(fleet_repo: str, name: str) -> dict:
     """The newest run of the deploy workflow for a deployment, by its run name
-    "Deploy <name> (<ref>)"; `checked` False with a note when runs cannot be read."""
+    "Deploy <name> (<ref>) <request id>"; `checked` False with a note when runs cannot be read."""
     request = f"GET repos/{fleet_repo}/actions/workflows/{DEPLOY_WORKFLOW}/runs"
     rc, out, err = _gh_api([f"repos/{fleet_repo}/actions/workflows/{DEPLOY_WORKFLOW}/runs?per_page=50"])
     if rc != 0:
@@ -979,13 +1029,13 @@ def _last_deploy(fleet_repo: str, name: str) -> dict:
         runs = json.loads(out).get("workflow_runs") or []
     except (json.JSONDecodeError, AttributeError):
         runs = []
-    prefix = f"Deploy {name} ("
+    pattern = re.compile(rf"^Deploy {re.escape(name)} \((?P<ref>[^)]*)\)(?: \S+)?$")
     for run in runs:
-        title = run.get("display_title") or run.get("name") or ""
-        if title.startswith(prefix):
+        match = pattern.match(run.get("display_title") or run.get("name") or "")
+        if match:
             return {"checked": True, "note": None, "run": {
                 "id": str(run.get("id")), "status": run.get("status"), "conclusion": run.get("conclusion"),
-                "created_at": run.get("created_at"), "ref": title[len(prefix):].rstrip(")"),
+                "created_at": run.get("created_at"), "ref": match.group("ref"),
                 "url": run.get("html_url") or _run_url(fleet_repo, run.get("id")),
             }}
     return {"checked": True, "run": None, "note": None}
@@ -1006,19 +1056,21 @@ def _register(fleet_repo: str, result: dict, inputs: dict, *, watch: bool, comma
     if register.unchecked:
         return {**result, **_outcome("check GitHub access", register.note)}
 
-    refused = _dispatch(fleet_repo, REGISTER_WORKFLOW, inputs)
-    if refused:
-        said, err = refused
+    dispatch = _dispatch(fleet_repo, REGISTER_WORKFLOW, inputs)
+    if dispatch.refused:
+        said, err = dispatch.refused, dispatch.stderr
         return {**result, **_outcome("dispatch the register workflow", (
             f"The register workflow could not be dispatched in {fleet_repo}: {said}. "
             f"{_fix_for(err, f'access to dispatch workflows in {fleet_repo}')} run this command again: {command}"
         ))}
     result["dispatched"] = True
-    result["run_id"] = _latest_run_id(fleet_repo, REGISTER_WORKFLOW)
+    result["request_id"] = dispatch.request_id
+    result["run_id"] = _find_run(fleet_repo, REGISTER_WORKFLOW, dispatch)
     result["run_url"] = _run_url(fleet_repo, result["run_id"])
     if not result["run_id"]:
         return {**result, **_outcome("check the run", (
-            f"Dispatched {REGISTER_WORKFLOW} in {fleet_repo}, but its run could not be found yet. Check the "
+            f"Dispatched {REGISTER_WORKFLOW} in {fleet_repo}, but no run carrying its request id {dispatch.request_id} "
+            f"appeared within {RUN_APPEAR_TIMEOUT} seconds, so no result is reported (an older run's never is). Check the "
             f"repo's Actions tab for the register run, then `gapp ci status {result.get('name')}`."
         ))}
     if not watch:
@@ -1234,19 +1286,21 @@ def deploy_deployment(name: str, *, ref: str = "main", watch: bool = True) -> di
     if deploy.unchecked:
         return {**result, **_outcome("check GitHub access", deploy.note)}
 
-    refused = _dispatch(fleet_repo, DEPLOY_WORKFLOW, {"deployment": result["name"], "ref": ref})
-    if refused:
-        said, err = refused
+    dispatch = _dispatch(fleet_repo, DEPLOY_WORKFLOW, {"deployment": result["name"], "ref": ref})
+    if dispatch.refused:
+        said, err = dispatch.refused, dispatch.stderr
         return {**result, **_outcome("dispatch the deploy workflow", (
             f"The deploy workflow could not be dispatched in {fleet_repo}: {said}. "
             f"{_fix_for(err, f'access to dispatch workflows in {fleet_repo}')} run `gapp ci deploy {result['name']}` again."
         ))}
-    result["run_id"] = _latest_run_id(fleet_repo, DEPLOY_WORKFLOW)
+    result["request_id"] = dispatch.request_id
+    result["run_id"] = _find_run(fleet_repo, DEPLOY_WORKFLOW, dispatch)
     result["run_url"] = _run_url(fleet_repo, result["run_id"])
     if not result["run_id"]:
         return {**result, **_outcome("check the run", (
-            f"Dispatched {DEPLOY_WORKFLOW} in {fleet_repo} for '{result['name']}', but its run could not be found "
-            f"yet. Check the repo's Actions tab, or `gapp ci status {result['name']}`."
+            f"Dispatched {DEPLOY_WORKFLOW} in {fleet_repo} for '{result['name']}', but no run carrying its request id "
+            f"{dispatch.request_id} appeared within {RUN_APPEAR_TIMEOUT} seconds, so no result is reported (an older "
+            f"run's never is). Check the repo's Actions tab, or `gapp ci status {result['name']}`."
         ))}
     if not watch:
         return result
@@ -1348,20 +1402,22 @@ def status_live(name: str) -> dict:
     if workflow.unchecked:
         return {**result, **_outcome("check GitHub access", workflow.note)}
 
-    refused = _dispatch(fleet_repo, STATUS_WORKFLOW, {"deployment": result["name"]})
-    if refused:
-        said, err = refused
+    dispatch = _dispatch(fleet_repo, STATUS_WORKFLOW, {"deployment": result["name"]})
+    if dispatch.refused:
+        said, err = dispatch.refused, dispatch.stderr
         return {**result, **_outcome("dispatch the status workflow", (
             f"The status workflow could not be dispatched in {fleet_repo}: {said}. "
             f"{_fix_for(err, f'access to dispatch workflows in {fleet_repo}')} run `gapp ci status {result['name']} --live` again."
         ))}
     result["dispatched"] = True
-    result["run_id"] = _latest_run_id(fleet_repo, STATUS_WORKFLOW)
+    result["request_id"] = dispatch.request_id
+    result["run_id"] = _find_run(fleet_repo, STATUS_WORKFLOW, dispatch)
     result["run_url"] = _run_url(fleet_repo, result["run_id"])
     if not result["run_id"]:
         return {**result, **_outcome("check the run", (
-            f"Dispatched {STATUS_WORKFLOW} in {fleet_repo} for '{result['name']}', but its run could not be found "
-            f"yet. Check the repo's Actions tab."
+            f"Dispatched {STATUS_WORKFLOW} in {fleet_repo} for '{result['name']}', but no run carrying its request id "
+            f"{dispatch.request_id} appeared within {RUN_APPEAR_TIMEOUT} seconds, so no live state is reported (an "
+            f"older run's never is). Check the repo's Actions tab, or run it again."
         ))}
     status, conclusion = _wait_for_run(fleet_repo, result["run_id"])
     result["conclusion"] = conclusion

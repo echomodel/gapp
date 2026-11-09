@@ -23,6 +23,14 @@ Fixes found by the first real run of 4.0.0rc1:
 - `ci status --live` and `ci setup` read only the lines a step printed,
   never the step's script that GitHub echoes into the log, so a failure
   no longer quotes unexpanded templates such as `$DEPLOYMENT`.
+- `ci deploy`, `ci status --live` and `ci setup` wait for the run their
+  own dispatch created. They reported the result of the workflow's
+  previous run when the new one was not listed yet. Each dispatch now
+  passes a `request_id` input that the workflows put at the end of the
+  run name; gapp accepts only a run carrying that id and created after the
+  dispatch, and says plainly when none appears in time. Re-run `gapp ci
+  init <fleet-repo>` to update the installed workflows; until then a
+  dispatch is refused with "Unexpected inputs" and that hint.
 
 ## 4.0.0rc1 (pre-release of 4.0.0)
 

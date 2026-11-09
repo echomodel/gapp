@@ -20,11 +20,16 @@
 # cleanly instead of overwriting each other.
 
 name: Register a gapp deployment
-run-name: Register ${{ inputs.name }}
+run-name: Register ${{ inputs.name }} ${{ inputs.request_id }}
 
 on:
   workflow_dispatch:
     inputs:
+      request_id:
+        description: Set by gapp to find the run this dispatch created (it ends the run name); leave empty when dispatching by hand
+        required: false
+        default: ''
+        type: string
       operation:
         description: set (add or update), copy (a new deployment from an existing one) or rename
         required: true
