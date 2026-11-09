@@ -24,8 +24,8 @@ silently.
 
 When status shows no project, the user needs one.
 
-**Find an existing project first.** `gapp list --all` shows every
-gapp solution across owner namespaces.
+**Find an existing project first.** `gapp list` shows every
+deployment on the projects marked `gapp=hosted`.
 
 - The solution already appears: it is deployed somewhere. Offer to
   attach to that project.
@@ -48,10 +48,8 @@ first time; later runs find the project among those marked
 for Terraform state and data and labels it (`gapp-deployment`,
 `gapp-version`), grants Cloud Build its permissions, and marks the
 project `gapp=hosted` once (it needs an Owner for that; a CI run
-never writes project labels). If another owner has a
-solution of the same name on that project, setup refuses with a
-cross-owner warning; pass `--force` only when the user means to
-share, because bucket and service names are owner-blind.
+never writes project labels). A deployment's name is unique within
+its project.
 
 Setup needs a project-admin identity. When this machine lacks one,
 `references/environment.md` says what to do.
@@ -282,9 +280,8 @@ the running service sees it on its next read. The solution's own
 skill or README says what belongs there and how it finds out.
 
 **Status and discovery.** `gapp status` for health, URL, custom
-domain state, and next step. `gapp list` for the active owner
-namespace, `gapp list --all` for every namespace, `gapp projects list`
-for env bindings. An expired or wrong gcloud login surfaces from these
+domain state, and next step. `gapp list` for every deployment on the
+hosted projects, `gapp projects list` for env bindings. An expired or wrong gcloud login surfaces from these
 as an authorization error naming the account; it is never reported as
 "not deployed", so take such an error at face value and fix the login.
 

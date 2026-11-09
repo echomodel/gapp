@@ -22,6 +22,22 @@ def get_legacy_file() -> Path:
     return get_config_dir() / "solutions.yaml"
 
 
+class ConfigError(RuntimeError):
+    """The user config holds something gapp does not accept."""
+
+
+def _refuse_removed_keys(data: dict, path: Path) -> None:
+    """gapp must not accept config it does not understand: an `owner:` key
+    (owner namespaces were removed in 4.0) is an error, never ignored."""
+    for name, settings in (data.get("profiles") or {}).items():
+        if isinstance(settings, dict) and "owner" in settings:
+            raise ConfigError(
+                f"Your gapp config {path} has an `owner:` key in profile '{name}'. Owner namespaces "
+                f"were removed in gapp 4.0, so gapp no longer accepts it: delete that line, then run "
+                f"the command again."
+            )
+
+
 def load_config() -> dict:
     """Load the global config (active profile + all profiles)."""
     path = get_config_file()
@@ -33,6 +49,7 @@ def load_config() -> dict:
                 data = {"active": "default", "profiles": {"default": data}}
             if "active" not in data:
                 data["active"] = "default"
+            _refuse_removed_keys(data, path)
             return data
     
     # Try legacy migration
@@ -41,11 +58,9 @@ def load_config() -> dict:
         with open(legacy_path) as f:
             legacy_data = yaml.safe_load(f) or {}
         
-        owner = legacy_data.get("owner") or legacy_data.get("defaults", {}).get("owner")
         account = legacy_data.get("account")
-        
+
         p = {"discovery": "on"}
-        if owner: p["owner"] = owner
         if account: p["account"] = account
         
         return {

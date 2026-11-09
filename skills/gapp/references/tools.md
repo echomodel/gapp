@@ -7,12 +7,12 @@ noted.
 | Operation | CLI | MCP tool | Notes |
 |---|---|---|---|
 | Live `gapp.yaml` JSON schema | `gapp manifest schema` | `gapp_schema` | single source of truth for fields |
-| View or set account and owner | `gapp config account <email>`, `gapp config owner <name>` | `gapp_user(account=, app_owner=)` | per-machine config |
+| View or set the account | `gapp config account <email>` | `gapp_user(account=)` | per-machine config |
 | Initialize or update `gapp.yaml` | `gapp init` | `gapp_init(entrypoint=, secrets=, domain=)` | idempotent; non-None params are written, others kept; `domain=""` removes a domain |
-| GCP foundation | `gapp setup <project-id> [--env e] [--force]` | `gapp_setup(project_id=, env=, force=)` | first run on a project needs the id; `force` bypasses the cross-owner check |
+| GCP foundation | `gapp setup <project-id> [--env e]` | `gapp_setup(project_id=, env=)` | first run on a project needs the id; marks the project `gapp=hosted` once (never from a CI run) |
 | Deploy | `gapp deploy [--env e] [--project p] [--ref r] [--replace-domain]` | `gapp_deploy(env=, project_id=, ref=, replace_domain=)` | build via Cloud Build, then terraform apply; blocking. Refuses before terraform to replace or remove a live domain mapping without `--replace-domain`, and to map a domain the deploying identity has not verified |
 | Status | `gapp status [--solution s] [--env e] [--project p]` | `gapp_status(solution=, env=, project=)` | the direct system only (never CI); includes `next_step` and `domain` (`pending_dns`, `pending_cert`, `active`, `error`, with the CNAME target). With no usable Google Cloud identity it returns `next_step: sign in` with the login command rather than failing |
-| List solutions | `gapp list [--all]` | `gapp_list(all_owners=)` | `--all` crosses owner namespaces |
+| List solutions | `gapp list` | `gapp_list(project_limit=)` | every deployment on the projects marked `gapp=hosted` |
 | Secrets | `gapp secrets list`, `gapp secrets get <name> [--plaintext]`, `gapp secrets set <name> [value]` | `gapp_secret_list`, `gapp_secret_get(name, plaintext=)`, `gapp_secret_set(name, value)` | `get` returns a hash and length unless plaintext is requested |
 | Project env binding | `gapp projects set-env <id> <env> [--force]`, `gapp projects clear-env <id>`, `gapp projects list` | `gapp_projects_set_env`, `gapp_projects_clear_env`, `gapp_projects_list` | setup never writes `gapp-env`; only these do |
 | CI: the fleet repo | `gapp ci init [<owner>/<repo>] [--create] [--owner <org>]` | `gapp_ci_init(repo=, owner=, create=)` | the only operation that sets the fleet repo (gapp's local config). No args: shows the saved one, or finds the one repo tagged `gapp-ci` under the gh user (`owner=` for an org); several are listed, none gives the `--create` step. With a repo: sets it if it exists and installs or updates gapp's workflows and `gapp/deployments.yaml` (needs a `gh` that can write); `create` makes a new private fleet repo. A repo that does not exist, or exists when `create` is asked, is `ok: false` with the exact command |

@@ -16,21 +16,19 @@ def sdk():
     return GappSDK(provider=DummyCloudProvider())
 
 
-def test_owned_and_global_deployments(sdk):
-    """Owned and global deployments both read correctly."""
+def test_deployments_on_several_projects(sdk):
+    """Deployments on different hosted projects all list, each with its env."""
     sdk.provider.host("p1", "my-app", env="prod")
-    sdk.provider.host("p2", "status", owner="owner-a", env="dev")
+    sdk.provider.host("p2", "status", env="dev")
 
-    sdk.set_owner(None)
-    by_name = {a["name"]: a for a in sdk.list_apps(all_owners=True)["apps"]}
+    by_name = {a["name"]: a for a in sdk.list_apps()["apps"]}
 
     assert by_name["my-app"]["env"] == "prod"
-    assert by_name["my-app"]["owner"] == "global"
+    assert "owner" not in by_name["my-app"]
     assert by_name["my-app"]["contract_major"] == 4
     assert by_name["my-app"]["is_legacy"] is False
 
     assert by_name["status"]["env"] == "dev"
-    assert by_name["status"]["owner"] == "owner-a"
     assert by_name["status"]["contract_major"] == 4
 
 
@@ -38,8 +36,7 @@ def test_undefined_env(sdk):
     """A project with no gapp-env shows env=None for its deployments."""
     sdk.provider.host("p1", "my-app")
 
-    sdk.set_owner(None)
-    app = sdk.list_apps(all_owners=True)["apps"][0]
+    app = sdk.list_apps()["apps"][0]
 
     assert app["name"] == "my-app"
     assert app["env"] is None
@@ -50,7 +47,7 @@ def test_forward_compatibility(sdk):
     """A deployment labeled by a newer gapp build still lists, with its version."""
     sdk.provider.host("p1", "my-app", env="prod", version="9")
 
-    app = sdk.list_apps(all_owners=True)["apps"][0]
+    app = sdk.list_apps()["apps"][0]
 
     assert app["name"] == "my-app"
     assert app["env"] == "prod"
@@ -58,14 +55,12 @@ def test_forward_compatibility(sdk):
 
 
 def test_hyphens_in_names(sdk):
-    """Hyphens in deployment and owner names are kept."""
-    sdk.provider.host("p1", "multi-word-app", owner="owner-a")
+    """Hyphens in deployment names are kept."""
+    sdk.provider.host("p1", "multi-word-app")
 
-    sdk.set_owner("owner-a")
     app = sdk.list_apps()["apps"][0]
 
     assert app["name"] == "multi-word-app"
-    assert app["owner"] == "owner-a"
     assert app["env"] is None
 
 
@@ -78,12 +73,10 @@ def test_old_project_labels_and_unlabeled_buckets_are_not_apps(sdk):
     }
     sdk.provider.buckets["some-other-bucket"] = {"project": "p1", "labels": {"team": "x"}}
 
-    sdk.set_owner(None)
-    assert sdk.list_apps(all_owners=True)["apps"] == []
+    assert sdk.list_apps()["apps"] == []
 
 
 def test_projects_not_marked_hosted_are_not_listed(sdk):
     sdk.provider.host("p1", "my-app", hosted=False)
-    sdk.set_owner(None)
-    res = sdk.list_apps(all_owners=True)
+    res = sdk.list_apps()
     assert res["apps"] == [] and res["metadata"]["projects"]["count"] == 0

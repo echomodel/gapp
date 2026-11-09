@@ -27,7 +27,7 @@ class DummyCloudProvider(CloudProvider):
         self.services = {}  # (project_id, service_name) -> labels
         self.label_writes = []  # ("project" | "bucket", target, labels) in call order
 
-    def host(self, project_id: str, deployment: str, owner: Optional[str] = None,
+    def host(self, project_id: str, deployment: str,
              env: Optional[str] = None, version: str = "4", service: bool = True,
              hosted: bool = True) -> str:
         """Test setup: a deployment as gapp leaves it, on a project marked
@@ -38,8 +38,6 @@ class DummyCloudProvider(CloudProvider):
         if env:
             labels["gapp-env"] = env
         dep_labels = {"gapp-deployment": deployment, "gapp-version": version}
-        if owner:
-            dep_labels["gapp-owner"] = owner
         bucket = f"gapp-{deployment}-{project_id}".lower()
         self.buckets[bucket] = {"project": project_id, "labels": dict(dep_labels)}
         if service:

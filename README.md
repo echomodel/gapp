@@ -72,40 +72,18 @@ gapp deploy --env prod
 ```
 `gapp` ensures you never accidentally deploy to the wrong env: when `--env` is given, it verifies the resolved project's `gapp-env` label matches before applying.
 
-### **6. Team & Enterprise Isolation (Namespacing)**
-Work in shared organization projects without colliding with colleagues. By setting an **Owner**, you create an isolated namespace for your apps.
-
-```bash
-# View all global deployments
-gapp list --all
-
-# Set your workstation owner
-gapp config owner owner-a
-
-# Now 'list' only shows your apps
-gapp list
-
-# Try to setup an app that someone else already has on the same project
-gapp setup --project <pid>
-# FAILS (Layer-1 cross-owner check): gapp warns about the other owner.
-# Pass --force only if intentional — bucket and Cloud Run service names
-# are owner-blind, so two owners with the same solution name share resources.
-gapp setup --project <pid> --force
-```
+### **6. Teams and Shared Organizations**
+A deployment's name is unique within its GCP project. Teams that must not touch each other's deployments use separate projects (and IAM on them), or separate fleets; gapp has no owner namespaces.
 
 ### **7. Audit & Recovery**
-Use this when it's been a while and you have no idea where your apps are or what owner namespace you were using.
+Use this when it's been a while and you have no idea where your apps are.
 ```bash
-# Audit everything across your entire GCP footprint
-gapp list --all
+# Every deployment on every project marked gapp=hosted
+gapp list
 
 # Result:
-#   app-a    project-123    <global>      <undefined>   v-4
-#   app-b    project-456    owner-a       prod          v-4
-
-# Insight: Now you know you have one global app (no owner declared) and
-# one owned by 'owner-a' under env=prod. You can set your owner to 'owner-a'
-# to work on app-b, or unset it to work on app-a.
+#   app-a    project-123    <undefined>   v-4
+#   app-b    project-456    prod          v-4
 ```
 
 ### **8. Deploy From Anywhere (CI/CD)**
@@ -183,10 +161,9 @@ gapp deploy --project <project-id>
 ### **Configuration (`gapp config`)**
 *   `gapp config profile <name>`: Switch workstation profiles (e.g., `work`, `personal`).
 *   `gapp config account <email>`: Set the gcloud account used for operations.
-*   `gapp config owner [--unset]`: Set your namespace owner for shared projects.
 *   `gapp config discovery [on|off]`: Toggle the cloud registry search.
 
-> **Note on Enterprise Usage**: `gapp` follows your `gcloud` login wherever you go, but it also allows you to optionally work in a team or enterprise environment (e.g., a large GCP organization with thousands of users and projects) via the completely optional `owner` namespace configuration. You can use this to switch between team, personal, or org contexts at will, all without forcing that complexity on you as a required initial setup barrier.
+> **Note on Enterprise Usage**: `gapp` follows your `gcloud` login wherever you go. In a large organization, keep teams apart with GCP projects and IAM; switch between work and personal contexts with `gapp config profile`.
 
 ### **Fleet Management (`gapp projects`)**
 *   `gapp projects set-env <id> <env> [--force]`: Bind a project to a named env (writes the `gapp-env` label). `--force` required to overwrite an existing binding.
