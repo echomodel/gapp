@@ -30,6 +30,7 @@ def test_deploy_dry_run_singular(tmp_path, monkeypatch, sdk):
     assert res["dry_run"] is True
     assert res["name"] == "my-app"
     assert res["labels"] == "gapp-deployment=my-app, gapp-version=4"
+    assert "owner" not in res
     assert res["project_id"] == "proj-123"
     assert res["env"] == "prod"
 
@@ -54,19 +55,6 @@ def test_deploy_dry_run_workspace(tmp_path, monkeypatch, sdk):
 
     assert res["name"] == "app"
     assert len(res["services"]) == 2
-
-
-def test_deploy_dry_run_with_owner(tmp_path, monkeypatch, sdk):
-    """Dry-run includes the owner label."""
-    _repo(tmp_path, monkeypatch)
-    sdk.set_owner("owner-a")
-    sdk.provider.host("proj-123", "my-app", owner="owner-a")
-
-    res = sdk.deploy(dry_run=True)
-
-    assert res["owner"] == "owner-a"
-    assert res["labels"] == "gapp-deployment=my-app, gapp-version=4, gapp-owner=owner-a"
-    assert res["env"] is None  # project has no gapp-env binding
 
 
 def test_deploy_dry_run_no_setup_pending(tmp_path, monkeypatch, sdk):

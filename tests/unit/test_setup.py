@@ -43,19 +43,6 @@ def test_setup_enables_apis_and_creates_bucket(tmp_path, monkeypatch, sdk):
     assert res["label_status"] == "added"
 
 
-def test_setup_with_owner_namespace_drops_owner_from_bucket(tmp_path, monkeypatch, sdk):
-    """Bucket name is owner-blind; only the bucket's gapp-owner label carries the owner."""
-    _repo(tmp_path, monkeypatch)
-    sdk.set_owner("owner-a")
-
-    res = sdk.setup(project_id="test-proj-123")
-
-    assert res["bucket"] == "gapp-my-app-test-proj-123"
-    assert res["label_status"] == "added"
-    assert sdk.provider.buckets["gapp-my-app-test-proj-123"]["labels"]["gapp-owner"] == "owner-a"
-    assert sdk.provider.project_labels["test-proj-123"] == {"gapp": "hosted"}
-
-
 def test_setup_env_verifies_against_project_binding(tmp_path, monkeypatch, sdk):
     """If --env is passed, it must match the project's bound gapp-env."""
     _repo(tmp_path, monkeypatch)
@@ -86,24 +73,14 @@ def test_setup_undefined_env_with_env_arg_refuses(tmp_path, monkeypatch, sdk):
         sdk.setup(project_id="test-proj-123", env="prod")
 
 
-def test_setup_layer1_cross_owner_check(tmp_path, monkeypatch, sdk):
-    """Setup refuses if a different owner already has the same solution name."""
+def test_setup_has_no_owner_check_or_force(tmp_path, monkeypatch, sdk):
+    """Owner namespaces are gone: setup over an existing deployment just re-labels it."""
+    import inspect
     _repo(tmp_path, monkeypatch)
-    sdk.provider.host("test-proj-123", "my-app", owner="alice")
-
-    sdk.set_owner("bob")
-    with pytest.raises(RuntimeError, match="already has a solution named 'my-app' under owner='alice'"):
-        sdk.setup(project_id="test-proj-123")
-
-
-def test_setup_layer1_force_overrides(tmp_path, monkeypatch, sdk):
-    """force=True bypasses the cross-owner refusal."""
-    _repo(tmp_path, monkeypatch)
-    sdk.provider.host("test-proj-123", "my-app", owner="alice")
-
-    sdk.set_owner("bob")
-    sdk.setup(project_id="test-proj-123", force=True)
-    assert sdk.provider.buckets["gapp-my-app-test-proj-123"]["labels"]["gapp-owner"] == "bob"
+    sdk.provider.host("test-proj-123", "my-app")
+    sdk.provider.buckets["gapp-my-app-test-proj-123"]["labels"]["gapp-owner"] = "alice"   # stray
+    sdk.setup(project_id="test-proj-123")
+    assert "force" not in inspect.signature(sdk.setup).parameters
 
 
 def test_setup_idempotent(tmp_path, monkeypatch, sdk):

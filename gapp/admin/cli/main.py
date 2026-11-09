@@ -6,7 +6,7 @@ import click
 
 from gapp import __version__
 from gapp.admin.sdk.core import (
-    GappSDK, UNDEFINED_ENV_DISPLAY, GLOBAL_OWNER_DISPLAY,
+    GappSDK, UNDEFINED_ENV_DISPLAY,
 )
 
 
@@ -31,7 +31,6 @@ def config_group(sdk: GappSDK):
         click.echo(f"Active Profile: {profile}")
         click.echo("Settings:")
         click.echo(f"  gcloud account: {cfg.get('account', '(none)')}")
-        click.echo(f"  app owner:      {cfg.get('owner', '(none)')}")
         click.echo(f"  discovery:      {cfg.get('discovery', 'on').upper()}")
 
 
@@ -50,24 +49,6 @@ def config_account(sdk: GappSDK, email):
     else:
         current = sdk.get_account()
         click.echo(current if current else "No gcloud account configured.")
-
-
-@config_group.command("owner")
-@click.argument("name", required=False)
-@click.option("--unset", is_flag=True, help="Clear the current owner setting.")
-@click.pass_obj
-def config_owner(sdk: GappSDK, name, unset):
-    """View or set the global app owner for deployment labels."""
-    if unset:
-        sdk.set_owner(None)
-        click.echo("  App owner cleared.")
-        return
-    if name is not None:
-        sdk.set_owner(name)
-        click.echo(f"  App owner set to: {name}")
-    else:
-        current = sdk.get_owner()
-        click.echo(current if current else "No app owner configured.")
 
 
 @config_group.command("discovery")
@@ -151,14 +132,9 @@ def projects_clear_env(sdk: GappSDK, project_id):
 @projects_group.command("list")
 @click.pass_obj
 def projects_list(sdk: GappSDK):
-    """List GCP projects with gapp-env bindings.
-
-    The gapp-env label has no owner segment, so listing is owner-agnostic —
-    every owner sees the same set. There is no --all flag here.
-    """
+    """List GCP projects with gapp-env bindings."""
     res = sdk.list_target_projects()
-    owner_str = f"owner: {res['owner']}" if res["owner"] else GLOBAL_OWNER_DISPLAY
-    click.echo(f"\nProject Inventory ({owner_str}):")
+    click.echo("\nProject Inventory:")
     if not res["projects"]:
         click.echo("  No projects with env bindings found.")
     else:
@@ -197,9 +173,8 @@ def init(sdk: GappSDK):
 @click.option("--solution", default=None, help="Solution name.")
 @click.option("--env", default=None, help="Verify project's gapp-env matches.")
 @click.option("--project", "project_arg", help="Explicit GCP Project ID.")
-@click.option("--force", is_flag=True, help="Override Layer-1 cross-owner check.")
 @click.pass_obj
-def setup_cmd(sdk: GappSDK, project_id, solution, env, project_arg, force):
+def setup_cmd(sdk: GappSDK, project_id, solution, env, project_arg):
     """GCP foundation: enable APIs, create and label the solution bucket, mark the project hosted.
 
     Once per solution per project, idempotent. Needs a gcloud login with
@@ -210,7 +185,7 @@ def setup_cmd(sdk: GappSDK, project_id, solution, env, project_arg, force):
     """
     pid = project_arg or project_id
     try:
-        result = sdk.setup(pid, solution=solution, env=env, force=force)
+        result = sdk.setup(pid, solution=solution, env=env)
     except (RuntimeError, ValueError) as e:
         click.echo(f"  Error: {e}", err=True)
         raise SystemExit(1)
@@ -272,10 +247,6 @@ def deploy(sdk: GappSDK, ref, solution, env, project, dry_run, rebuild, replace_
         click.echo()
         click.echo("  DRY RUN: Project Deployment Preview")
         click.echo(f"    Solution:    {result['name']}")
-        if result["owner"]:
-            click.echo(f"    Owner:       {result['owner']}")
-        else:
-            click.echo(f"    Owner:       {GLOBAL_OWNER_DISPLAY}")
         click.echo(f"    Labels:      {result['labels']}")
         click.echo(f"    Environment: {env_str}")
         if result["project_id"]:
@@ -347,22 +318,11 @@ def status(sdk: GappSDK, solution, env, project):
 
 
 @main.command("list")
-@click.option(
-    "--all",
-    "all_owners",
-    is_flag=True,
-    help="Include apps from every owner namespace, not just the active owner.",
-)
 @click.option("--project-limit", default=50, help="Max projects to scan.")
 @click.pass_obj
-def list_cmd(sdk: GappSDK, all_owners, project_limit):
-    """List deployments found on projects marked gapp=hosted.
-
-    Without --all, listing is scoped to the active owner namespace (or to
-    global apps when no owner is configured). --all overrides that scope
-    and shows apps across every owner namespace.
-    """
-    res = sdk.list_apps(all_owners=all_owners, project_limit=project_limit)
+def list_cmd(sdk: GappSDK, project_limit):
+    """List deployments found on projects marked gapp=hosted."""
+    res = sdk.list_apps(project_limit=project_limit)
 
     for msg in res["messages"]:
         click.echo(msg)
@@ -370,17 +330,16 @@ def list_cmd(sdk: GappSDK, all_owners, project_limit):
     if not res["apps"]:
         click.echo("\n  No apps found.")
     else:
-        header = f"\n  {'App':<20} {'Project':<20} {'Owner':<15} {'Env':<14} {'Contract':<10}"
+        header = f"\n  {'App':<20} {'Project':<20} {'Env':<14} {'Contract':<10}"
         click.echo(header)
         click.echo("  " + "-" * (len(header) - 2))
         for app in res["apps"]:
             contract = "legacy" if app["is_legacy"] else f"v-{app['contract_major']}"
             env_disp = app["env"] or UNDEFINED_ENV_DISPLAY
-            owner_disp = app["owner"] if app["owner"] != "global" else GLOBAL_OWNER_DISPLAY
             marker = "  ⚠" if app.get("duplicate") else ""
             click.echo(
                 f"  {app['name']:<20} {app['project']:<20} "
-                f"{owner_disp:<15} {env_disp:<14} {contract:<10}{marker}"
+                f"{env_disp:<14} {contract:<10}{marker}"
             )
 
     click.echo(
@@ -1017,11 +976,15 @@ def secrets_set_cmd(name, value, solution, from_stdin):
 
 
 def cli_entry():
+    from gapp.admin.sdk.config import ConfigError
     from gapp.admin.sdk.schema import ManifestValidationError
     try:
         main(standalone_mode=True)
     except ManifestValidationError as e:
         click.echo(json_mod.dumps(e.to_dict(), indent=2), err=True)
+        sys.exit(1)
+    except ConfigError as e:
+        click.echo(f"  Error: {e}", err=True)
         sys.exit(1)
 
 

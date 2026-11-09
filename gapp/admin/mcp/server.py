@@ -44,23 +44,17 @@ def gapp_schema() -> dict:
 
 
 @_tool()
-def gapp_user(account: str | None = None, app_owner: str | None = None) -> dict:
-    """View or set the global gcloud account and app owner.
+def gapp_user(account: str | None = None) -> dict:
+    """View or set the global gcloud account.
 
     Args:
         account: Google account email for gcloud commands.
-        app_owner: Global app owner name for deployment labels.
     """
     from gapp.admin.sdk.core import GappSDK
     sdk = GappSDK()
     if account is not None:
         sdk.set_account(account)
-    if app_owner is not None:
-        sdk.set_owner(app_owner)
-    return {
-        "account": sdk.get_account(),
-        "app_owner": sdk.get_owner(),
-    }
+    return {"account": sdk.get_account()}
 
 
 @_tool()
@@ -96,12 +90,11 @@ def gapp_setup(
     project_id: str | None = None,
     solution: str | None = None,
     env: str | None = None,
-    force: bool = False,
 ) -> dict:
     """Set up GCP foundation for a gapp solution.
 
     Enables APIs, creates the per-solution GCS bucket and labels it
-    (gapp-deployment, gapp-version, gapp-owner when set), and marks the
+    (gapp-deployment, gapp-version), and marks the
     project gapp=hosted once (never from a CI run). NEVER writes the
     project's gapp-env binding — use gapp_projects_set_env for that.
 
@@ -114,12 +107,9 @@ def gapp_setup(
         env: Optional verification — must match the target project's
              bound env (gapp-env label). Reserved values like "default"
              are rejected; omit to skip verification.
-        force: Override the Layer-1 cross-owner check that refuses
-               installation when a different owner already has a solution
-               with the same name on the target project.
     """
     from gapp.admin.sdk.core import GappSDK
-    return GappSDK().setup(project_id, solution=solution, env=env, force=force)
+    return GappSDK().setup(project_id, solution=solution, env=env)
 
 
 @_tool()
@@ -532,28 +522,20 @@ def gapp_projects_clear_env(project_id: str) -> dict:
 
 @_tool()
 def gapp_projects_list() -> dict:
-    """List GCP projects that have a gapp-env binding.
-
-    No owner scoping — gapp-env is a single project-wide label with no owner
-    segment, so the same set is returned regardless of the active owner.
-    """
+    """List GCP projects that have a gapp-env binding."""
     from gapp.admin.sdk.core import GappSDK
     return GappSDK().list_target_projects()
 
 
 @_tool()
-def gapp_list(all_owners: bool = False, project_limit: int = 50) -> dict:
+def gapp_list(project_limit: int = 50) -> dict:
     """List deployments found on projects marked gapp=hosted.
 
     Args:
-        all_owners: When False (default), scope listing to the active owner
-            namespace (or global apps if no owner is configured). When True,
-            return apps across every owner namespace. Maps to the CLI flag
-            `--all` on `gapp list`.
         project_limit: Max hosted projects to scan (default 50).
     """
     from gapp.admin.sdk.core import GappSDK
-    return GappSDK().list_apps(all_owners=all_owners, project_limit=project_limit)
+    return GappSDK().list_apps(project_limit=project_limit)
 
 
 def main():

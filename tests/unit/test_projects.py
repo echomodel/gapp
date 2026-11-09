@@ -42,10 +42,10 @@ def test_set_env_overwrite_with_force_succeeds(sdk):
 
 def test_set_env_force_refuses_on_cross_project_corruption(sdk):
     """force=True still refuses if the rebind would create cross-project duplication."""
-    sdk.provider.host("p1", "my-app", owner="alice", env="prod")
-    sdk.provider.host("p2", "my-app", owner="alice", env="dev")
+    sdk.provider.host("p1", "my-app", env="prod")
+    sdk.provider.host("p2", "my-app", env="dev")
 
-    # Trying to rebind p2 from dev → prod would create alice/my-app/prod on
+    # Trying to rebind p2 from dev → prod would create my-app/prod on
     # both p1 and p2. Refuse even with force.
     with pytest.raises(RuntimeError, match="cross-project") as exc:
         sdk.set_project_env("p2", env="prod", force=True)

@@ -18,21 +18,16 @@ def test_profile_switching(sdk):
     assert sdk.is_discovery_on() is True
 
 
-def test_owner_and_account_scoping(sdk):
+def test_account_scoping(sdk):
     """Verify settings are scoped to the active profile."""
     sdk.set_active_profile("default")
-    sdk.set_owner("owner-a")
     sdk.set_account("test-user@example.com")
 
     sdk.set_active_profile("work")
-    sdk.set_owner("professional")
     sdk.set_account("other-user@example.com")
-
-    assert sdk.get_owner() == "professional"
     assert sdk.get_account() == "other-user@example.com"
 
     sdk.set_active_profile("default")
-    assert sdk.get_owner() == "owner-a"
     assert sdk.get_account() == "test-user@example.com"
 
 
@@ -44,23 +39,17 @@ def test_discovery_toggle(sdk):
 
 
 def test_deployment_labels(sdk):
-    """Every bucket and service carries gapp-deployment and gapp-version; gapp-owner only with an owner."""
-    sdk.set_owner(None)
+    """Every bucket and service carries gapp-deployment and gapp-version, and nothing else."""
     assert sdk.deployment_labels("my-app") == {"gapp-deployment": "my-app", "gapp-version": "4"}
 
-    sdk.set_owner("owner-a")
-    assert sdk.deployment_labels("my-app") == {
-        "gapp-deployment": "my-app", "gapp-version": "4", "gapp-owner": "owner-a"}
 
-
-def test_bucket_name_is_owner_blind_and_env_blind(sdk):
+def test_bucket_name_is_env_blind(sdk):
     """Bucket name is just gapp-{solution}-{project_id}."""
-    sdk.set_owner(None)
     assert sdk.get_bucket_name("my-app", "proj-123") == "gapp-my-app-proj-123"
 
-    sdk.set_owner("owner-a")
-    # Owner makes no difference to the bucket name — it lives at label/identity layer.
-    assert sdk.get_bucket_name("my-app", "proj-123") == "gapp-my-app-proj-123"
+
+def test_owner_namespaces_are_gone(sdk):
+    assert not hasattr(sdk, "get_owner") and not hasattr(sdk, "set_owner")
 
 
 def test_resolve_solution_from_cwd(tmp_path, monkeypatch, sdk):
