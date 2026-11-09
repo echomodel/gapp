@@ -292,7 +292,7 @@ def copy_entry(doc: dict, new: str, source: str, *, project: str | None = None,
             f"Pick another name."
         ))
     project = validate_project(project) if project else src.get("project")
-    keys = manifest_keys(src)
+    keys = manifest_keys(without_unknown_keys(src))
     keys.pop("domain", None)
     entry = {"id": allocate_id(doc, new, project), "repo": src.get("repo"), "project": project, **keys}
     entry = _apply_changes(entry, changes)

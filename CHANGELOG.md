@@ -25,6 +25,8 @@ Other changes:
 - Re-running `gapp ci setup <name> --repo <repo> --project <project>` on an
   existing deployment drops any key in its entry that gapp.yaml does not
   have, keeping the known keys and the domain.
+- `gapp ci setup <new> --copy-of <existing>` no longer copies keys gapp.yaml
+  does not have.
 - `gapp ci status <name>` no longer says "Deploy it" for an entry a deploy
   would refuse because it has keys gapp.yaml does not have. It says:
   "Next: rewrite the entry: gapp ci setup <name> --repo <repo> --project

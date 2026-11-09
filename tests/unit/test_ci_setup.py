@@ -350,6 +350,15 @@ def test_rerunning_setup_drops_unknown_keys_and_keeps_known_ones_and_the_domain(
     assert _setup()["action"] == "unchanged"                              # idempotent
 
 
+def test_copy_of_does_not_copy_unknown_keys():
+    doc = {"a": {"id": "a", "repo": "me/a", "project": "my-proj", "domain": "a.example.com", "colour": "x",
+                 "service": {"memory": "1Gi", "memroy": "2Gi"}, "env": [{"name": "A", "value": "1", "bogus": 1}]}}
+    _, entry, info = fleet.copy_entry(doc, "b", "a")
+    assert entry == {"id": "b", "repo": "me/a", "project": "my-proj", "service": {"memory": "1Gi"},
+                     "env": [{"name": "A", "value": "1"}]}
+    assert info["copied_env"] == ["A"]
+
+
 def test_set_entry_drops_unknown_keys_at_any_depth():
     doc = {"a": {"id": "a", "repo": "me/a", "project": "my-proj", "colour": "x", "public": True,
                  "service": {"memroy": "1Gi"}, "env": [{"name": "A", "value": "1", "bogus": 1}]}}
