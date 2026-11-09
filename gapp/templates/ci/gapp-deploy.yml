@@ -1,26 +1,27 @@
-# Generic deploy workflow for every gapp solution registered in this
-# repository. Installed and kept current by `gapp ci init`; gapp owns this
-# file, so do not edit it. Dispatch it with a solution name (`gapp ci
-# deploy`, or "Run workflow" on the Actions tab): the first job reads the
-# solution's entry from gapp/solutions.yaml, and the second runs in the
+# Generic deploy workflow for every deployment in this fleet repo.
+# Installed and kept current by `gapp ci init`; gapp owns this file, so do
+# not edit it. Dispatch it with a deployment name (`gapp ci deploy <name>`,
+# or "Run workflow" on the Actions tab): the first job reads the
+# deployment's entry from gapp/deployments.yaml, and the second runs in the
 # GitHub Environment named after the entry's project and calls gapp's
-# reusable deploy workflow with the entry's values. The Environment holds
-# the project's deploy identity (GAPP_WIF_PROVIDER and
-# GAPP_DEPLOY_SERVICE_ACCOUNT); a private solution repo is cloned with the
+# reusable deploy workflow with the entry's repo, id and gapp.yaml keys.
+# The Environment holds the project's deploy identity (GAPP_WIF_PROVIDER
+# and GAPP_DEPLOY_SERVICE_ACCOUNT); a private repo is cloned with the
 # hosting app whose id and key are this repository's HOSTING_GITHUB_APP_ID
 # variable and HOSTING_GITHUB_APP_PRIVATE_KEY secret.
 
-name: Deploy a gapp solution
+name: Deploy a gapp deployment
+run-name: Deploy ${{ inputs.deployment }} (${{ inputs.ref }})
 
 on:
   workflow_dispatch:
     inputs:
-      solution:
-        description: Solution to deploy (an entry in gapp/solutions.yaml)
+      deployment:
+        description: Deployment to deploy (an entry in gapp/deployments.yaml)
         required: true
         type: string
       ref:
-        description: Git ref of the solution repo to deploy (commit, tag, or branch)
+        description: Git ref of the deployed repo to deploy (commit, tag, or branch)
         required: false
         default: main
         type: string
@@ -29,7 +30,7 @@ permissions: {}
 
 jobs:
   resolve:
-    name: Look up the solution
+    name: Look up the deployment
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -37,48 +38,50 @@ jobs:
     outputs:
       repo: ${{ steps.entry.outputs.repo }}
       project: ${{ steps.entry.outputs.project }}
-      domain: ${{ steps.entry.outputs.domain }}
-      gapp_ref: ${{ steps.entry.outputs.gapp_ref }}
+      id: ${{ steps.entry.outputs.id }}
+      overlay: ${{ steps.entry.outputs.overlay }}
       app_id: ${{ steps.entry.outputs.app_id }}
     steps:
       - uses: actions/checkout@v4
         with:
-          sparse-checkout: gapp/solutions.yaml
+          sparse-checkout: gapp/deployments.yaml
           sparse-checkout-cone-mode: false
 
       - name: Read the entry
         id: entry
         env:
-          SOLUTION: ${{ inputs.solution }}
+          DEPLOYMENT: ${{ inputs.deployment }}
           APP_ID: ${{ vars.HOSTING_GITHUB_APP_ID }}
           GH_TOKEN: ${{ github.token }}
-          DATA_FILE: gapp/solutions.yaml
+          DATA_FILE: gapp/deployments.yaml
         run: |
           set -euo pipefail
           # The Go yq pre-installed on GitHub's Ubuntu runners. strenv() reads
           # the input from the environment, so it is never interpolated here.
-          count="$(yq '[.solutions[] | select(.name == strenv(SOLUTION))] | length' "$DATA_FILE")"
-          if [ "$count" != "1" ]; then
-            echo "gapp-deploy: '$SOLUTION' is not registered in $DATA_FILE. Register it first: gapp ci setup --solution $SOLUTION --solution-repo <owner>/<repo> --project <project>"
+          if [ "$(yq 'has(strenv(DEPLOYMENT))' "$DATA_FILE")" != "true" ]; then
+            echo "gapp-deploy: '$DEPLOYMENT' is not a deployment in $DATA_FILE. Set it up first: gapp ci setup $DEPLOYMENT --repo <owner>/<repo> --project <project>"
             exit 1
           fi
-          entry='.solutions[] | select(.name == strenv(SOLUTION))'
+          entry='.[strenv(DEPLOYMENT)]'
           repo="$(yq "$entry | .repo" "$DATA_FILE")"
           project="$(yq "$entry | .project" "$DATA_FILE")"
-          domain="$(yq "$entry | .domain // \"\"" "$DATA_FILE")"
-          gapp_ref="$(yq "$entry | .gapp_ref // \"\"" "$DATA_FILE")"
+          id="$(yq "$entry | .id // strenv(DEPLOYMENT)" "$DATA_FILE")"
+          # Every key but id, repo and project is a gapp.yaml key the deploy
+          # merges over the repo's gapp.yaml; name is set to the id so gapp
+          # keys every resource by it.
+          overlay="$(yq -o=json -I=0 "$entry | . as \$e | del(.id, .repo, .project) | .name = (\$e.id // strenv(DEPLOYMENT))" "$DATA_FILE")"
           # The deploy job runs in the Environment named after the project; it
           # must exist here, or the job cannot authenticate to GCP.
           if ! gh api "repos/$GITHUB_REPOSITORY/environments/$project" --silent 2>/dev/null; then
-            echo "gapp-deploy: this CI repo has no Environment named '$project', so the deploy cannot authenticate to GCP project $project. Run: gapp ci project setup $project"
+            echo "gapp-deploy: this fleet repo has no Environment named '$project', so the deploy cannot authenticate to GCP project $project. Run: gapp ci project setup $project"
             exit 1
           fi
-          # A public solution repo is cloned with the run's own token. Anything
-          # the token cannot read (private, or missing) needs the hosting app.
+          # A public repo is cloned with the run's own token. Anything the
+          # token cannot read (private, or missing) needs the hosting app.
           app_id=""
           if [ "$(gh api "repos/$repo" --jq .private 2>/dev/null || echo unreadable)" != "false" ]; then
             if [ -z "$APP_ID" ]; then
-              echo "gapp-deploy: $repo is not readable with the run's token (private, or it does not exist), and the hosting app's HOSTING_GITHUB_APP_ID variable is not set in this CI repo. For a private repo, store HOSTING_GITHUB_APP_ID and HOSTING_GITHUB_APP_PRIVATE_KEY (docs/CI.md, Private solution repos); otherwise check the repo name in $DATA_FILE."
+              echo "gapp-deploy: $repo is not readable with the run's token (private, or it does not exist), and the hosting app's HOSTING_GITHUB_APP_ID variable is not set in this fleet repo. For a private repo, store HOSTING_GITHUB_APP_ID and HOSTING_GITHUB_APP_PRIVATE_KEY (docs/CI.md, Private repos); otherwise check the repo in $DATA_FILE."
               exit 1
             fi
             app_id="$APP_ID"
@@ -86,11 +89,11 @@ jobs:
           {
             echo "repo=$repo"
             echo "project=$project"
-            echo "domain=$domain"
-            echo "gapp_ref=$gapp_ref"
+            echo "id=$id"
+            echo "overlay=$overlay"
             echo "app_id=$app_id"
           } >> "$GITHUB_OUTPUT"
-          echo "gapp-deploy: $SOLUTION -> $repo on project $project${domain:+, domain $domain}"
+          echo "gapp-deploy: $DEPLOYMENT -> $repo on project $project (id $id)"
 
   deploy:
     name: Deploy
@@ -104,9 +107,9 @@ jobs:
       ref: ${{ inputs.ref }}
       environment: ${{ needs.resolve.outputs.project }}
       gapp-repo: __GAPP_REPO__
-      gapp-ref: ${{ needs.resolve.outputs.gapp_ref || '__GAPP_REF__' }}
-      solution-name: ${{ inputs.solution }}
-      domain: ${{ needs.resolve.outputs.domain }}
+      gapp-ref: __GAPP_REF__
+      solution-name: ${{ needs.resolve.outputs.id }}
+      overlay: ${{ needs.resolve.outputs.overlay }}
       solution-repo-app-id: ${{ needs.resolve.outputs.app_id }}
     secrets:
       solution-repo-app-private-key: ${{ secrets.HOSTING_GITHUB_APP_PRIVATE_KEY }}

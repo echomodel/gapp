@@ -1,0 +1,99 @@
+# Read-only status workflow for the deployments of this fleet repo.
+# Installed and kept current by `gapp ci init`; gapp owns this file, so do
+# not edit it. `gapp ci status <name> --live` dispatches it: the first job
+# reads the deployment's entry from gapp/deployments.yaml, and the second
+# runs in the GitHub Environment named after the entry's project,
+# authenticates exactly as a deploy does (the project's existing deploy
+# identity, through Workload Identity Federation), runs `gapp status` for
+# the deployment's id and reports the result as one line the operator's
+# command prints. Nothing is written anywhere: live state is asked of the
+# project, never stored in this repository.
+
+name: Status of a gapp deployment
+run-name: Status ${{ inputs.deployment }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      deployment:
+        description: Deployment to ask about (an entry in gapp/deployments.yaml)
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  resolve:
+    name: Look up the deployment
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      project: ${{ steps.entry.outputs.project }}
+      id: ${{ steps.entry.outputs.id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: gapp/deployments.yaml
+          sparse-checkout-cone-mode: false
+
+      - name: Read the entry
+        id: entry
+        env:
+          DEPLOYMENT: ${{ inputs.deployment }}
+          DATA_FILE: gapp/deployments.yaml
+        run: |
+          set -euo pipefail
+          # The Go yq pre-installed on GitHub's Ubuntu runners. strenv() reads
+          # the input from the environment, so it is never interpolated here.
+          if [ "$(yq 'has(strenv(DEPLOYMENT))' "$DATA_FILE")" != "true" ]; then
+            echo "gapp-status: '$DEPLOYMENT' is not a deployment in $DATA_FILE. Set it up first: gapp ci setup $DEPLOYMENT --repo <owner>/<repo> --project <project>"
+            exit 1
+          fi
+          entry='.[strenv(DEPLOYMENT)]'
+          {
+            echo "project=$(yq "$entry | .project" "$DATA_FILE")"
+            echo "id=$(yq "$entry | .id // strenv(DEPLOYMENT)" "$DATA_FILE")"
+          } >> "$GITHUB_OUTPUT"
+
+  status:
+    name: Ask the project
+    needs: resolve
+    runs-on: ubuntu-latest
+    environment: ${{ needs.resolve.outputs.project }}
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Check the deploy identity
+        env:
+          ENVIRONMENT: ${{ needs.resolve.outputs.project }}
+          WIF_PROVIDER: ${{ vars.GAPP_WIF_PROVIDER }}
+          DEPLOY_SA: ${{ vars.GAPP_DEPLOY_SERVICE_ACCOUNT }}
+        run: |
+          missing=""
+          [ -n "$WIF_PROVIDER" ] || missing="GAPP_WIF_PROVIDER"
+          [ -n "$DEPLOY_SA" ] || missing="${missing:+$missing and }GAPP_DEPLOY_SERVICE_ACCOUNT"
+          if [ -n "$missing" ]; then
+            echo "gapp-status: the Environment '$ENVIRONMENT' of this fleet repo has no $missing variable, so this run cannot authenticate to GCP. Run: gapp ci project setup $ENVIRONMENT"
+            exit 1
+          fi
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GAPP_WIF_PROVIDER }}
+          service_account: ${{ vars.GAPP_DEPLOY_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Install gapp
+        run: pip install --quiet "gapp @ git+https://github.com/__GAPP_REPO__.git@__GAPP_REF__"
+
+      - name: Ask gapp status
+        env:
+          DEPLOYMENT: ${{ inputs.deployment }}
+          SOLUTION_ID: ${{ needs.resolve.outputs.id }}
+          PROJECT: ${{ needs.resolve.outputs.project }}
+        run: gapp ci runner status

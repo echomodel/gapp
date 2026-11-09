@@ -21,7 +21,6 @@ See CONTRIBUTING.md for the full model and resolution truth table.
 """
 
 import os
-import re
 import shutil
 import tempfile
 import time
@@ -278,52 +277,6 @@ class GappSDK:
             solution_name = get_solution_name(manifest, git_root)
             return {"name": solution_name, "project_id": None, "repo_path": str(git_root)}
         return None
-
-    def discover_github_repo(self, sol_ctx: dict) -> str | None:
-        """Read the GitHub repo (`owner/name`) from the solution
-        checkout's `origin` git remote.
-
-        Purely local — no `gh` CLI, no GitHub API calls. The git
-        remote URL is the source of truth: any caller of
-        `gapp ci setup` is necessarily working on the solution
-        they're setting up, so a checkout with an `origin` remote
-        is always available.
-
-        Returns `owner/name` or None. Returns None for:
-        - sol_ctx without a `repo_path` (name-only invocation from
-          outside any checkout — `setup_ci` raises its own error)
-        - repo_path that no longer exists on disk
-        - no `origin` remote, or `origin` not pointing at GitHub
-
-        Handles both HTTPS (`https://github.com/owner/name(.git)?`)
-        and SSH (`git@github.com:owner/name(.git)?`) remote formats.
-
-        Note on the v-3 regression this method addresses: prior to
-        the GappSDK consolidation, the SDK exposed
-        `context.resolve_full_context()` which populated a
-        `github_repo` field via a `gh repo view` call. The v-3
-        redesign dropped the populator but left
-        `setup_ci`'s `sol_ctx.get("github_repo")` read in place,
-        which always returned None. This method is the missing
-        reader, simplified to a single deterministic local read.
-        """
-        repo_path = sol_ctx.get("repo_path")
-        if not repo_path:
-            return None
-        expanded = Path(repo_path).expanduser()
-        if not expanded.exists():
-            return None
-        res = subprocess.run(
-            ["git", "remote", "get-url", "origin"],
-            capture_output=True, text=True, cwd=expanded,
-        )
-        if res.returncode != 0:
-            return None
-        url = res.stdout.strip()
-        # Match: https://github.com/owner/name(.git)? OR
-        #        git@github.com:owner/name(.git)?
-        m = re.search(r'github\.com[:/]([^/]+)/([^/]+?)(?:\.git)?/?$', url)
-        return f"{m.group(1)}/{m.group(2)}" if m else None
 
     def resolve_solution_with_project(
         self,
@@ -881,7 +834,8 @@ class GappSDK:
             ref=build_ref, rebuild=rebuild, replace_domain=replace_domain,
         )
 
-    def status(self, name: str | None = None, env: Optional[str] = None) -> StatusResult:
+    def status(self, name: str | None = None, env: Optional[str] = None,
+               project: Optional[str] = None) -> StatusResult:
         # Lenient: status is read-only and must work even if the local
         # gapp.yaml predates the current schema or is missing fields the
         # build pipeline would require. It reports the direct system only
@@ -899,7 +853,7 @@ class GappSDK:
                 )),
             )
         try:
-            ctx = self.resolve_solution_with_project(name, env=env, strict=False)
+            ctx = self.resolve_solution_with_project(name, env=env, project=project, strict=False)
         except CloudAccessError:
             return StatusResult(
                 initialized=True,
@@ -1020,14 +974,14 @@ class GappSDK:
                     f"Terraform destroys the old mapping before creating the new one, so "
                     f"{live} would stop serving. If the change is intended, re-run with "
                     f"--replace-domain (replace_domain=True); otherwise fix `domain:` in "
-                    f"gapp.yaml or the CI workflow's `domain:` input."
+                    f"gapp.yaml or the fleet entry's domain (`gapp ci setup <name> ... --domain`)."
                 )
             raise RuntimeError(
                 f"Refusing to remove the live domain mapping {live} of '{service_name}': "
                 f"this deploy sets no domain (none in gapp.yaml and none passed by CI). "
                 f"If removing it is intended, re-run with --replace-domain "
                 f"(replace_domain=True); otherwise set `domain: {live}` in gapp.yaml or "
-                f"pass it through the CI workflow's `domain:` input."
+                f"pass it through the fleet entry's domain (`gapp ci setup <name> ... --domain`)."
             )
 
         if requested and requested != live:

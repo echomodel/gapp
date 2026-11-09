@@ -1,10 +1,10 @@
 # Reusable workflow for deploying gapp solutions via GitHub Actions + WIF.
 #
-# This workflow is called from an operator's private CI repo, not from
-# the solution repo itself. The usual caller is the generic deploy
+# This workflow is called from an operator's private fleet repo, not from
+# the deployed repo itself. The usual caller is the generic deploy
 # workflow `gapp ci init` installs there (gapp/templates/ci/gapp-deploy.yml),
-# which looks the solution up in the CI repo's gapp/solutions.yaml and
-# passes its repo, project, domain and gapp ref. Any workflow can call it
+# which looks the deployment up in the fleet repo's gapp/deployments.yaml
+# and passes its repo, id and gapp.yaml keys. Any workflow can call it
 # the same way:
 #
 #   jobs:
@@ -16,7 +16,7 @@
 #       with:
 #         solution-repo: <owner>/example-app
 #         ref: ${{ inputs.ref }}
-#         # The usual form: the job runs in the CI repo's GitHub Environment
+#         # The usual form: the job runs in the fleet repo's GitHub Environment
 #         # named after the project id and reads GAPP_WIF_PROVIDER and
 #         # GAPP_DEPLOY_SERVICE_ACCOUNT from it (recorded by
 #         # `gapp ci project setup <project>`).
@@ -24,14 +24,16 @@
 #         # Or spell the identity out (no Environment):
 #         project-id: my-gcp-project
 #         project-number: '123456789012'
-#         # Optional scalar overlays (currently: domain). Keeps deployment-
-#         # specific values out of the solution repo's gapp.yaml — useful
-#         # when the solution repo is public:
-#         domain: example.subdomain.example.com
+#         # Optional: gapp.yaml keys to merge over the repo's gapp.yaml, as
+#         # a JSON object (the fleet entry's keys). Keeps deployment-specific
+#         # values out of the repo's gapp.yaml, which may be public:
+#         overlay: '{"name": "example-app", "domain": "app.example.com"}'
+#         # Or the one-key form kept for older callers:
+#         domain: app.example.com
 #         # Private solution repo only: the GitHub App installed on the
 #         # solution repo's owner, whose one-hour token clones the repo.
 #         # The id is an Actions variable and the key an Actions secret
-#         # of the CI repo.
+#         # of the fleet repo.
 #         solution-repo-app-id: ${{ vars.HOSTING_GITHUB_APP_ID }}
 #       secrets:
 #         solution-repo-app-private-key: ${{ secrets.HOSTING_GITHUB_APP_PRIVATE_KEY }}
@@ -53,7 +55,7 @@ on:
     inputs:
       environment:
         description: >-
-          Name of a GitHub Environment in the caller (CI) repo, normally
+          Name of a GitHub Environment in the caller (fleet) repo, normally
           the GCP project id. `gapp ci project setup <project>` records
           the project's deploy identity there as the Environment variables
           `GAPP_WIF_PROVIDER` and `GAPP_DEPLOY_SERVICE_ACCOUNT`; when this
@@ -69,7 +71,7 @@ on:
           Id of the GitHub App that may read the solution repo. When
           non-empty (together with the `solution-repo-app-private-key`
           secret), the checkout uses a token minted from that app instead
-          of the run's built-in token, which can read only the CI repo
+          of the run's built-in token, which can read only the fleet repo
           itself. Leave empty for a public solution repo: the workflow
           then behaves exactly as before this input existed.
         required: false
@@ -156,13 +158,22 @@ on:
         type: string
       domain:
         description: >-
-          Optional scalar overlay for gapp.yaml `domain:` field. When
-          non-empty, patches gapp.yaml in-place after checkout, before
-          gapp setup/deploy. When empty (default), no patching — the
-          solution-repo's committed gapp.yaml is used as-is. Lets the
-          operator keep deployment-specific domains out of the
-          solution repo (especially relevant when the solution repo is
-          public).
+          Optional one-key overlay for gapp.yaml `domain:`. When
+          non-empty, set on gapp.yaml after checkout, before gapp
+          setup/deploy; the same as passing `{"domain": "<d>"}` in
+          `overlay`. Kept for callers written before `overlay` existed.
+        required: false
+        default: ''
+        type: string
+      overlay:
+        description: >-
+          Optional JSON object of gapp.yaml keys merged over the repo's
+          committed gapp.yaml after checkout, before gapp setup/deploy:
+          mappings merge key by key, lists of named entries (such as
+          `env`) merge by name, anything else is replaced; when the repo
+          has no gapp.yaml the object becomes the whole file. The fleet
+          repo's deploy workflow passes the deployment's entry here, so
+          deployment-specific values never live in the deployed repo.
         required: false
         default: ''
         type: string
@@ -194,12 +205,12 @@ jobs:
           [ -n "$WIF_PROVIDER" ] || missing="GAPP_WIF_PROVIDER"
           [ -n "$DEPLOY_SA" ] || missing="${missing:+$missing and }GAPP_DEPLOY_SERVICE_ACCOUNT"
           if [ -n "$missing" ]; then
-            echo "::error::The Environment '$ENVIRONMENT' of the CI repo has no $missing variable, so this run cannot authenticate to GCP. Run: gapp ci project setup $ENVIRONMENT"
+            echo "::error::The Environment '$ENVIRONMENT' of the fleet repo has no $missing variable, so this run cannot authenticate to GCP. Run: gapp ci project setup $ENVIRONMENT"
             exit 1
           fi
 
-      # Private solution repos: the run's GITHUB_TOKEN can read only the
-      # CI repo, so a private solution repo fails at checkout with
+      # Private repos: the run's GITHUB_TOKEN can read only the fleet
+      # repo, so a private deployed repo fails at checkout with
       # "Repository not found". When the caller passes the hosting app's
       # id and private key, mint a token scoped to the one solution repo
       # (owner + name), read-only Contents, one hour. Both steps are
@@ -240,9 +251,9 @@ jobs:
           # The token is needed only for the clone; do not leave it in the
           # checkout's git config for the later steps.
           persist-credentials: false
-          # Check out into a subdirectory named after the solution so
+          # Check out into a subdirectory named after the deployment's id so
           # gapp's folder-name fallback (used when gapp.yaml omits a
-          # top-level `name:`) resolves to the right solution. Without
+          # top-level `name:` and no overlay sets it) resolves to it. Without
           # this, the default checkout path is the CALLER repo's
           # workspace (`/home/runner/work/<caller>/<caller>/`), and
           # `git rev-parse --show-toplevel`'s basename would be the
@@ -251,16 +262,6 @@ jobs:
           # declare an explicit `name:` in gapp.yaml are unaffected
           # either way.
           path: ${{ inputs.solution-name }}
-
-      - name: Apply caller scalar overlays to gapp.yaml
-        if: inputs.domain != ''
-        working-directory: ${{ inputs.solution-name }}
-        env:
-          DOMAIN: ${{ inputs.domain }}
-        run: |
-          # yq is pre-installed on ubuntu-latest (Mike Farah's Go yq).
-          # strenv() reads the value from the env to avoid shell quoting issues.
-          yq -i '.domain = strenv(DOMAIN)' gapp.yaml
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
@@ -283,6 +284,18 @@ jobs:
 
       - name: Install gapp
         run: pip install "gapp @ git+https://github.com/${{ inputs.gapp-repo }}.git@${{ inputs.gapp-ref }}"
+
+      # The deployment's gapp.yaml keys, merged over the repo's file (or
+      # written as the whole file when the repo has none). The entry
+      # governs: its `name` is the deployment's id, so gapp keys every
+      # resource by it whatever the repo's gapp.yaml says.
+      - name: Apply the deployment's gapp.yaml keys
+        if: inputs.overlay != '' || inputs.domain != ''
+        working-directory: ${{ inputs.solution-name }}
+        env:
+          OVERLAY: ${{ inputs.overlay }}
+          DOMAIN: ${{ inputs.domain }}
+        run: gapp ci runner overlay gapp.yaml
 
       - name: Setup and deploy
         working-directory: ${{ inputs.solution-name }}
