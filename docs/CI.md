@@ -325,7 +325,7 @@ A private deployed repo is supported. The principle "public repos must not depen
 
 ### GitHub Enterprise compatibility
 
-All `gapp ci` commands interact with GitHub exclusively through the `gh` CLI, which handles multi-host authentication natively. gapp never talks to GitHub directly, so it works with any GitHub instance that `gh` is authenticated against.
+All `gapp ci` commands interact with GitHub exclusively through `gh api` REST calls, never GraphQL (some sessions, a Claude Code cloud session among them, refuse GraphQL), and `gh` handles multi-host authentication natively. gapp never talks to GitHub directly, so it works with any GitHub instance that `gh` is authenticated against.
 
 ## CLI Design: Where CI Commands Live
 

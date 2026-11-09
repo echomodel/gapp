@@ -3,6 +3,27 @@
 Notable changes to gapp. Versions are git tags (`vX.Y.Z`); the version
 source is `gapp/__init__.py`.
 
+## Unreleased (4.0.0rc2)
+
+Fixes found by the first real run of 4.0.0rc1:
+
+- Every `gapp ci` GitHub call is now a REST call through `gh api`.
+  Dispatching a workflow from a Claude Code cloud session failed because
+  `gh workflow run` resolves the default branch through GraphQL, which
+  such sessions refuse; the dispatch now reads the default branch and
+  posts to the workflow's `dispatches` endpoint. Run logs, run watching,
+  the fleet repo search, repo creation and the topic go through REST too.
+- A refused dispatch or write suggests `gh auth login` only when GitHub
+  refused the login itself (401, not signed in); any other refusal names
+  the access needed instead.
+- The status workflow installs Terraform before `gapp status`, which
+  reads the deployment's Terraform outputs (`ci status --live` failed with
+  "No such file or directory: 'terraform'"). Re-run `gapp ci init
+  <fleet-repo>` to update the installed workflow.
+- `ci status --live` and `ci setup` read only the lines a step printed,
+  never the step's script that GitHub echoes into the log, so a failure
+  no longer quotes unexpanded templates such as `$DEPLOYMENT`.
+
 ## 4.0.0rc1 (pre-release of 4.0.0)
 
 gapp now has two fleet systems, kept apart. The root commands (`gapp

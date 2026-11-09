@@ -88,6 +88,11 @@ jobs:
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v2
 
+      # `gapp status` reads the deployment's Terraform outputs from its state
+      # in the project's bucket, so the runner needs terraform, as a deploy does.
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v3
+
       - name: Install gapp
         run: pip install --quiet "gapp @ git+https://github.com/__GAPP_REPO__.git@__GAPP_REF__"
 

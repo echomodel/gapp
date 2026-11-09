@@ -38,8 +38,8 @@ def test_init_without_a_saved_repo_finds_the_one_tagged_repo_and_saves_it(machin
     assert res["ok"] is True and res["fleet_repo"] == "me/fleet"
     assert "gapp-ci topic" in res["set_by"]
     assert config_mod.get_fleet_repo() == ("me/fleet", res["set_by"])
-    searches = [c for c, _ in machine.calls if c[:3] == ["gh", "search", "repos"]]
-    assert len(searches) == 1 and "--owner" in searches[0] and searches[0][searches[0].index("--owner") + 1] == "@me"
+    searches = [c for c, _ in machine.calls if "search/repositories" in c]
+    assert len(searches) == 1 and "q=topic:gapp-ci user:me" in searches[0]               # one REST search, the gh user
 
 
 def test_init_with_an_owner_searches_that_owner(machine):
@@ -47,8 +47,8 @@ def test_init_with_an_owner_searches_that_owner(machine):
     machine.topics["other-org/fleet"] = {"gapp-ci"}
     res = ci_mod.init_fleet(owner="other-org")
     assert res["fleet_repo"] == "other-org/fleet"
-    search = next(c for c, _ in machine.calls if c[:3] == ["gh", "search", "repos"])
-    assert search[search.index("--owner") + 1] == "other-org"
+    search = next(c for c, _ in machine.calls if "search/repositories" in c)
+    assert "q=topic:gapp-ci user:other-org" in search
 
 
 def test_init_lists_several_tagged_repos_and_stops(machine):
@@ -102,6 +102,26 @@ def test_init_with_a_missing_repo_stops_with_the_create_message(machine):
     assert res["ok"] is False
     assert res["next_step"]["hint"] == "acme/fleet doesn't exist. Create it as a new private fleet repo: gapp ci init acme/fleet --create"
     assert config_mod.get_fleet_repo() == (None, None)
+
+
+def test_init_create_makes_a_private_repo_under_an_org_through_rest(machine):
+    res = ci_mod.init_fleet(FLEET, create=True)
+    create = next(c for c, _ in machine.calls if "-X" in c and "POST" in c and c[c.index("-X") + 2].endswith("/repos"))
+    assert create[create.index("-X") + 2] == "orgs/acme/repos"                       # acme is not the gh user
+
+
+def test_init_create_under_the_gh_users_own_account_uses_user_repos(machine):
+    res = ci_mod.init_fleet("me/fleet", create=True)
+    assert res["ok"] is True and machine.created == ["me/fleet"]
+    create = next(c for c, _ in machine.calls if "-X" in c and "POST" in c and c[c.index("-X") + 2].endswith("repos"))
+    assert create[create.index("-X") + 2] == "user/repos"
+
+
+def test_init_adds_the_topic_keeping_the_repos_other_topics(machine):
+    machine.private[FLEET] = True
+    machine.topics[FLEET] = {"infra"}
+    ci_mod.init_fleet(FLEET)
+    assert machine.topics[FLEET] == {"infra", "gapp-ci"}
 
 
 def test_init_create_makes_a_private_tagged_populated_repo_and_sets_it(machine):

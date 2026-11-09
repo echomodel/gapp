@@ -64,8 +64,8 @@ def test_deploy_watches_and_reports_the_conclusion_and_a_failed_run_with_its_lin
     assert res["ok"] is True and res["watched"] is True and res["conclusion"] == "success"
     original = ci._dispatch
 
-    def failing(cmd):
-        out = original(cmd)
+    def failing(endpoint, payload):
+        out = original(endpoint, payload)
         for run in ci.runs.values():
             run["conclusion"] = "failure"
         return out
@@ -214,3 +214,59 @@ def test_list_verbose_adds_files_variables_and_legacy_workflows(ci):
     res = ci_mod.list_deployments(verbose=True)
     assert res["files"][ci_mod.DEPLOY_WORKFLOW_PATH]["current"] is False
     assert res["next_step"] == {"action": "ci init", "hint": f"gapp ci init {FLEET}"} and "Not current" in res["problem"]
+
+
+# -- reading a run's log: only what the steps printed --
+
+# A job log as GitHub returns it for the status workflow's resolve job on an
+# unknown deployment: the step's script is echoed first (its message
+# templates unexpanded), then what the step actually printed.
+REAL_SHAPED_LOG = "\n".join([
+    "﻿2026-11-09T05:30:00.0000000Z Requested labels: ubuntu-latest",
+    "2026-11-09T05:30:05.1000000Z ##[group]Run set -euo pipefail",
+    "2026-11-09T05:30:05.1000000Z \x1b[36;1mset -euo pipefail\x1b[0m",
+    "2026-11-09T05:30:05.1000000Z \x1b[36;1mif [ \"$(yq 'has(strenv(DEPLOYMENT))' \"$DATA_FILE\")\" != \"true\" ]; then\x1b[0m",
+    "2026-11-09T05:30:05.1000000Z \x1b[36;1m  echo \"gapp-status: '$DEPLOYMENT' is not a deployment in $DATA_FILE. Set it up first: gapp ci setup $DEPLOYMENT --repo <owner>/<repo> --project <project>\"\x1b[0m",
+    "2026-11-09T05:30:05.1000000Z \x1b[36;1m  echo \"gapp-status: the Environment '$ENVIRONMENT' of this fleet repo has no $missing variable\"\x1b[0m",
+    "2026-11-09T05:30:05.1000000Z \x1b[36;1mfi\x1b[0m",
+    "2026-11-09T05:30:05.1000000Z shell: /usr/bin/bash -e {0}",
+    "2026-11-09T05:30:05.1000000Z env:",
+    "2026-11-09T05:30:05.1000000Z   DEPLOYMENT: nope",
+    "2026-11-09T05:30:05.1000000Z ##[endgroup]",
+    "2026-11-09T05:30:05.9000000Z gapp-status: 'nope' is not a deployment in gapp/deployments.yaml. Set it up first: gapp ci setup nope --repo <owner>/<repo> --project <project>",
+    "2026-11-09T05:30:06.0000000Z ##[error]Process completed with exit code 1.",
+])
+
+
+def test_emitted_messages_skip_the_echoed_script_and_keep_what_the_step_printed():
+    messages = ci_mod._emitted_messages(REAL_SHAPED_LOG, ci_mod.STATUS_LOG_PREFIX)
+    assert messages == ["'nope' is not a deployment in gapp/deployments.yaml. Set it up first: "
+                        "gapp ci setup nope --repo <owner>/<repo> --project <project>"]
+    assert not any("$" in m for m in messages)
+
+
+def test_status_live_failure_quotes_only_the_printed_message(ci):
+    ci.status_outcome = lambda inputs: ("failure", [])
+    original = ci._status
+
+    def with_real_log(repo, inputs):
+        return "failure", REAL_SHAPED_LOG
+
+    ci._status = with_real_log
+    res = ci_mod.status_live("my-app")
+    assert res["ok"] is False
+    assert "'nope' is not a deployment in gapp/deployments.yaml" in res["next_step"]["hint"]
+    assert "$DEPLOYMENT" not in res["next_step"]["hint"] and "$missing" not in res["next_step"]["hint"]
+    ci._status = original
+
+
+def test_run_logs_are_read_through_rest_job_logs(ci):
+    ci_mod.status_live("my-app")
+    reads = [c[2] for c, _ in ci.calls if c[:2] == ["gh", "api"] and len(c) > 2]
+    assert any(r.endswith("/jobs") for r in reads) and any("/actions/jobs/" in r and r.endswith("/logs") for r in reads)
+
+
+def test_deploy_watch_polls_the_run_through_rest(ci):
+    res = ci_mod.deploy_deployment("my-app", watch=True)
+    assert res["ok"] is True and res["watched"] is True and res["conclusion"] == "success"
+    assert all(c[:2] == ["gh", "api"] for c, _ in ci.calls)

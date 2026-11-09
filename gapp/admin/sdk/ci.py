@@ -18,11 +18,16 @@ Rules this module keeps (CONTRIBUTING, "Rules of the CI system"):
 - Something is reported missing only when GitHub's answer confirms it does
   not exist; a refused or failed read is "couldn't check", with GitHub's
   own status and message and the request that failed.
+- Every GitHub call is a REST call through `gh api`. Higher-level `gh`
+  subcommands (`workflow run`, `run view`, `run watch`, `repo create`,
+  `repo edit`, `search`) reach for GraphQL, which some sessions (a Claude
+  Code cloud session, among others) do not allow.
 """
 
 from __future__ import annotations
 
 import base64
+import io
 import json
 import os
 import re
@@ -30,6 +35,7 @@ import shutil
 import subprocess
 import sys
 import time
+import zipfile
 from dataclasses import dataclass
 from importlib import resources
 
@@ -191,6 +197,20 @@ def _refused(stderr: str) -> str:
     """A failed write, in GitHub's words."""
     status, message = _gh_failure(stderr)
     return f"GitHub returned {status}: {message}" if status else (message or "gh gave no answer")
+
+
+def _is_auth_failure(stderr: str) -> bool:
+    """Whether gh failed for want of a usable login (401, or not signed in), not for another refusal."""
+    status, message = _gh_failure(stderr)
+    lowered = (stderr or "").lower()
+    return status == 401 or "gh auth login" in lowered or "not logged" in lowered or "authentication required" in lowered
+
+
+def _fix_for(stderr: str, need: str) -> str:
+    """The fix for a refused call: sign in only when the refusal was about the login; else name what's needed."""
+    if _is_auth_failure(stderr):
+        return f"Sign in with `gh auth login` as an account that has {need}, then"
+    return f"GitHub refused the request itself, so check that the signed-in account has {need} and that this machine's GitHub access allows it; then"
 
 
 @dataclass
@@ -516,15 +536,17 @@ def _require(result: dict) -> tuple[str | None, dict | None]:
 
 
 def _search_fleet_repos(owner: str | None) -> tuple[list[str] | None, str | None]:
-    """Repos carrying the gapp-ci topic under an owner (the gh user when None): one call."""
-    rc, out, err = _gh(["search", "repos", "--topic", FLEET_TOPIC, "--owner", owner or "@me", "--json", "fullName"])
+    """Repos carrying the gapp-ci topic under an owner (the gh user when None): one REST search."""
+    who = owner or _gh_login()
+    query = f"topic:{FLEET_TOPIC} user:{who}"
+    request = f"GET search/repositories?q={query}"
+    rc, out, err = _gh_api(["-X", "GET", "search/repositories", "-f", f"q={query}", "-f", "per_page=100"])
     if rc != 0:
-        return None, _couldnt_check(f"the repos tagged {FLEET_TOPIC} under {owner or 'your account'}",
-                                    f"gh search repos --topic {FLEET_TOPIC} --owner {owner or '@me'}", err)
+        return None, _couldnt_check(f"the repos tagged {FLEET_TOPIC} under {owner or 'your account'}", request, err)
     try:
-        return sorted(r["fullName"] for r in json.loads(out or "[]")), None
-    except (json.JSONDecodeError, KeyError, TypeError):
-        return None, f"Couldn't check the repos tagged {FLEET_TOPIC}: gh returned an answer gapp did not recognise."
+        return sorted(r["full_name"] for r in (json.loads(out or "{}").get("items") or [])), None
+    except (json.JSONDecodeError, KeyError, TypeError, AttributeError):
+        return None, f"Couldn't check the repos tagged {FLEET_TOPIC}: GitHub returned an answer gapp did not recognise. Request: {request}"
 
 
 def init_fleet(repo: str | None = None, *, owner: str | None = None, create: bool = False) -> dict:
@@ -586,7 +608,11 @@ def init_fleet(repo: str | None = None, *, owner: str | None = None, create: boo
     if create:
         if exists:
             return {**result, **_outcome("use the existing repo", REPO_EXISTS_MESSAGE.format(repo=repo))}
-        rc, _, err = _gh(["repo", "create", repo, "--private", "--description", "gapp fleet: deployments and their workflows"])
+        owner_name, name = repo.split("/", 1)
+        endpoint = "user/repos" if owner_name.lower() == _gh_login().lower() else f"orgs/{owner_name}/repos"
+        rc, _, err = _gh_api(["-X", "POST", endpoint], {
+            "name": name, "private": True, "description": "gapp fleet: deployments and their workflows",
+        })
         if rc != 0:
             return {**result, **_outcome("create the fleet repo", (
                 f"{repo} could not be created: {_refused(err)}. Create it on GitHub (private), then run "
@@ -599,8 +625,7 @@ def init_fleet(repo: str | None = None, *, owner: str | None = None, create: boo
     set_fleet_repo(repo, f"gapp ci init {repo}" + (" --create" if create else ""))
     result.update(fleet_repo=repo, set_by=f"gapp ci init {repo}" + (" --create" if create else ""))
 
-    rc, _, err = _gh(["repo", "edit", repo, "--add-topic", FLEET_TOPIC])
-    result["topic"] = "set" if rc == 0 else f"not set: {_refused(err)}"
+    result["topic"] = _add_topic(repo)
 
     try:
         result["files"] = _install_operator_files(repo)
@@ -628,6 +653,21 @@ def init_fleet(repo: str | None = None, *, owner: str | None = None, create: boo
     else:
         result["next_step"] = {"action": "ci sources add", "hint": "gapp ci sources add <owner>"}
     return result
+
+
+def _add_topic(repo: str) -> str:
+    """Add the gapp-ci topic to a repo, keeping its other topics (REST)."""
+    rc, out, err = _gh_api([f"repos/{repo}/topics"])
+    if rc != 0:
+        return f"not set: {_refused(err)}"
+    try:
+        names = list(json.loads(out or "{}").get("names") or [])
+    except (json.JSONDecodeError, AttributeError):
+        names = []
+    if FLEET_TOPIC in names:
+        return "set"
+    rc, _, err = _gh_api(["-X", "PUT", f"repos/{repo}/topics"], {"names": names + [FLEET_TOPIC]})
+    return "set" if rc == 0 else f"not set: {_refused(err)}"
 
 
 def _retire_legacy_solutions_file(fleet_repo: str) -> dict | None:
@@ -773,8 +813,8 @@ def _sources_write(fleet_repo: str, owners: list[str], existed: bool) -> dict | 
     if rc != 0:
         return _outcome("sign in to gh with write access", (
             f"{ALLOWED_SOURCES_VAR} in {fleet_repo} could not be written: {_refused(err)}. "
-            f"`gapp ci sources` needs `gh` signed in with write access to {fleet_repo}; sign in with "
-            f"`gh auth login`, or set the variable from a machine that can:\n"
+            f"{_fix_for(err, f'write access to {fleet_repo}')} run the command again, or set the variable from a "
+            f"machine that can:\n"
             f"  gh variable set {ALLOWED_SOURCES_VAR} --repo {fleet_repo} --body {value or '<owners>'}"
         ))
     return None
@@ -827,13 +867,22 @@ def manage_sources(action: str, owner: str | None = None) -> dict:
 # --- workflow runs ---
 
 
-def _dispatch(fleet_repo: str, workflow_file: str, fields: dict[str, str]) -> str | None:
-    """Dispatch a workflow; returns None, or GitHub's refusal in words."""
-    cmd = ["workflow", "run", workflow_file, "--repo", fleet_repo]
-    for key, value in fields.items():
-        cmd += ["-f", f"{key}={value}"]
-    rc, _, err = _gh(cmd)
-    return None if rc == 0 else _refused(err)
+def _default_branch(repo: str) -> tuple[str | None, str]:
+    """The repo's default branch (REST), or (None, stderr)."""
+    rc, out, err = _gh_api([f"repos/{repo}", "--jq", ".default_branch"])
+    branch = out.strip()
+    return (branch, "") if rc == 0 and branch and branch != "null" else (None, err or "GitHub did not report a default branch")
+
+
+def _dispatch(fleet_repo: str, workflow_file: str, fields: dict[str, str]) -> tuple[str, str] | None:
+    """Dispatch a workflow on the fleet repo's default branch (REST); returns
+    None, or (GitHub's refusal in words, the raw stderr for choosing the fix)."""
+    branch, err = _default_branch(fleet_repo)
+    if branch is None:
+        return f"its default branch could not be read: {_refused(err)}", err
+    rc, _, err = _gh_api(["-X", "POST", f"repos/{fleet_repo}/actions/workflows/{workflow_file}/dispatches"],
+                         {"ref": branch, "inputs": dict(fields)})
+    return None if rc == 0 else (_refused(err), err)
 
 
 def _latest_run_id(fleet_repo: str, workflow_file: str) -> str | None:
@@ -865,12 +914,49 @@ def _wait_for_run(fleet_repo: str, run_id: str, timeout: int = 900) -> tuple[str
         time.sleep(5)
 
 
+# A line a step printed, as GitHub stores it in a job log: an ISO timestamp,
+# one space, then the text. GitHub also echoes each `run:` script into the
+# log (under "##[group]Run ...", lines starting with a colour code or with
+# spaces), so a message counts only when the printed text itself starts
+# with the prefix.
+_LOG_LINE = re.compile(r"^\ufeff?\d{4}-\d{2}-\d{2}T[\d:.]+Z (?P<text>.*)$")
+
+
+def _emitted_messages(log_text: str, prefix: str) -> list[str]:
+    """The messages a run's steps printed with `prefix`, never the echoed script."""
+    messages = []
+    for line in (log_text or "").splitlines():
+        match = _LOG_LINE.match(line)
+        text = match.group("text") if match else line
+        if text.startswith(prefix):
+            messages.append(text[len(prefix):].strip())
+    return messages
+
+
+def _run_log(fleet_repo: str, run_id: str) -> str:
+    """The text of every job log of a run (REST): per job, then the run's zip as a fallback."""
+    rc, out, _ = _gh_api([f"repos/{fleet_repo}/actions/runs/{run_id}/jobs", "--jq", ".jobs[].id"])
+    texts = []
+    if rc == 0:
+        for job_id in out.split():
+            rc, log, _ = _gh_api([f"repos/{fleet_repo}/actions/jobs/{job_id}/logs"])
+            if rc == 0:
+                texts.append(log)
+    if texts:
+        return "\n".join(texts)
+    res = subprocess.run(["gh", "api", f"repos/{fleet_repo}/actions/runs/{run_id}/logs"], capture_output=True)
+    if res.returncode != 0 or not res.stdout:
+        return ""
+    try:
+        with zipfile.ZipFile(io.BytesIO(res.stdout)) as archive:
+            return "\n".join(archive.read(n).decode("utf-8", "replace") for n in archive.namelist() if "/" not in n)
+    except zipfile.BadZipFile:
+        return ""
+
+
 def _run_messages(fleet_repo: str, run_id: str, prefix: str) -> list[str]:
-    """The lines a run printed for the operator (those carrying `prefix`)."""
-    rc, out, _ = _gh(["run", "view", run_id, "--repo", fleet_repo, "--log"])
-    if rc != 0:
-        return []
-    return [line[line.index(prefix) + len(prefix):].strip() for line in out.splitlines() if prefix in line]
+    """The lines a run's steps printed for the operator (those starting with `prefix`)."""
+    return _emitted_messages(_run_log(fleet_repo, run_id), prefix)
 
 
 def _run_url(fleet_repo: str, run_id: str | None) -> str | None:
@@ -922,10 +1008,10 @@ def _register(fleet_repo: str, result: dict, inputs: dict, *, watch: bool, comma
 
     refused = _dispatch(fleet_repo, REGISTER_WORKFLOW, inputs)
     if refused:
+        said, err = refused
         return {**result, **_outcome("dispatch the register workflow", (
-            f"The register workflow could not be dispatched in {fleet_repo}: {refused}. This needs a `gh` "
-            f"signed in with access to dispatch workflows in {fleet_repo} (`gh auth login`), then run "
-            f"this command again: {command}"
+            f"The register workflow could not be dispatched in {fleet_repo}: {said}. "
+            f"{_fix_for(err, f'access to dispatch workflows in {fleet_repo}')} run this command again: {command}"
         ))}
     result["dispatched"] = True
     result["run_id"] = _latest_run_id(fleet_repo, REGISTER_WORKFLOW)
@@ -1150,9 +1236,10 @@ def deploy_deployment(name: str, *, ref: str = "main", watch: bool = True) -> di
 
     refused = _dispatch(fleet_repo, DEPLOY_WORKFLOW, {"deployment": result["name"], "ref": ref})
     if refused:
+        said, err = refused
         return {**result, **_outcome("dispatch the deploy workflow", (
-            f"The deploy workflow could not be dispatched in {fleet_repo}: {refused}. `gapp ci deploy` needs a "
-            f"`gh` signed in with access to dispatch workflows in {fleet_repo} (`gh auth login`)."
+            f"The deploy workflow could not be dispatched in {fleet_repo}: {said}. "
+            f"{_fix_for(err, f'access to dispatch workflows in {fleet_repo}')} run `gapp ci deploy {result['name']}` again."
         ))}
     result["run_id"] = _latest_run_id(fleet_repo, DEPLOY_WORKFLOW)
     result["run_url"] = _run_url(fleet_repo, result["run_id"])
@@ -1164,9 +1251,9 @@ def deploy_deployment(name: str, *, ref: str = "main", watch: bool = True) -> di
     if not watch:
         return result
 
-    subprocess.run(["gh", "run", "watch", result["run_id"], "--repo", fleet_repo])
+    status, conclusion = _wait_for_run(fleet_repo, result["run_id"], timeout=3600)
     result["watched"] = True
-    result["conclusion"] = _run_conclusion(fleet_repo, result["run_id"])
+    result["conclusion"] = conclusion if status == "completed" else _run_conclusion(fleet_repo, result["run_id"])
     if result["conclusion"] != "success":
         return {**result, **_outcome("read the run log", (
             f"'{result['name']}' didn't deploy: the run ended with '{result['conclusion'] or 'no conclusion'}': "
@@ -1263,9 +1350,10 @@ def status_live(name: str) -> dict:
 
     refused = _dispatch(fleet_repo, STATUS_WORKFLOW, {"deployment": result["name"]})
     if refused:
+        said, err = refused
         return {**result, **_outcome("dispatch the status workflow", (
-            f"The status workflow could not be dispatched in {fleet_repo}: {refused}. `gapp ci status --live` needs a "
-            f"`gh` signed in with access to dispatch workflows in {fleet_repo} (`gh auth login`)."
+            f"The status workflow could not be dispatched in {fleet_repo}: {said}. "
+            f"{_fix_for(err, f'access to dispatch workflows in {fleet_repo}')} run `gapp ci status {result['name']} --live` again."
         ))}
     result["dispatched"] = True
     result["run_id"] = _latest_run_id(fleet_repo, STATUS_WORKFLOW)

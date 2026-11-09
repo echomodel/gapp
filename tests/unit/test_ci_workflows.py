@@ -84,16 +84,27 @@ def test_status_workflow_is_read_only_and_asks_the_project_as_the_deploy_identit
     assert status["environment"] == "${{ needs.resolve.outputs.project }}"
     assert status["needs"] == "resolve"
     names = [s.get("name") for s in status["steps"]]
-    assert names == ["Check the deploy identity", "Authenticate to Google Cloud", "Set up gcloud", "Install gapp", "Ask gapp status"]
+    assert names == ["Check the deploy identity", "Authenticate to Google Cloud", "Set up gcloud", "Install Terraform",
+                     "Install gapp", "Ask gapp status"]
     auth = status["steps"][1]["with"]
     assert auth == {"workload_identity_provider": "${{ vars.GAPP_WIF_PROVIDER }}", "service_account": "${{ vars.GAPP_DEPLOY_SERVICE_ACCOUNT }}"}
     ask = status["steps"][-1]
     assert ask["run"] == "gapp ci runner status"
     assert ask["env"]["SOLUTION_ID"] == "${{ needs.resolve.outputs.id }}" and ask["env"]["PROJECT"] == "${{ needs.resolve.outputs.project }}"
-    assert status["steps"][3]["run"] == f'pip install --quiet "gapp @ git+https://github.com/{GAPP_REPO}.git@{GAPP_REF}"'
+    assert status["steps"][4]["run"] == f'pip install --quiet "gapp @ git+https://github.com/{GAPP_REPO}.git@{GAPP_REF}"'
     for step in [s for s in resolve["steps"] + status["steps"] if "run" in s]:
         assert "${{" not in step["run"]
     assert not any("PUT" in (s.get("run") or "") or "gh api -X" in (s.get("run") or "") for s in status["steps"])
+
+
+def test_status_workflow_installs_terraform_like_the_deploy_workflow():
+    """`gapp status` reads the deployment's Terraform outputs, so the runner needs terraform."""
+    status_steps = yaml.safe_load(_rendered(ci_mod.STATUS_WORKFLOW))["jobs"]["status"]["steps"]
+    deploy_steps = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "deploy.yml").read_text())["jobs"]["deploy"]["steps"]
+    uses = lambda steps: [s.get("uses") for s in steps if "terraform" in (s.get("uses") or "")]
+    assert uses(status_steps) == uses(deploy_steps) == ["hashicorp/setup-terraform@v3"]
+    names = [s.get("name") for s in status_steps]
+    assert names.index("Install Terraform") < names.index("Ask gapp status")
 
 
 def test_templates_ship_with_the_package():
