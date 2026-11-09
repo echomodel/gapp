@@ -130,7 +130,7 @@ def test_status_of_an_entry_with_unknown_keys_points_at_setup_instead_of_deploy(
     res = ci_mod.status_deployment("one")
     with_problem = len(ci.calls) - calls
     assert res["next_step"] == {"action": "ci setup",
-                                "hint": "rewrite the entry: gapp ci setup one --repo me/one --project my-proj"}
+                                "hint": "rewrite the entry: gapp ci setup one --repo me/one --project my-proj --update"}
     assert with_problem == calls_per_status(ci, "my-app")              # the same reads as a clean entry
 
 

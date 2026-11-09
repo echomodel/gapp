@@ -1124,14 +1124,25 @@ def _default_command(name, *, repo=None, project=None, domain=None, copy_of=None
     return " ".join(parts)
 
 
+def _entry_changes(before: dict, after: dict) -> list[str]:
+    """What an update does to an entry, one line per change: the domain, then each dropped key."""
+    lines = []
+    if before.get("domain") != after.get("domain"):
+        lines.append(f"domain: {before.get('domain') or '(none)'} → {after.get('domain') or '(none)'}")
+    lines += [f"would drop: {key}" for key in fleet.unknown_keys(fleet.manifest_keys(before))]
+    return lines
+
+
 def setup_deployment(name: str | None = None, *, repo: str | None = None, project: str | None = None,
                      domain: str | None = None, copy_of: str | None = None,
-                     watch: bool = True, command: str | None = None) -> dict:
+                     watch: bool = True, command: str | None = None, update: bool = False) -> dict:
     """Add or update a deployment of the fleet (`gapp ci setup`). Never uses gcloud, never reads the cwd.
 
     The name defaults to the repo's name, derived only from `repo`. Same
-    name and repo: an update of its domain (`domain` sets it or, as "",
-    removes it). With
+    name and repo: the same request is "unchanged"; a request that would
+    change the entry (`domain` set, or removed as "", or keys gapp.yaml
+    does not have dropped) is refused with the change shown
+    (`changes_shown`) unless `update` is True. With
     `copy_of`, a new deployment from an existing one: the same repo and
     gapp.yaml keys, never the id, the domain, deploy history or secret
     values; `project` defaults to the source's. Every refusal (name taken,
@@ -1141,7 +1152,7 @@ def setup_deployment(name: str | None = None, *, repo: str | None = None, projec
     """
     result = {"ok": True, "name": None, "repo": None, "project": None, "domain": None, "id": None,
               "fleet_repo": None, "copy_of": copy_of, "action": None, "changes": None,
-              "project_from_source": False,
+              "changes_shown": [], "project_from_source": False,
               "workflow": REGISTER_WORKFLOW, "dispatched": False, "run_id": None, "run_url": None,
               "conclusion": None, "result_code": None, "messages": [], "next_step": None}
     changes = {}
@@ -1195,6 +1206,14 @@ def setup_deployment(name: str | None = None, *, repo: str | None = None, projec
         if e.code == "repo-deployed":
             hint = f"{repo} can't be set up as {name}: {e.message}"
         return {**result, **_outcome(_refusal_action(e.code), hint)}
+    if operation == "set" and action == "updated":
+        result["changes_shown"] = _entry_changes(doc[name], entry)
+        if not update:
+            return {**result, **_outcome("pass --update", (
+                f"{name} already deploys {entry['repo']} to {entry['project']}. This would change its entry:\n"
+                + "".join(f"  {line}\n" for line in result["changes_shown"])
+                + f"Run it again with --update to apply: {command} --update"
+            ))}
     # The run confirms the action against the live file; only "unchanged" is final here.
     result.update(id=entry["id"], domain=entry.get("domain"), project=entry["project"],
                   action=action if action == "unchanged" else None)
@@ -1340,7 +1359,7 @@ def status_deployment(name: str) -> dict:
             f"so a deploy would refuse it."
         )
         result["next_step"] = {"action": "ci setup", "hint": (
-            f"rewrite the entry: gapp ci setup {result['name']} --repo {entry.get('repo')} --project {entry.get('project')}"
+            f"rewrite the entry: gapp ci setup {result['name']} --repo {entry.get('repo')} --project {entry.get('project')} --update"
         )}
     result["last_deploy"] = _last_deploy(fleet_repo, result["name"])
     return result
@@ -1588,10 +1607,9 @@ def runner_register(env: dict | None = None, out=print) -> int:
 
 
 def runner_overlay(path: str, overlay_json: str | None, domain: str | None = None) -> dict:
-    """The deploy run's overlay step: merge the deployment's gapp.yaml keys
-    (a JSON object) over the checked-out gapp.yaml, or write them as the
-    whole file when the repo has none. `domain` is the one-key form older
-    callers pass. Returns the resulting manifest."""
+    """The deploy run's overlay step: merge the deployment's entry keys (a
+    JSON object) over the checked-out gapp.yaml. `domain` is the one-key
+    form older callers pass. Returns the resulting manifest."""
     overlay = json.loads(overlay_json) if (overlay_json or "").strip() else {}
     if not isinstance(overlay, dict):
         raise RuntimeError("the overlay is not a JSON object")

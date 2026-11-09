@@ -1,9 +1,9 @@
 """The fleet file: `gapp/deployments.yaml` in the fleet repo.
 
 One entry per deployment, keyed by the operator-chosen name. An entry's
-own fields are `id`, `repo` and `project`; every other key is a gapp.yaml
-key, deep-merged over the deployed repo's gapp.yaml by the deploy run
-(or written as the whole file when the repo has none):
+own fields are `id`, `repo` and `project`, and it carries the deployment's
+domain; every other setting comes from the deployed repo's gapp.yaml. The
+deploy run merges the entry's keys over the repo's gapp.yaml:
 
     my-app:
       id: my-app
@@ -47,8 +47,9 @@ DEPLOYMENTS_FILE_INITIAL = """\
 # an entry through the register workflow and `gapp ci deploy` reads it.
 # One entry per deployment, keyed by its name: id (what the GCP resources
 # are keyed by), repo (owner/name), project (the GCP project id; the GitHub
-# Environment of the same name holds the deploy identity), and any
-# gapp.yaml keys to supply or override for this deployment.
+# Environment of the same name holds the deploy identity) and domain (set
+# with `gapp ci setup --domain`). Every other setting comes from the app
+# repo's own gapp.yaml.
 {}
 """
 

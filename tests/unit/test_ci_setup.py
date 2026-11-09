@@ -102,12 +102,14 @@ def test_setup_again_keeps_hand_edited_keys_and_the_domain_and_an_empty_domain_r
                  env=[{"name": "LOG_LEVEL", "value": "DEBUG"}])          # an entry carrying other known keys
     res = _setup()
     assert res["action"] == "unchanged" and res["domain"] == "mcp.example.com"
-    res = _setup(domain="d.example.com")
+    res = _setup(domain="d.example.com", update=True)
     assert res["action"] == "updated" and res["domain"] == "d.example.com"
+    assert res["changes_shown"] == ["domain: mcp.example.com → d.example.com"]
     entry = wired.deployments(FLEET)["my-app"]
     assert entry["domain"] == "d.example.com" and entry["env"] == [{"name": "LOG_LEVEL", "value": "DEBUG"}]
-    res = _setup(domain="")
+    res = _setup(domain="", update=True)
     assert res["action"] == "updated" and res["domain"] is None
+    assert res["changes_shown"] == ["domain: d.example.com → (none)"]
     assert "domain" not in wired.deployments(FLEET)["my-app"]
 
 
@@ -316,7 +318,7 @@ def test_rename_refuses_a_missing_deployment_or_a_taken_name(wired):
 def test_setup_has_no_working_directory_parameters():
     import inspect
     params = inspect.signature(ci_mod.setup_deployment).parameters
-    assert set(params) == {"name", "repo", "project", "domain", "copy_of", "watch", "command"}
+    assert set(params) == {"name", "repo", "project", "domain", "copy_of", "watch", "command", "update"}
     assert "solution" not in params and "solution_repo" not in params
 
 
@@ -339,8 +341,12 @@ def test_rerunning_setup_drops_unknown_keys_and_keeps_known_ones_and_the_domain(
     wired.deploy(FLEET, "my-app", "me/my-app", "my-proj", domain="mcp.example.com", colour="x",
                  service={"memory": "1Gi", "memroy": "2Gi"}, env=[{"name": "A", "value": "1", "bogus": 1}])
     assert ci_mod.status_deployment("my-app")["next_step"]["hint"] == (
-        "rewrite the entry: gapp ci setup my-app --repo me/my-app --project my-proj")
-    res = _setup()
+        "rewrite the entry: gapp ci setup my-app --repo me/my-app --project my-proj --update")
+    dispatched = len(wired.dispatched)
+    res = _setup()                                                        # no silent drop
+    assert res["ok"] is False and res["next_step"]["action"] == "pass --update" and len(wired.dispatched) == dispatched
+    assert res["changes_shown"] == ["would drop: env.0.bogus", "would drop: service.memroy", "would drop: colour"]
+    res = _setup(update=True)
     assert res["ok"] is True and res["action"] == "updated" and res["dispatched"] is True
     entry = wired.deployments(FLEET)["my-app"]
     assert entry == {"id": "my-app", "repo": "me/my-app", "project": "my-proj", "domain": "mcp.example.com",
@@ -348,6 +354,31 @@ def test_rerunning_setup_drops_unknown_keys_and_keeps_known_ones_and_the_domain(
     res = ci_mod.status_deployment("my-app")
     assert res["problem"] is None and res["next_step"] is None
     assert _setup()["action"] == "unchanged"                              # idempotent
+
+
+def test_a_change_to_an_existing_entry_is_shown_and_refused_without_update(wired):
+    _setup(domain="old.example.com")
+    wired.deploy(FLEET, "my-app", "me/my-app", "my-proj", domain="old.example.com", colour="x")
+    dispatched = len(wired.dispatched)
+    res = _setup(domain="new.example.com", command="gapp ci setup my-app --repo me/my-app --project my-proj --domain new.example.com")
+    assert res["ok"] is False and len(wired.dispatched) == dispatched
+    assert res["next_step"] == {"action": "pass --update", "hint": (
+        "my-app already deploys me/my-app to my-proj. This would change its entry:\n"
+        "  domain: old.example.com → new.example.com\n"
+        "  would drop: colour\n"
+        "Run it again with --update to apply: "
+        "gapp ci setup my-app --repo me/my-app --project my-proj --domain new.example.com --update")}
+    assert wired.deployments(FLEET)["my-app"]["domain"] == "old.example.com"        # nothing changed
+
+
+def test_a_domain_added_to_an_existing_entry_needs_update_and_a_new_entry_does_not(wired):
+    res = _setup()                                                        # brand-new: no --update needed
+    assert res["ok"] is True and res["action"] == "added"
+    res = _setup(domain="d.example.com")
+    assert res["ok"] is False and res["changes_shown"] == ["domain: (none) → d.example.com"]
+    assert _setup(domain="d.example.com", update=True)["action"] == "updated"
+    assert _setup(domain="d.example.com")["action"] == "unchanged"     # the same request again
+    assert _setup(update=True)["action"] == "unchanged"                 # leaving --domain off keeps it
 
 
 def test_copy_of_does_not_copy_unknown_keys():

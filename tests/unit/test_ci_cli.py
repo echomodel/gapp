@@ -339,3 +339,33 @@ def test_ci_commands_take_names_not_working_directory_defaults():
         help_text = _run(["ci", cmd, "--help"]).output
         assert "--solution" not in help_text and "current directory" not in help_text, cmd
     assert _run(["ci", "deploy"]).exit_code != 0 and _run(["ci", "status"]).exit_code != 0
+
+
+def test_setup_update_flag_and_its_output(monkeypatch):
+    calls = {}
+
+    def fake(name=None, **kw):
+        calls.update(kw)
+        return _setup_result(action="updated", result_code="updated", domain="new.example.com",
+                             changes_shown=["domain: old.example.com → new.example.com", "would drop: colour"])
+    monkeypatch.setattr(ci_mod, "setup_deployment", fake)
+    out = _run(["ci", "setup", "my-app", "--repo", "me/my-app", "--project", "my-proj",
+                "--domain", "new.example.com", "--update"]).output.splitlines()
+    assert calls["update"] is True
+    assert out[:3] == ["my-app updated (me/my-app to my-proj):",
+                       "  domain: old.example.com → new.example.com",
+                       "  dropped: colour"]
+    assert "Deploy it: gapp ci deploy my-app" in out
+    help_text = " ".join(_run(["ci", "setup", "--help"]).output.split())
+    assert ("--update Apply a change to an existing deployment's entry. Without it, setup shows the change "
+            "and makes none.") in help_text
+
+
+def test_setup_without_update_prints_the_change_and_exits_1(monkeypatch):
+    hint = ("my-app already deploys me/my-app to my-proj. This would change its entry:\n"
+            "  domain: old.example.com → new.example.com\n"
+            "Run it again with --update to apply: gapp ci setup my-app --repo me/my-app --project my-proj "
+            "--domain new.example.com --update")
+    monkeypatch.setattr(ci_mod, "setup_deployment", lambda name=None, **kw: _setup_result(dispatched=False) | ci_mod._outcome("pass --update", hint))
+    result = _run(["ci", "setup", "my-app", "--repo", "me/my-app", "--project", "my-proj", "--domain", "new.example.com"])
+    assert result.exit_code == 1 and result.output.strip() == hint

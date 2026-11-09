@@ -322,6 +322,7 @@ def gapp_ci_setup(
     project: str | None = None,
     domain: str | None = None,
     copy_of: str | None = None,
+    update: bool = False,
     watch: bool = True,
 ) -> dict:
     """Add or update a deployment of the fleet: `name` deploys `repo` to `project`. Never uses gcloud.
@@ -350,6 +351,7 @@ def gapp_ci_setup(
         project: GCP project id. Required unless copy_of (then the source's by default).
         domain: Custom domain the deploy maps; "" removes it; None keeps it.
         copy_of: An existing deployment to copy.
+        update: Apply a change to an existing entry. Without it, a change comes back as ok false with what would change (`changes_shown`).
         watch: Wait for the register run (default True); False returns after the dispatch.
 
     The result's action is added, updated or unchanged; dispatched, run_url,
@@ -357,7 +359,7 @@ def gapp_ci_setup(
     did not succeed.
     """
     from gapp.admin.sdk.ci import setup_deployment
-    return setup_deployment(name, repo=repo, project=project, domain=domain,
+    return setup_deployment(name, repo=repo, project=project, domain=domain, update=update,
                             copy_of=copy_of, watch=watch)
 
 

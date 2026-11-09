@@ -548,14 +548,16 @@ def ci_sources_list_cmd(verbose, json_out):
 @click.option("--project", default=None, metavar="PROJECT", help="GCP project id the deployment deploys to.")
 @click.option("--domain", default=None, help="Custom domain the deploy maps (a gapp.yaml key). Omit to keep the entry's; pass \"\" to remove it.")
 @click.option("--copy-of", default=None, metavar="EXISTING", help="Start NAME as a copy of an existing deployment (same repo and keys; its own id; no domain).")
+@click.option("--update", is_flag=True, help="Apply a change to an existing deployment's entry. Without it, setup shows the change and makes none.")
 @click.option("--no-watch", is_flag=True, help="Return after dispatching the register run instead of waiting for it.")
 @_ci_options
-def ci_setup_cmd(name, repo, project, domain, copy_of, no_watch, verbose, json_out):
+def ci_setup_cmd(name, repo, project, domain, copy_of, update, no_watch, verbose, json_out):
     """Add or update a deployment: NAME deploys --repo to --project. Mirrors `gapp setup` for the fleet.
 
     Never uses gcloud and never reads the working directory: the repo is
     named by --repo and the name defaults to the repo's name. Same name
-    again updates its domain (--domain). A repo already
+    again changes its entry only with --update; without it, setup shows
+    what would change. A repo already
     deployed under another name is refused: update that one, or add
     another deployment of it with --copy-of. Writes go through the fleet
     repo's register run, so this needs only a `gh` that can dispatch
@@ -568,7 +570,7 @@ def ci_setup_cmd(name, repo, project, domain, copy_of, no_watch, verbose, json_o
     """
     from gapp.admin.sdk.ci import setup_deployment
     command = "gapp " + " ".join(sys.argv[1:]) if sys.argv and sys.argv[0] else None
-    result = setup_deployment(name, repo=repo, project=project, domain=domain,
+    result = setup_deployment(name, repo=repo, project=project, domain=domain, update=update,
                               copy_of=copy_of, watch=not no_watch, command=command)
     if json_out:
         _emit_json(result)
@@ -592,6 +594,9 @@ def ci_setup_cmd(name, repo, project, domain, copy_of, no_watch, verbose, json_o
                          + (" (the same project as the source)." if result.get("project_from_source") else "."))
             lines.append(f"Set the secrets the app's gapp.yaml declares on {pj} before the first deploy: "
                          f"gapp secrets list shows them from the app's folder.")
+        elif result.get("action") == "updated" and result.get("changes_shown"):
+            lines.append(f"{nm} updated ({rp} to {pj}):")
+            lines += ["  " + c.replace("would drop:", "dropped:", 1) for c in result["changes_shown"]]
         else:
             lines.append(f"{rp} is set up to deploy to {pj} as {nm}.")
         if result.get("domain"):

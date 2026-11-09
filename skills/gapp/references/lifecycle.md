@@ -123,8 +123,9 @@ cloud agent. No terraform or gcloud on the deploying machine.
    never looks a project up in GCP. When the project is not yet
    trusted, or the owner not yet allowed, the command stops with a
    verbatim one-time message naming step 3 or step 2 and repeating the
-   command to run again; relay it as is. The same name again updates
-   the entry's keys; a repo already deployed under another name is
+   command to run again; relay it as is. The same name again changes
+   the entry only with `--update`; without it, setup shows what would
+   change, so show the user and ask before re-running; a repo already deployed under another name is
    refused, with the two ways on (update that one, or `--copy-of`).
    `repo` and `project` are the entry's own fields, and it carries the
    deployment's domain; every other setting comes from the app repo's
@@ -251,7 +252,7 @@ when the deploy would map a different domain or none. If the change
 is intended, re-run with `--replace-domain` (`replace_domain=True`
 on the SDK and MCP tool), then update the CNAME. If it is not, fix
 `domain:` in `gapp.yaml` or re-run `gapp ci setup <name> ... --domain`
-with the right value. A redeploy that keeps the same domain is never blocked,
+with the right value and `--update`. A redeploy that keeps the same domain is never blocked,
 even by an identity that did not verify the domain.
 If the Terraform state cannot be read, the deploy refuses before building,
 even with `--replace-domain`: fix the identity's access to the state bucket.
