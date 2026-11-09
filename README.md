@@ -154,8 +154,8 @@ gapp deploy --project <project-id>
 *   `gapp deploy [--ref <ref>] [--project <id>] [--rebuild] [--replace-domain]`: Build with Cloud Build and apply Terraform. `--replace-domain` is required for a deploy that would replace or remove the live custom domain mapping.
 *   `gapp status [<name>]`: Check infrastructure health, service URLs, and the custom domain's state (`pending_dns`, `pending_cert`, `active`, `error`). Reports the direct system only; with no usable Google Cloud identity it says so and names the login command instead of failing.
 *   `gapp secrets list [<name>]`: Show declared secrets, deploy-readiness, and remediation hints. See [Secrets, ownership, and recovery scenarios](docs/SECRETS.md) for the full label model and conflict-resolution guide.
-*   `gapp secrets get <secret>`: Fetch a secret value or its hash + length.
-*   `gapp secrets set <secret> [<value>]`: Store secrets in GCP Secret Manager.
+*   `gapp secrets get <secret-name>`: Fetch a secret value or its hash + length.
+*   `gapp secrets set <secret-name> [<value>]`: Store secrets in GCP Secret Manager.
 *   `gapp manifest schema`: Print the live JSON Schema for `gapp.yaml`.
 
 ### **CI/CD (`gapp ci`)**
