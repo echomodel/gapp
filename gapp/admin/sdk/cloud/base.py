@@ -130,13 +130,8 @@ class CloudProvider(ABC):
         pass
 
     @abstractmethod
-    def get_infrastructure_outputs(self, staging_dir: Path, bucket_name: str, state_prefix: str,
-                                   strict: bool = False) -> Optional[Dict]:
-        """Read output variables from existing Terraform state.
-
-        An empty state reads as {}. A state that cannot be read returns None,
-        or with strict raises CloudAccessError, for callers that must not take
-        "unreadable" for "nothing deployed"."""
+    def get_infrastructure_outputs(self, staging_dir: Path, bucket_name: str, state_prefix: str) -> Optional[Dict]:
+        """Read output variables from existing Terraform state."""
         pass
 
     # -- Miscellaneous --

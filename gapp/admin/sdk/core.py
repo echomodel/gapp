@@ -961,19 +961,9 @@ class GappSDK:
         mapping, so neither guard applies to it.
         """
         requested = (requested_domain or "").strip().lower()
-        # Fail closed: a state that cannot be read is not "no live mapping",
-        # or this deploy could remove or replace a domain that is serving.
-        try:
-            outputs = self.provider.get_infrastructure_outputs(
-                _get_staging_dir(service_name), bucket_name, state_prefix, strict=True,
-            ) or {}
-        except CloudAccessError as e:
-            raise CloudAccessError(
-                f"Refusing to deploy '{service_name}': its Terraform state could not be read, so gapp "
-                f"cannot tell whether a custom domain is mapped to it now, and deploying could take "
-                f"that domain down. Nothing was built or changed. Fix the access to the state bucket "
-                f"{bucket_name} for this identity, then deploy again. ({e})"
-            ) from e
+        outputs = self.provider.get_infrastructure_outputs(
+            _get_staging_dir(service_name), bucket_name, state_prefix,
+        ) or {}
         live = (outputs.get("custom_domain") or "").strip().lower()
 
         if live and live != requested and not replace_domain:

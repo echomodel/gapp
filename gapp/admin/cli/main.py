@@ -541,8 +541,6 @@ def ci_init_cmd(repo, owner, create, verbose, json_out):
             lines.append(f"Your fleet is kept in {result['fleet_repo']} (set by: {result.get('set_by') or 'unknown'}).")
         if repo or result.get("created"):
             lines.append(f"(Your fleet is kept in {result['fleet_repo']}.)")
-        if result.get("ready"):
-            lines.append(result["ready"])
     _ci_finish(result, *lines, verbose=verbose, details=_fleet_details(result))
 
 

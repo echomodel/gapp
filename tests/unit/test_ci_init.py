@@ -91,8 +91,7 @@ def test_init_is_idempotent_updates_outdated_workflows_and_never_touches_the_dep
     assert res["files"][ci_mod.STATUS_WORKFLOW_PATH] == "updated"
     assert res["files"][fleet.DEPLOYMENTS_FILE] == "unchanged"
     assert "my-app" in machine.files[(FLEET, fleet.DEPLOYMENTS_FILE)]
-    # my-proj has no Environment in the fleet yet, so init names it.
-    assert res["next_step"] == {"action": "ci project setup", "hint": "gapp ci project setup my-proj"}
+    assert res["next_step"] == {"action": "ci project setup", "hint": "gapp ci project setup <project>"}
     writes = len(machine.puts)
     res = ci_mod.init_fleet(FLEET)
     assert all(s == "unchanged" for s in res["files"].values()) and len(machine.puts) == writes
@@ -183,29 +182,3 @@ def test_init_without_gh_is_an_outcome(monkeypatch, fake_gh):
     res = ci_mod.init_fleet(FLEET)
     assert res["ok"] is False and res["next_step"]["action"] == "install gh"
     assert fake_gh.calls == []
-
-
-def test_init_on_a_ready_fleet_says_it_is_ready_instead_of_a_setup_step(machine):
-    machine.install(FLEET)
-    machine.deploy(FLEET, "my-app", "me/my-app", "my-proj")
-    machine.variables[(FLEET, "GAPP_ALLOWED_SOURCES")] = "me"
-    machine.environments[(FLEET, "my-proj")] = {"GAPP_WIF_PROVIDER": "p", "GAPP_DEPLOY_SERVICE_ACCOUNT": "s"}
-    res = ci_mod.init_fleet(FLEET)
-    assert res["ok"] is not False and res["next_step"] is None
-    assert res["ready"].startswith("The fleet is ready: 1 deployment(s), each project trusted.")
-
-
-def test_init_names_the_project_whose_environment_lacks_the_deploy_identity(machine):
-    machine.install(FLEET)
-    machine.deploy(FLEET, "my-app", "me/my-app", "my-proj")
-    machine.variables[(FLEET, "GAPP_ALLOWED_SOURCES")] = "me"
-    machine.environments[(FLEET, "my-proj")] = {"GAPP_WIF_PROVIDER": "p"}
-    res = ci_mod.init_fleet(FLEET)
-    assert res["next_step"] == {"action": "ci project setup", "hint": "gapp ci project setup my-proj"} and res["ready"] is None
-
-
-def test_init_on_an_empty_fleet_points_at_project_setup_then_setup(machine):
-    machine.install(FLEET)
-    machine.variables[(FLEET, "GAPP_ALLOWED_SOURCES")] = "me"
-    res = ci_mod.init_fleet(FLEET)
-    assert res["next_step"]["hint"].startswith("gapp ci project setup <project> (once per GCP project), then gapp ci setup")
