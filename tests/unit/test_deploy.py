@@ -658,3 +658,13 @@ def test_domain_is_verified_matches_exact_and_parent_only():
     assert not _domain_is_verified("mcp.example.com", ["ample.com"])      # not a label boundary
     assert not _domain_is_verified("mcp.example.com", ["mcp.example.com.au"])
     assert not _domain_is_verified("mcp.example.com", [])
+
+
+def test_deploy_fails_closed_when_the_terraform_state_cannot_be_read(tmp_path, monkeypatch, sdk):
+    """Unreadable state is not "no live mapping": the deploy refuses before any build or apply."""
+    builds = _domain_deploy(tmp_path, monkeypatch, sdk, "name: my-app\n", live_domain="mcp.example.com")
+    sdk.provider.unreadable_state.add(("gapp-my-app-proj-123", "terraform/state"))
+    with pytest.raises(RuntimeError, match="Refusing to deploy 'my-app': its Terraform state could not be read") as exc:
+        sdk.deploy(replace_domain=True)                    # not even the flag gets past an unknown state
+    assert "Nothing was built or changed" in str(exc.value) and "gapp-my-app-proj-123" in str(exc.value)
+    assert builds["count"] == 0 and sdk.provider.last_tfvars is None

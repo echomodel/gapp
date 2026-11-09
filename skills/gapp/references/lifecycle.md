@@ -259,6 +259,8 @@ on the SDK and MCP tool), then update the CNAME. If it is not, fix
 `domain:` in `gapp.yaml` or re-run `gapp ci setup <name> ... --domain`
 with the right value. A redeploy that keeps the same domain is never blocked,
 even by an identity that did not verify the domain.
+If the Terraform state cannot be read, the deploy refuses before building,
+even with `--replace-domain`: fix the identity's access to the state bucket.
 
 ## Ongoing operations
 

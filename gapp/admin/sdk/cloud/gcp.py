@@ -221,6 +221,13 @@ class GCPProvider(CloudProvider):
             stderr = (res.stderr or "").strip()
             if "not found" in stderr.lower() or "NOT_FOUND" in stderr:
                 return None
+            if "command group installed" in stderr or "components: [beta]" in stderr:
+                raise CloudAccessError(
+                    f"Could not describe the domain mapping for {domain}: this machine's gcloud has no beta "
+                    f"component, which `gcloud beta run domain-mappings` needs. Install it with "
+                    f"`gcloud components install beta` (in a workflow: setup-gcloud with "
+                    f"`install_components: beta`; `gapp ci init <fleet-repo>` updates gapp's workflows)."
+                )
             raise CloudAccessError(
                 f"Could not describe the domain mapping for {domain} on project "
                 f"'{project_id}' (gcloud exit {res.returncode}): {stderr}\n{self._identity_hint()}"
@@ -350,18 +357,25 @@ class GCPProvider(CloudProvider):
         outputs = json.loads(res.stdout) if res.returncode == 0 else {}
         return {k: v.get("value") for k, v in outputs.items()}
 
-    def get_infrastructure_outputs(self, staging_dir: Path, bucket_name: str, state_prefix: str) -> Optional[Dict]:
+    def get_infrastructure_outputs(self, staging_dir: Path, bucket_name: str, state_prefix: str,
+                                   strict: bool = False) -> Optional[Dict]:
         token = self.get_auth_token()
         env = os.environ.copy()
         env["GOOGLE_OAUTH_ACCESS_TOKEN"] = token
         if self.account: env["CLOUDSDK_CORE_ACCOUNT"] = self.account
 
         _stage_terraform(staging_dir)
-        res = subprocess.run(["terraform", "init", f"-backend-config=bucket={bucket_name}", f"-backend-config=prefix={state_prefix}", "-input=false", "-upgrade"], cwd=staging_dir, env=env, capture_output=True)
-        if res.returncode != 0: return None
+        res = subprocess.run(["terraform", "init", f"-backend-config=bucket={bucket_name}", f"-backend-config=prefix={state_prefix}", "-input=false", "-upgrade"], cwd=staging_dir, env=env, capture_output=True, text=True)
+        if res.returncode != 0:
+            if strict:
+                raise CloudAccessError(f"terraform init against gs://{bucket_name}/{state_prefix} failed: {(res.stderr or '').strip()[-600:]}")
+            return None
 
         res = subprocess.run(["terraform", "output", "-json"], cwd=staging_dir, env=env, capture_output=True, text=True)
-        if res.returncode != 0: return None
+        if res.returncode != 0:
+            if strict:
+                raise CloudAccessError(f"terraform output in gs://{bucket_name}/{state_prefix} failed: {(res.stderr or '').strip()[-600:]}")
+            return None
         raw = json.loads(res.stdout)
         return {k: v.get("value") for k, v in raw.items()}
 

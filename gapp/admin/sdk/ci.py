@@ -651,10 +651,28 @@ def init_fleet(repo: str | None = None, *, owner: str | None = None, create: boo
             f"with `gapp ci setup <name> --repo <owner>/<repo> --project <project>`, then delete that file."
         )}
     elif report["variables"][ALLOWED_SOURCES_VAR] is True:
-        result["next_step"] = {"action": "ci project setup", "hint": "gapp ci project setup <project>"}
+        result["next_step"], result["ready"] = _init_next_step(repo)
     else:
         result["next_step"] = {"action": "ci sources add", "hint": "gapp ci sources add <owner>"}
     return result
+
+
+def _init_next_step(repo: str) -> tuple[dict | None, str | None]:
+    """What init should point at once sources are allowed: the first project a
+    deployment uses that has no Environment here, else nothing (the fleet is
+    ready). Returns (next_step, ready sentence)."""
+    doc, _ = _load_fleet(repo)
+    if not doc:
+        return ({"action": "ci project setup", "hint": (
+            "gapp ci project setup <project> (once per GCP project), then "
+            "gapp ci setup <name> --repo <owner>/<repo> --project <project>")}, None)
+    for project in sorted({e.get("project") for e in doc.values() if e.get("project")}):
+        record = _environment_record_status(repo, project)
+        if record["exists"] is not True or (record["checked"] and not (
+                record["wif_provider_present"] and record["service_account_present"])):
+            return {"action": "ci project setup", "hint": f"gapp ci project setup {project}"}, None
+    return None, (f"The fleet is ready: {len(doc)} deployment(s), each project trusted. "
+                  f"Deploy one with `gapp ci deploy <name>`; see them with `gapp ci list`.")
 
 
 def _add_topic(repo: str) -> str:
