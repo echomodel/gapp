@@ -37,6 +37,12 @@ clean break from 3.x's project labels.
   `force` of `gapp_setup`. A deployment's name is unique within its project;
   teams separate by project and IAM, or by fleet. An `owner:` key in the
   user config is now an error that names the key and the file: delete it.
+- **Unknown keys are refused, not ignored.** An unknown key in the user
+  config (top level or in a profile) is an error naming the file, the key
+  and the keys gapp knows. `gapp ci setup` (before dispatching) and the
+  register run check an entry's gapp.yaml keys with the gapp.yaml
+  validator, and `gapp ci status <name>` names an entry that holds an
+  unknown key.
 - On a CI runner, a refused Google Cloud call no longer suggests
   `gcloud auth login`; it says signing in does not apply and names
   `gapp ci project setup <project>` as the fix.

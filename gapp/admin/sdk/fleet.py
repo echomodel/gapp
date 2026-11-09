@@ -146,6 +146,18 @@ def validate_project(project: str) -> str:
     return project
 
 
+def unknown_keys(keys: dict | None) -> list[str]:
+    """The gapp.yaml fields among `keys` that gapp.yaml does not have, as the
+    gapp.yaml validator reports them (its unknown-field issues, by path)."""
+    from gapp.admin.sdk.schema import ManifestValidationError, validate_manifest
+    present = {k: v for k, v in (keys or {}).items() if v is not None}
+    try:
+        validate_manifest(present)
+    except ManifestValidationError as e:
+        return [i["path"] for i in e.issues if i["type"] == "extra_forbidden"]
+    return []
+
+
 def validate_changes(changes: dict | None) -> dict:
     """gapp.yaml keys to set on an entry (None removes a key). The entry's own fields are not changeable here."""
     changes = dict(changes or {})
@@ -157,6 +169,10 @@ def validate_changes(changes: dict | None) -> dict:
     if "name" in changes:
         raise FleetRefusal("invalid-input", (
             "'name' is not a key a deployment can set: gapp keys the deployment's resources by its id."
+        ))
+    for key in unknown_keys(changes):
+        raise FleetRefusal("invalid-input", (
+            f"'{key}' is not a gapp.yaml key (check for typos); `gapp manifest schema` lists them."
         ))
     return changes
 

@@ -613,7 +613,7 @@ pipx install -e .   # or: pip install -e .
 
 ## No owner namespaces
 
-gapp 4.0 removed owner namespaces (`gapp config owner`, `gapp list --all`, setup's cross-owner check and its `--force`). A deployment's id is unique within its project, and its bucket and service names derive from it. Teams that must not share deployments separate by project and IAM, or by fleet. gapp does not accept configuration it does not understand: an `owner:` key in any profile of the user config is an error naming the key and the file, never ignored.
+gapp 4.0 removed owner namespaces (`gapp config owner`, `gapp list --all`, setup's cross-owner check and its `--force`). A deployment's id is unique within its project, and its bucket and service names derive from it. Teams that must not share deployments separate by project and IAM, or by fleet. gapp does not accept configuration it does not understand: an unknown key in the user config (top level or in a profile; `owner:` has its own message) is an error naming the file and the key, never ignored. A deployment entry's gapp.yaml keys go through the same gapp.yaml validator (`validate_manifest`, `extra="forbid"`) when `gapp ci setup` writes them and when `gapp ci status` reads them.
 
 ## Project env model
 

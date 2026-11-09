@@ -270,3 +270,11 @@ def test_deploy_watch_polls_the_run_through_rest(ci):
     res = ci_mod.deploy_deployment("my-app", watch=True)
     assert res["ok"] is True and res["watched"] is True and res["conclusion"] == "success"
     assert all(c[:2] == ["gh", "api"] for c, _ in ci.calls)
+
+
+def test_status_names_an_entry_key_gapp_yaml_does_not_have(ci):
+    ci.deploy(FLEET, "typo-app", "me/typo-app", "my-proj", memroy="1Gi")
+    res = ci_mod.status_deployment("typo-app")
+    assert res["problem"] == ("The entry 'typo-app' in gapp/deployments.yaml has unknown key(s) memroy, "
+                              "so a deploy would refuse it.")
+    assert ci_mod.status_deployment("my-app")["problem"] is None
