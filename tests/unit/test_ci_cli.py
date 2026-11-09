@@ -255,7 +255,6 @@ def test_deploy_output(monkeypatch):
 def test_status_output(monkeypatch):
     base = {"ok": True, "name": "my-app", "fleet_repo": FLEET, "registered": True, "id": "my-app-2", "repo": "me/my-app",
             "project": "my-proj", "domain": "mcp.example.com", "overlay": {"domain": "mcp.example.com"},
-            "environment_record": {"exists": True, "checked": True, "wif_provider_present": True, "service_account_present": True, "note": None},
             "last_deploy": {"checked": True, "note": None, "run": {"id": "42", "status": "completed", "conclusion": "success",
                             "created_at": "2026-01-01T00:00:00Z", "ref": "main", "url": f"https://github.com/{FLEET}/actions/runs/42"}},
             "problem": None, "live_hint": "For the live service state: gapp ci status my-app --live", "next_step": None}

@@ -3,6 +3,22 @@
 Notable changes to gapp. Versions are git tags (`vX.Y.Z`); the version
 source is `gapp/__init__.py`.
 
+## Unreleased
+
+- `gapp ci status <name>` no longer reports project trust: the "Project
+  trust" line, its read of the project's GitHub Environment, and the
+  `environment_record` field of its result (and of the `gapp_ci_status`
+  MCP tool) are gone, along with the next step to run
+  `gapp ci project setup` that a missing Environment used to give. Status
+  says what is deployed, where, and the last deploy; the deploy run checks
+  the Environment itself.
+- The fleet's deploy workflow checks the entry's repo owner against
+  `GAPP_ALLOWED_SOURCES` before it deploys, and refuses an owner that is
+  not listed, even when the entry was added to `gapp/deployments.yaml` by
+  hand. Re-run `gapp ci init <fleet-repo>` to install it.
+- "'<name>' is not a deployment" from `gapp ci status` now puts "See the
+  deployments: gapp ci list" on its own line.
+
 ## 4.0.0rc7 (pre-release of 4.0.0)
 
 - **The deployment name is an argument.** `gapp status [NAME]` and

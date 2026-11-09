@@ -194,8 +194,7 @@ def test_an_unreadable_environment_is_not_reported_as_untrusted(fleet_repo, fake
     assert res["dispatched"] is True                             # the run decides; nothing was called untrusted
     fake_gh.deploy(FLEET, "my-app", "me/my-app", "my-proj")
     res = ci_mod.status_deployment("my-app")
-    assert res["environment_record"]["exists"] is None and res["next_step"] is None
-    assert res["environment_record"]["note"].startswith("Couldn't check the Environment 'my-proj' of acme/fleet: GitHub returned 500: Internal Server Error.")
+    assert res["ok"] is True and res["next_step"] is None and "environment_record" not in res
 
 
 def test_gh_failures_are_passed_through_trimmed():

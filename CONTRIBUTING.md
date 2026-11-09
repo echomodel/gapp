@@ -800,6 +800,10 @@ next-free variant and 27-character limit; the name default from `--repo`;
 the repo-reuse refusal with both ways on; `--copy-of` contents and echo;
 rename keeps the id (`test_fleet.py`, `test_ci_setup.py`).
 
+### Why the allowed sources are a repository variable
+
+The GitHub owners whose repos a fleet may deploy are listed in the fleet repo's Actions variable `GAPP_ALLOWED_SOURCES`, not in a file. Only someone who can change the repo's settings can change a variable. A commit cannot, so neither can the register workflow (its token writes contents only), an agent session, or anyone with only push access. The register workflow checks the list before it writes an entry. The deploy workflow checks it again before it deploys, because `gapp/deployments.yaml` is a file in git: anyone who can push can add or edit an entry by hand and skip the register checks. Both checks read the variable from the workflow's `vars` context, so they cost no API call and no extra token scope.
+
 ### Deferred on purpose
 
 Recorded as deferred, not overlooked:

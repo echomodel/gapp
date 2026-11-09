@@ -110,7 +110,7 @@ def test_status_reports_one_deployment_with_its_last_deploy(ci):
     assert res["id"] == "my-app" and res["overlay"] == {"domain": "mcp.example.com"}
     run = res["last_deploy"]["run"]
     assert run["conclusion"] == "success" and run["ref"] == "v1.0.0" and run["url"].endswith("/actions/runs/100")
-    assert res["environment_record"]["exists"] is True and res["environment_record"]["wif_provider_present"] is True
+    assert "environment_record" not in res
     assert res["next_step"] is None
 
 
@@ -119,27 +119,25 @@ def test_status_with_no_deploys_yet_and_of_an_unknown_name(ci):
     assert res["last_deploy"] == {"checked": True, "run": None, "note": None}
     res = ci_mod.status_deployment("nope")
     assert res["ok"] is False and res["registered"] is False and res["next_step"]["action"] == "ci setup"
-    assert "gapp ci setup nope --repo <owner>/<repo> --project <project>" in res["next_step"]["hint"]
+    assert res["next_step"]["hint"] == ("'nope' is not a deployment in acme/fleet. Set it up: gapp ci setup nope "
+                                        "--repo <owner>/<repo> --project <project>.\nSee the deployments: gapp ci list")
 
 
-def test_status_names_an_untrusted_project_and_a_missing_environment_variable(ci):
+def test_status_reads_no_environment_and_reports_no_project_trust(ci):
+    """Status says what is deployed, where, and the last deploy; the deploy run itself checks the Environment."""
     del ci.environments[(FLEET, "my-proj")]
+    ci.calls.clear()
     res = ci_mod.status_deployment("my-app")
-    assert res["ok"] is True and res["environment_record"]["exists"] is False
-    assert res["next_step"] == {"action": "ci project setup", "hint": "gapp ci project setup my-proj"}
-    assert "has no Environment named 'my-proj'" in res["problem"]
-    ci.environments[(FLEET, "my-proj")] = {"GAPP_WIF_PROVIDER": WIF}
-    res = ci_mod.status_deployment("my-app")
-    assert res["environment_record"]["service_account_present"] is False
-    assert "GAPP_DEPLOY_SERVICE_ACCOUNT" in res["problem"] and res["next_step"]["hint"] == "gapp ci project setup my-proj"
+    assert res["ok"] is True and res["problem"] is None and res["next_step"] is None
+    assert "environment_record" not in res
+    assert not [c for c, _ in ci.calls if any("environments" in part for part in c)]
 
 
-def test_status_reports_unchecked_variables_and_runs_instead_of_missing(ci):
+def test_status_reports_unchecked_runs_instead_of_missing(ci):
     ci.actions_api = False
     ci.fail_with["actions/workflows/gapp-deploy.yml/runs"] = "gh: HTTP 403: request blocked"
     res = ci_mod.status_deployment("my-app")
     assert res["ok"] is True and res["next_step"] is None
-    assert res["environment_record"]["exists"] is True and res["environment_record"]["checked"] is False
     assert res["last_deploy"]["checked"] is False
     assert res["last_deploy"]["note"].startswith("Couldn't check the deploy runs of acme/fleet: GitHub returned 403: request blocked.")
 

@@ -417,11 +417,9 @@ def gapp_ci_status(name: str, live: bool = False) -> dict:
 
     Fast by default and GitHub only: registered, id (what the GCP resources
     are keyed by), repo, project, domain, overlay (the gapp.yaml keys the
-    entry sets), environment_record (the project's Environment and its two
-    variables, or that they could not be checked), last_deploy (the newest
-    run named "Deploy <name> (<ref>)", or that runs could not be read),
-    problem and next_step naming the gap when a deploy would fail as things
-    stand.
+    entry sets), last_deploy (the newest run named "Deploy <name> (<ref>)",
+    or that runs could not be read), problem (an entry a deploy would
+    refuse) and next_step.
 
     With live=True it dispatches the fleet repo's read-only status
     workflow, which runs gapp status for the deployment's id on a runner

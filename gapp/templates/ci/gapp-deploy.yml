@@ -57,6 +57,7 @@ jobs:
         env:
           DEPLOYMENT: ${{ inputs.deployment }}
           APP_ID: ${{ vars.HOSTING_GITHUB_APP_ID }}
+          ALLOWED_SOURCES: ${{ vars.GAPP_ALLOWED_SOURCES }}
           GH_TOKEN: ${{ github.token }}
           DATA_FILE: gapp/deployments.yaml
         run: |
@@ -71,6 +72,16 @@ jobs:
           repo="$(yq "$entry | .repo" "$DATA_FILE")"
           project="$(yq "$entry | .project" "$DATA_FILE")"
           id="$(yq "$entry | .id // strenv(DEPLOYMENT)" "$DATA_FILE")"
+          # The register run checked the repo's owner before writing this
+          # entry, but the file is in git and can be edited by hand, so the
+          # owner is checked again against the repository variable, which a
+          # commit cannot change.
+          owner="${repo%%/*}"
+          allowed=",$(printf '%s' "$ALLOWED_SOURCES" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]'),"
+          if [[ "$allowed" != *",$(printf '%s' "$owner" | tr '[:upper:]' '[:lower:]'),"* ]]; then
+            echo "gapp-deploy: Apps owned by $owner aren't allowed in this fleet, so '$DEPLOYMENT' ($repo) was not deployed. Allow the owner with: gapp ci sources add $owner"
+            exit 1
+          fi
           # Every key but id, repo and project is a gapp.yaml key the deploy
           # merges over the repo's gapp.yaml; name is set to the id so gapp
           # keys every resource by it.

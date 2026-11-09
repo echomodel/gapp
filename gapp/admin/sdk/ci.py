@@ -410,24 +410,6 @@ def _write_environment_record(fleet_repo: str, project_id: str, wif_provider: st
     return status
 
 
-def _environment_record_status(fleet_repo: str, project_id: str) -> dict:
-    """Existence of the Environment and presence of each variable, for `ci status`."""
-    env = _environment(fleet_repo, project_id)
-    out = {"exists": None if env.unchecked else env.present, "note": env.note,
-           "wif_provider_present": None, "service_account_present": None, "checked": False}
-    if env.absent:
-        out.update(wif_provider_present=False, service_account_present=False, checked=True)
-        return out
-    if env.unchecked or not _actions_api_available(fleet_repo):
-        out["note"] = out["note"] or UNCHECKED_VARIABLES_NOTE
-        return out
-    out["checked"] = True
-    for key, var in (("wif_provider_present", ENV_WIF_PROVIDER_VAR), ("service_account_present", ENV_DEPLOY_SA_VAR)):
-        rc, body, _ = _gh_api([f"repos/{fleet_repo}/environments/{project_id}/variables/{var}"])
-        out[key] = bool((json.loads(body).get("value") or "").strip()) if (rc == 0 and body.strip()) else False
-    return out
-
-
 # --- the gapp-owned files in the fleet repo ---
 
 
@@ -1333,9 +1315,9 @@ def deploy_deployment(name: str, *, ref: str = "main", watch: bool = True) -> di
 
 def status_deployment(name: str) -> dict:
     """One deployment's state (`gapp ci status <name>`): its repo, project,
-    domain, last deploy, and whether a deploy can run now. Never touches GCP."""
+    domain and last deploy. Never touches GCP."""
     result = {"ok": True, "name": (name or "").strip(), "fleet_repo": None, "registered": None, "id": None,
-              "repo": None, "project": None, "domain": None, "overlay": None, "environment_record": None,
+              "repo": None, "project": None, "domain": None, "overlay": None,
               "last_deploy": None, "problem": None, "live_hint": None, "next_step": None}
     if not result["name"]:
         return {**result, **_outcome("pass the name", "Name the deployment: `gapp ci status <name>`. See them: gapp ci list")}
@@ -1350,34 +1332,17 @@ def status_deployment(name: str) -> dict:
     if entry is None:
         return {**result, **_outcome("ci setup", (
             f"'{result['name']}' is not a deployment in {fleet_repo}. Set it up: gapp ci setup {result['name']} "
-            f"--repo <owner>/<repo> --project <project>. See the deployments: gapp ci list"
+            f"--repo <owner>/<repo> --project <project>.\nSee the deployments: gapp ci list"
         ))}
     result.update(id=entry.get("id"), repo=entry.get("repo"), project=entry.get("project"),
                   domain=entry.get("domain"), overlay=fleet.manifest_keys(entry),
                   live_hint=f"For the live service state: gapp ci status {result['name']} --live")
-    record = _environment_record_status(fleet_repo, entry["project"]) if entry.get("project") else None
-    result["environment_record"] = record
     if unknown := fleet.unknown_keys(fleet.manifest_keys(entry)):
         result["problem"] = (
             f"The entry '{result['name']}' in {DEPLOYMENTS_FILE} has unknown key(s) {', '.join(unknown)}, "
             f"so a deploy would refuse it."
         )
     result["last_deploy"] = _last_deploy(fleet_repo, result["name"])
-    if record is not None:
-        if record["exists"] is False:
-            result["problem"] = (
-                f"{fleet_repo} has no Environment named '{entry['project']}', so a deploy cannot authenticate to "
-                f"that project (gcloud as an Owner of the project, `gh` as an admin of {fleet_repo})."
-            )
-            result["next_step"] = {"action": "ci project setup", "hint": f"gapp ci project setup {entry['project']}"}
-        elif record["checked"] and not (record["wif_provider_present"] and record["service_account_present"]):
-            missing = [v for v, ok in ((ENV_WIF_PROVIDER_VAR, record["wif_provider_present"]),
-                                       (ENV_DEPLOY_SA_VAR, record["service_account_present"])) if not ok]
-            result["problem"] = (
-                f"The Environment '{entry['project']}' in {fleet_repo} is missing {', '.join(missing)}, so a "
-                f"deploy cannot authenticate; recording the deploy identity again fixes it."
-            )
-            result["next_step"] = {"action": "ci project setup", "hint": f"gapp ci project setup {entry['project']}"}
     return result
 
 
@@ -1406,7 +1371,7 @@ def status_live(name: str) -> dict:
     if entry is None:
         return {**result, **_outcome("ci setup", (
             f"'{result['name']}' is not a deployment in {fleet_repo}. Set it up: gapp ci setup {result['name']} "
-            f"--repo <owner>/<repo> --project <project>. See the deployments: gapp ci list"
+            f"--repo <owner>/<repo> --project <project>.\nSee the deployments: gapp ci list"
         ))}
     result.update(id=entry.get("id"), repo=entry.get("repo"), project=entry.get("project"))
     workflow = _read_file(fleet_repo, STATUS_WORKFLOW_PATH)
