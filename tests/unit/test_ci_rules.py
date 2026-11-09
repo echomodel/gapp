@@ -336,3 +336,9 @@ def test_the_ci_module_calls_github_only_through_gh_api():
                 '"repo", "view"', '"search", "repos"', '"pr",', "graphql"):
         assert sub not in code, sub
     assert not _re.search(r'_gh\(\["(?!api")', code)
+
+
+def test_runner_refuses_a_key_gapp_yaml_does_not_have(runner):
+    rc, lines = _run(_env(CHANGES=json.dumps({"memroy": "1Gi"})))
+    assert rc != 0 and FLEET not in [k[0] for k in runner.puts]
+    assert any("'memroy' is not a gapp.yaml key (check for typos); `gapp manifest schema` lists them." in l for l in lines)

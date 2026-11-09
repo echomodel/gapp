@@ -1347,6 +1347,11 @@ def status_deployment(name: str) -> dict:
                   live_hint=f"For the live service state: gapp ci status {result['name']} --live")
     record = _environment_record_status(fleet_repo, entry["project"]) if entry.get("project") else None
     result["environment_record"] = record
+    if unknown := fleet.unknown_keys(fleet.manifest_keys(entry)):
+        result["problem"] = (
+            f"The entry '{result['name']}' in {DEPLOYMENTS_FILE} has unknown key(s) {', '.join(unknown)}, "
+            f"so a deploy would refuse it."
+        )
     result["last_deploy"] = _last_deploy(fleet_repo, result["name"])
     if record is not None:
         if record["exists"] is False:

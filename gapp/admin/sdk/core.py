@@ -777,6 +777,7 @@ class GappSDK:
                     "solution's repo, or pass --solution <name> to check a deployed solution."
                 )),
             )
+        warnings = _manifest_warnings(local.get("repo_path"))
         try:
             ctx = self.resolve_solution_with_project(name, env=env, project=project, strict=False,
                                                      first_only=True)
@@ -787,6 +788,7 @@ class GappSDK:
                 repo_path=local.get("repo_path"),
                 deployment=DeploymentInfo(project=None, pending=True),
                 next_step=NextStep(action="sign in", hint=self._identity_hint(project)),
+                warnings=warnings,
             )
         solution_name = ctx["name"]
         repo_path = ctx.get("repo_path")
@@ -797,6 +799,7 @@ class GappSDK:
             name=solution_name,
             repo_path=repo_path,
             deployment=DeploymentInfo(project=project_id, pending=True),
+            warnings=warnings,
         )
         if not project_id:
             result.next_step = NextStep(
@@ -1098,6 +1101,22 @@ def _build_tfvars(name, pid, img, cfg, secrets, repo_path, public, domain,
         "data_bucket": bucket_name,
         "labels": dict(labels or {}),
     }
+
+
+def _manifest_warnings(repo_path) -> List[str]:
+    """Status reads gapp.yaml leniently, but never silently: the gapp.yaml
+    validator's unknown fields come back as one warning line."""
+    if not repo_path:
+        return []
+    from gapp.admin.sdk.schema import ManifestValidationError
+    try:
+        load_manifest(Path(repo_path), strict=True)
+    except ManifestValidationError as e:
+        unknown = [i["path"] for i in e.issues if i["type"] == "extra_forbidden"]
+        if unknown:
+            return [f"gapp.yaml has unknown field(s) {', '.join(unknown)} (check for typos); "
+                    f"`gapp setup` and `gapp deploy` refuse it until they are fixed."]
+    return []
 
 
 def _get_staging_dir(name):

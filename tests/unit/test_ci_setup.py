@@ -313,3 +313,15 @@ def test_setup_has_no_working_directory_parameters():
     params = inspect.signature(ci_mod.setup_deployment).parameters
     assert set(params) == {"name", "repo", "project", "domain", "config", "copy_of", "watch", "command"}
     assert "solution" not in params and "solution_repo" not in params
+
+
+def test_setup_refuses_a_key_gapp_yaml_does_not_have_before_dispatching(wired):
+    res = _setup(config={"memroy": "1Gi"})
+    assert res["ok"] is False and wired.dispatched == []
+    assert "'memroy' is not a gapp.yaml key (check for typos); `gapp manifest schema` lists them." in res["next_step"]["hint"]
+    res = _setup(config={"service": {"memroy": "1Gi"}})
+    assert res["ok"] is False and "'service.memroy' is not a gapp.yaml key" in res["next_step"]["hint"]
+
+
+def test_setup_accepts_real_gapp_yaml_keys_and_removals(wired):
+    assert _setup(config={"public": True, "domain": None})["ok"] is True

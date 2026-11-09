@@ -26,16 +26,35 @@ class ConfigError(RuntimeError):
     """The user config holds something gapp does not accept."""
 
 
+TOP_LEVEL_KEYS = ("active", "profiles")
+PROFILE_KEYS = ("account", "discovery", "fleet_repo", "fleet_repo_set_by")
+
+
 def _refuse_removed_keys(data: dict, path: Path) -> None:
-    """gapp must not accept config it does not understand: an `owner:` key
-    (owner namespaces were removed in 4.0) is an error, never ignored."""
+    """gapp must not accept config it does not understand: an unknown key is
+    an error, never ignored. An `owner:` key (owner namespaces were removed
+    in 4.0) gets its own message."""
+    for key in data:
+        if key not in TOP_LEVEL_KEYS:
+            raise ConfigError(
+                f"Your gapp config {path} has an unknown top-level key `{key}` (gapp knows "
+                f"{', '.join(TOP_LEVEL_KEYS)}). Fix or delete it, then run the command again."
+            )
     for name, settings in (data.get("profiles") or {}).items():
-        if isinstance(settings, dict) and "owner" in settings:
+        if not isinstance(settings, dict):
+            continue
+        if "owner" in settings:
             raise ConfigError(
                 f"Your gapp config {path} has an `owner:` key in profile '{name}'. Owner namespaces "
                 f"were removed in gapp 4.0, so gapp no longer accepts it: delete that line, then run "
                 f"the command again."
             )
+        for key in settings:
+            if key not in PROFILE_KEYS:
+                raise ConfigError(
+                    f"Your gapp config {path} has an unknown key `{key}` in profile '{name}' (gapp knows "
+                    f"{', '.join(PROFILE_KEYS)}). Fix or delete it, then run the command again."
+                )
 
 
 def load_config() -> dict:

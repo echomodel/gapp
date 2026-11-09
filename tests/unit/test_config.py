@@ -109,3 +109,33 @@ def test_an_owner_key_in_any_profile_is_an_error_naming_the_key_and_file():
         f"Your gapp config {path} has an `owner:` key in profile 'work'. Owner namespaces were "
         f"removed in gapp 4.0, so gapp no longer accepts it: delete that line, then run the command again."
     )
+
+
+def test_an_unknown_key_anywhere_in_the_user_config_is_an_error_naming_it():
+    import pytest
+    from gapp.admin.sdk.config import ConfigError
+    path = get_config_file()
+    for data, message in [
+        ({"active": "default", "profiles": {"default": {"acount": "x@example.com"}}},
+         f"Your gapp config {path} has an unknown key `acount` in profile 'default' (gapp knows account, "
+         f"discovery, fleet_repo, fleet_repo_set_by). Fix or delete it, then run the command again."),
+        ({"active": "default", "profiles": {"default": {}}, "defaults": {}},
+         f"Your gapp config {path} has an unknown top-level key `defaults` (gapp knows active, profiles). "
+         f"Fix or delete it, then run the command again."),
+    ]:
+        with open(path, "w") as f:
+            yaml.dump(data, f)
+        with pytest.raises(ConfigError) as exc:
+            load_config()
+        assert str(exc.value) == message
+
+
+def test_every_key_gapp_writes_is_accepted():
+    from gapp.admin.sdk.config import set_fleet_repo
+    from gapp.admin.sdk.core import GappSDK
+    sdk = GappSDK()
+    sdk.set_account("a@example.com")
+    sdk.set_discovery("off")
+    sdk.set_active_profile("work")
+    set_fleet_repo("acme/fleet", "gapp ci init acme/fleet")
+    assert load_config()["profiles"]["work"]["fleet_repo"] == "acme/fleet"
