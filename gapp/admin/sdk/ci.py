@@ -698,6 +698,12 @@ def _gcloud_outcome(step: str, project_id: str, detail: str) -> dict:
     text = (detail or "").strip()
     first = text.splitlines()[0] if text else ""
     lowered = text.lower()
+    if "unrecognized arguments" in lowered or "invalid choice" in lowered:
+        # gcloud rejected the command itself: nothing about the sign-in is wrong.
+        return _outcome("report the gcloud error", (
+            f"Could not {step} for project {project_id}: gcloud rejected the command gapp sent ({first}). "
+            f"This is a gapp defect, not a sign-in or permission problem; report it with this message."
+        ))
     if "unauthenticated" in lowered or "credential" in lowered or "login" in lowered:
         why = "gcloud has no working sign-in on this machine"
     elif "permission" in lowered or "403" in lowered or "forbidden" in lowered:
@@ -705,7 +711,11 @@ def _gcloud_outcome(step: str, project_id: str, detail: str) -> dict:
     elif "not found" in lowered or "404" in lowered:
         why = f"project {project_id} was not found by the signed-in gcloud account"
     else:
-        why = f"gcloud could not {step}" + (f" ({first})" if first else "")
+        return _outcome("check the error", (
+            f"Could not {step} for project {project_id}: {first or 'gcloud failed'}. That is the error "
+            f"itself, not a sign-in problem. Fix what it names, then run `gapp ci project setup "
+            f"{project_id}` again."
+        ))
     return _outcome("sign in to gcloud as an Owner", (
         f"Could not {step} for project {project_id}: {why}. {PROJECT_SETUP_REQUIREMENTS} "
         f"Sign in with `gcloud auth login` (or point gapp at the right account with "
@@ -1725,11 +1735,22 @@ def _ensure_wif_binding(project_id: str, fleet_repo: str) -> str:
 
 def _mark_project_hosted(project_id: str) -> str:
     """Label the project gapp=hosted, keeping its other labels. Only an Owner
-    writes project labels; a deploy never does."""
-    result = run_gcloud(["projects", "update", project_id, "--update-labels=gapp=hosted"],
-                        capture_output=True, text=True)
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip())
+    writes project labels; a deploy never does.
+
+    Goes through the provider's Resource Manager read and write (the same
+    calls `gapp setup` uses): GA `gcloud projects update` takes no label flags.
+    """
+    from gapp.admin.sdk.cloud import get_provider
+    from gapp.admin.sdk.cloud.base import CloudAccessError
+    provider = get_provider()
+    try:
+        labels = provider.get_project_labels(project_id)
+        if labels.get("gapp") == "hosted":
+            return "exists"
+        provider.set_project_labels(project_id, {**labels, "gapp": "hosted"})
+    except CloudAccessError as e:
+        # The API's own words only; _gcloud_outcome adds the right advice.
+        raise RuntimeError(str(e).splitlines()[0]) from e
     return "set"
 
 

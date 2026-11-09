@@ -58,3 +58,10 @@ def test_the_fleet_deploy_workflow_passes_the_project_from_the_entry():
     deploy = yaml.safe_load(rendered)["jobs"]["deploy"]
     assert deploy["with"]["project-id"] == "${{ needs.resolve.outputs.project }}"
     assert deploy["with"]["environment"] == "${{ needs.resolve.outputs.project }}"
+
+
+def test_no_code_calls_gcloud_projects_update_with_label_flags():
+    """GA `gcloud projects update` takes only --name; project labels go through Resource Manager."""
+    offenders = [str(p.relative_to(ROOT)) for p in GAPP.rglob("*.py")
+                 if re.search(r'''["']projects["'],\s*["']update["']''', p.read_text())]
+    assert offenders == []

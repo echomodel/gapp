@@ -116,13 +116,60 @@ def test_project_setup_reports_a_refused_environment_write(machine):
     assert res["wif_pool"] == "created"
 
 
-def test_marking_the_project_hosted_keeps_its_other_labels(monkeypatch):
-    """`gcloud projects update --update-labels` merges: gapp=hosted joins the project's labels."""
-    calls = []
-
-    class Done:
-        returncode, stdout, stderr = 0, "", ""
-
-    monkeypatch.setattr(ci_mod, "run_gcloud", lambda args, **kw: calls.append(args) or Done())
+def test_marking_the_project_hosted_writes_through_resource_manager_keeping_other_labels(monkeypatch):
+    """GA `gcloud projects update` takes no label flags: the mark is the provider's
+    Resource Manager read and write (the call `gapp setup` uses), never that command."""
+    from gapp.admin.sdk import cloud
+    from gapp.admin.sdk.cloud.dummy import DummyCloudProvider
+    provider = DummyCloudProvider()
+    provider.project_labels["my-proj"] = {"gapp-env": "prod", "team": "x"}
+    monkeypatch.setattr(cloud, "get_provider", lambda: provider)
+    monkeypatch.setattr(ci_mod, "run_gcloud", lambda *a, **k: pytest.fail("no gcloud command for the mark"))
     assert ci_mod._mark_project_hosted("my-proj") == "set"
-    assert calls == [["projects", "update", "my-proj", "--update-labels=gapp=hosted"]]
+    assert provider.project_labels["my-proj"] == {"gapp-env": "prod", "team": "x", "gapp": "hosted"}
+    assert ci_mod._mark_project_hosted("my-proj") == "exists"
+    assert [w for w in provider.label_writes if w[0] == "project"] == [
+        ("project", "my-proj", {"gapp-env": "prod", "team": "x", "gapp": "hosted"})]
+
+
+def test_the_provider_label_write_is_one_resource_manager_patch_of_the_labels(monkeypatch):
+    """The exact call: PATCH v3/projects/<p>?updateMask=labels with the whole label map."""
+    import json as json_mod
+    import subprocess
+    from gapp.admin.sdk.cloud.gcp import GCPProvider
+    seen = []
+    provider = GCPProvider()
+    monkeypatch.setattr(provider, "get_auth_token", lambda: "tok")
+    monkeypatch.setattr(subprocess, "run", lambda args, **kw: seen.append(args) or
+                        subprocess.CompletedProcess(args, 0, stdout="{}\n200", stderr=""))
+    provider.set_project_labels("my-proj", {"gapp": "hosted", "team": "x"})
+    args = seen[0]
+    assert args[0] == "curl" and "PATCH" in args
+    assert args[-1] == "https://cloudresourcemanager.googleapis.com/v3/projects/my-proj?updateMask=labels"
+    assert json_mod.loads(args[args.index("-d") + 1]) == {"labels": {"gapp": "hosted", "team": "x"}}
+
+
+def test_a_command_gcloud_rejects_is_not_reported_as_a_sign_in_problem():
+    out = ci_mod._gcloud_outcome("mark the project", "my-proj",
+                                 "ERROR: (gcloud.projects.update) unrecognized arguments: --update-labels=gapp=hosted")
+    hint = out["next_step"]["hint"]
+    assert out["next_step"]["action"] == "report the gcloud error"
+    assert hint == ("Could not mark the project for project my-proj: gcloud rejected the command gapp sent "
+                    "(ERROR: (gcloud.projects.update) unrecognized arguments: --update-labels=gapp=hosted). "
+                    "This is a gapp defect, not a sign-in or permission problem; report it with this message.")
+    assert "gcloud auth login" not in hint
+
+
+def test_an_error_that_is_not_about_sign_in_gives_no_sign_in_advice():
+    out = ci_mod._gcloud_outcome("mark the project", "my-proj",
+                                 "Failed to write labels of project 'my-proj' (HTTP 400): label value too long")
+    assert out["next_step"]["action"] == "check the error"
+    assert "gcloud auth login" not in out["next_step"]["hint"]
+    assert "(HTTP 400): label value too long" in out["next_step"]["hint"]
+
+
+def test_a_permission_failure_still_names_the_owner_requirement():
+    out = ci_mod._gcloud_outcome("mark the project", "my-proj",
+                                 "Not authorized to write labels of project 'my-proj' (HTTP 403): PERMISSION_DENIED")
+    assert out["next_step"]["action"] == "sign in to gcloud as an Owner"
+    assert "is not an Owner of my-proj (permission denied)" in out["next_step"]["hint"]

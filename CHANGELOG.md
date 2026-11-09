@@ -3,6 +3,18 @@
 Notable changes to gapp. Versions are git tags (`vX.Y.Z`); the version
 source is `gapp/__init__.py`.
 
+## Unreleased (4.0.0rc5)
+
+Fixes found by the first real run of 4.0.0rc4:
+
+- `gapp ci project setup` failed to mark the project `gapp=hosted`: GA
+  `gcloud projects update` has no `--update-labels` flag. The mark now goes
+  through the same Resource Manager read and write `gapp setup` uses,
+  keeping the project's other labels.
+- A gcloud failure that is not about sign-in (a command gcloud rejects, or
+  an API error such as HTTP 400) no longer ends with `gcloud auth login`
+  advice; it says what failed in gcloud's or the API's own words.
+
 ## 4.0.0rc4 (pre-release of 4.0.0)
 
 A CI deploy of a 3.x deployment failed at `gapp setup` on the runner: the
