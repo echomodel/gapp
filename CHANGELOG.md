@@ -5,17 +5,18 @@ source is `gapp/__init__.py`.
 
 ## Unreleased
 
-- **The deployment name is an argument.** `gapp status [NAME]`,
-  `gapp setup [NAME] --project P` and `gapp secrets list [NAME]` take the
-  deployment name the way `gapp ci status <name>` does; without it they use
-  the checkout's, as before. `--solution`/`-s` is gone from every command.
-  `gapp setup` no longer takes the project id as an argument: pass
-  `--project`. `gapp deploy`, `gapp secrets get` and `gapp secrets set`
-  take no deployment name and always use the checkout (a name there could
-  never deploy or find the app's declared secrets). The MCP tools match:
-  `gapp_status(name=, project=)`, `gapp_setup(name=, project_id=)`,
-  `gapp_secret_list(name=)`, and no `solution` argument on `gapp_deploy`,
-  `gapp_secret_get` or `gapp_secret_set`.
+- **The deployment name is an argument.** `gapp status [NAME]` and
+  `gapp secrets list [NAME]` take the deployment name the way
+  `gapp ci status <name>` does; without it they use the checkout's, as
+  before. `--solution`/`-s` is gone from every command. `gapp setup`,
+  `gapp deploy`, `gapp secrets get` and `gapp secrets set` take no
+  deployment name and always use the checkout: without its gapp.yaml, setup
+  would skip the app's required APIs, and deploy and the secrets commands
+  could never work. `gapp setup` no longer takes the project id as an
+  argument: pass `--project`. The MCP tools match:
+  `gapp_status(name=, project=)`, `gapp_secret_list(name=)`, and no
+  `solution` argument on `gapp_setup`, `gapp_deploy`, `gapp_secret_get` or
+  `gapp_secret_set`.
 - `gapp status` outside a checkout now says: "No gapp.yaml here (or not
   inside a git repository). Run `gapp init` in the app's repo, or run
   `gapp status <name>` to check a deployment."

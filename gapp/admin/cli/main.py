@@ -111,21 +111,19 @@ def init(sdk: GappSDK):
 
 
 @main.command("setup")
-@click.argument("name", required=False)
 @click.option("--project", help="Explicit GCP Project ID.")
 @click.pass_obj
-def setup_cmd(sdk: GappSDK, name, project):
+def setup_cmd(sdk: GappSDK, project):
     """GCP foundation: enable APIs, create and label the solution bucket, mark the project hosted.
 
     Once per solution per project, idempotent. Needs a gcloud login with
     project-admin rights (enable services, create buckets, edit IAM).
-    NAME is the deployment name; without it, the checkout's. --project is
-    required the first time; later runs find it among the projects marked
-    gapp=hosted. Next: `gapp secrets set` for any declared secrets,
+    Runs in the app's checkout. --project is required the first time;
+    later runs find it among the projects marked gapp=hosted. Next: `gapp secrets set` for any declared secrets,
     then `gapp deploy`. (CI deploys are the other fleet system: `gapp ci`.)
     """
     try:
-        result = sdk.setup(project, name=name)
+        result = sdk.setup(project)
     except (RuntimeError, ValueError) as e:
         click.echo(f"  Error: {e}", err=True)
         raise SystemExit(1)

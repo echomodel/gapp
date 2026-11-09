@@ -1,7 +1,7 @@
 """Root commands take the deployment name as an argument, like `gapp ci status <name>`.
 
-`--solution`/`-s` is gone (a clean break). `gapp status [NAME]`,
-`gapp setup [NAME] --project P` and `gapp secrets list [NAME]` take it;
+`--solution`/`-s` is gone (a clean break). `gapp status [NAME]` and
+`gapp secrets list [NAME]` take it; `gapp setup --project P`,
 `gapp deploy`, `gapp secrets get` and `gapp secrets set` always use the
 checkout. Without a name, every command reads it from the checkout's
 gapp.yaml as before. The MCP tools mirror the CLI.
@@ -55,21 +55,20 @@ def test_status_takes_the_name_as_an_argument(monkeypatch):
     assert _run("status", "-s", "my-app").exit_code == 2
 
 
-def test_setup_takes_the_name_as_an_argument_and_the_project_as_an_option(monkeypatch):
+def test_setup_takes_only_the_project_as_an_option(monkeypatch):
     seen = {}
 
-    def fake_setup(self, project_id=None, name=None):
-        seen.update(project_id=project_id, name=name)
+    def fake_setup(self, project_id=None):
+        seen["project_id"] = project_id
         raise RuntimeError("stop")
     monkeypatch.setattr(GappSDK, "setup", fake_setup)
-    _run("setup", "my-app", "--project", "p1")
-    assert seen == {"project_id": "p1", "name": "my-app"}
     _run("setup", "--project", "p1")
-    assert seen == {"project_id": "p1", "name": None}
-    assert _run("setup", "--solution", "my-app").exit_code == 2
+    assert seen == {"project_id": "p1"}
+    for args in (["setup", "my-app", "--project", "p1"], ["setup", "p1"], ["setup", "--solution", "my-app"]):
+        assert _run(*args).exit_code == 2, args
 
 
-def test_deploy_and_secrets_get_set_take_no_deployment_name():
+def test_setup_deploy_and_secrets_get_set_take_no_deployment_name():
     assert _run("deploy", "my-app").exit_code == 2
     for args in (["deploy", "--solution", "x"], ["secrets", "get", "k", "-s", "x"],
                  ["secrets", "set", "k", "v", "-s", "x"]):
@@ -91,7 +90,7 @@ def test_the_mcp_tools_mirror_the_cli():
     def params(fn):
         return list(inspect.signature(fn).parameters)
     assert params(server.gapp_status) == ["name", "project"]
-    assert params(server.gapp_setup) == ["name", "project_id"]
+    assert params(server.gapp_setup) == ["project_id"]
     assert params(server.gapp_secret_list) == ["name"]
     assert params(server.gapp_secret_get) == ["name", "plaintext"]
     assert params(server.gapp_secret_set) == ["name", "value"]
@@ -106,13 +105,16 @@ def test_status_outside_a_checkout_points_at_the_name_argument(tmp_path, monkeyp
         "app's repo, or run `gapp status <name>` to check a deployment.")
 
 
-def test_setup_with_a_name_works_without_a_checkout(tmp_path, monkeypatch):
+def test_setup_outside_a_checkout_refuses_and_writes_nothing(tmp_path, monkeypatch):
+    """Without the checkout's gapp.yaml, setup could not enable the app's required APIs."""
     monkeypatch.chdir(tmp_path)
     sdk = GappSDK(provider=DummyCloudProvider())
-    res = sdk.setup("p1", name="my-app")
-    assert res["name"] == "my-app" and res["bucket"] == "gapp-my-app-p1"
+    with pytest.raises(RuntimeError, match="Not inside a gapp solution."):
+        sdk.setup("p1")
+    assert not sdk.provider.apis_enabled and not sdk.provider.buckets
 
 
-def test_the_sdk_deploy_takes_no_name():
-    assert "solution" not in inspect.signature(GappSDK.deploy).parameters
-    assert "name" not in inspect.signature(GappSDK.deploy).parameters
+def test_the_sdk_setup_and_deploy_take_no_name():
+    for fn in (GappSDK.setup, GappSDK.deploy):
+        params = inspect.signature(fn).parameters
+        assert "solution" not in params and "name" not in params, fn.__name__

@@ -150,7 +150,7 @@ gapp deploy --project <project-id>
 > **Note on Enterprise Usage**: `gapp` follows your `gcloud` login wherever you go. In a large organization, keep teams apart with GCP projects and IAM; switch between work and personal contexts with `gapp config profile`.
 
 ### **Development**
-*   `gapp setup [<name>] --project <id>`: Enable the APIs, create and label the deployment's bucket, and mark the project hosted. The name defaults to the checkout's; `--project` is required the first time.
+*   `gapp setup --project <id>`: Enable the APIs, create and label the deployment's bucket, and mark the project hosted. Runs in the app's checkout; `--project` is required the first time.
 *   `gapp deploy [--ref <ref>] [--project <id>] [--rebuild] [--replace-domain]`: Build with Cloud Build and apply Terraform. `--replace-domain` is required for a deploy that would replace or remove the live custom domain mapping.
 *   `gapp status [<name>]`: Check infrastructure health, service URLs, and the custom domain's state (`pending_dns`, `pending_cert`, `active`, `error`). Reports the direct system only; with no usable Google Cloud identity it says so and names the login command instead of failing.
 *   `gapp secrets list [<name>]`: Show declared secrets, deploy-readiness, and remediation hints. See [Secrets, ownership, and recovery scenarios](docs/SECRETS.md) for the full label model and conflict-resolution guide.

@@ -87,7 +87,6 @@ def gapp_init(
 
 @_tool()
 def gapp_setup(
-    name: str | None = None,
     project_id: str | None = None,
 ) -> dict:
     """Set up GCP foundation for a gapp solution.
@@ -100,11 +99,10 @@ def gapp_setup(
     discovery finds the project among those marked gapp=hosted.
 
     Args:
-        name: Deployment name. Defaults to the current directory's app.
         project_id: GCP project ID. Required for first-time install.
     """
     from gapp.admin.sdk.core import GappSDK
-    return GappSDK().setup(project_id, name=name)
+    return GappSDK().setup(project_id)
 
 
 @_tool()

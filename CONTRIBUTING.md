@@ -687,7 +687,7 @@ meanings wherever both have the operation:
 
 | Root | `ci` | Same meaning | Where they differ, and why |
 |---|---|---|---|
-| `gapp setup [<name>] --project <p>` | `gapp ci setup [<name>] --repo <o>/<r> --project <p>` | make one app deployable to one project | `ci` names the repo, because it never reads the working directory; the root name defaults to the checkout's |
+| `gapp setup --project <p>` | `gapp ci setup [<name>] --repo <o>/<r> --project <p>` | make one app deployable to one project | `ci` names the repo, because it never reads the working directory; root setup runs in the app's checkout |
 | `gapp deploy` | `gapp ci deploy <name>` | deploy it | `ci` takes a name for the same reason |
 | `gapp status [<name>]` | `gapp ci status <name>` | one deployment's state and next step | the root name defaults to the checkout's; `ci` requires it |
 | `gapp list` | `gapp ci list [--repo <o>/<r>]` | the fleet | `ci` lists the fleet file; root lists the deployments on hosted projects |

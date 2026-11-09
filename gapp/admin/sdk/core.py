@@ -367,7 +367,6 @@ class GappSDK:
     def setup(
         self,
         project_id: Optional[str] = None,
-        name: Optional[str] = None,
     ) -> dict:
         """Provision GCP foundation for a solution on a project.
 
@@ -375,7 +374,7 @@ class GappSDK:
         is not yet. A CI run never writes project labels: there the mark is
         left to `gapp ci project setup`, which runs as an Owner.
         """
-        ctx = self.resolve_solution(name)
+        ctx = self.resolve_solution()
         if not ctx:
             raise RuntimeError("Not inside a gapp solution.")
         solution_name = ctx["name"]
