@@ -252,3 +252,20 @@ def test_every_dispatched_workflow_ends_its_run_name_with_the_optional_request_i
     assert doc["run-name"].endswith(" ${{ inputs.request_id }}")
     request_id = doc[True]["workflow_dispatch"]["inputs"]["request_id"]
     assert request_id["required"] is False and request_id["default"] == "" and request_id["type"] == "string"
+
+
+def _gcloud_setup_step(doc_steps):
+    return next(s for s in doc_steps if "/setup-gcloud@" in str(s.get("uses", "")))
+
+
+def test_status_workflow_installs_gclouds_beta_component_for_domain_mappings():
+    """`gcloud beta run domain-mappings` is the only command for a managed Cloud Run mapping."""
+    doc = yaml.safe_load(_rendered(ci_mod.STATUS_WORKFLOW))
+    steps = next(j for j in doc["jobs"].values() if any("setup-gcloud" in str(s.get("uses", "")) for s in j.get("steps", [])))["steps"]
+    assert _gcloud_setup_step(steps)["with"]["install_components"] == "beta"
+
+
+def test_reusable_deploy_workflow_installs_gclouds_beta_component():
+    doc = yaml.safe_load((pathlib.Path(__file__).resolve().parents[2] / ".github/workflows/deploy.yml").read_text())
+    steps = [s for j in doc["jobs"].values() for s in j.get("steps", [])]
+    assert _gcloud_setup_step(steps)["with"]["install_components"] == "beta"

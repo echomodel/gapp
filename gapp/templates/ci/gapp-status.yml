@@ -90,8 +90,12 @@ jobs:
           workload_identity_provider: ${{ vars.GAPP_WIF_PROVIDER }}
           service_account: ${{ vars.GAPP_DEPLOY_SERVICE_ACCOUNT }}
 
+      # `gapp status` reports a custom domain's mapping with `gcloud beta run
+      # domain-mappings describe` (the GA group is Cloud Run for Anthos only).
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v2
+        with:
+          install_components: beta
 
       # `gapp status` reads the deployment's Terraform outputs from its state
       # in the project's bucket, so the runner needs terraform, as a deploy does.

@@ -276,8 +276,13 @@ jobs:
           # variable, then derived from `project-id`.
           service_account: ${{ inputs.service-account || vars.GAPP_DEPLOY_SERVICE_ACCOUNT || format('gapp-deploy@{0}.iam.gserviceaccount.com', inputs.project-id) }}
 
+      # The beta component carries `gcloud beta run domain-mappings`, which
+      # gapp uses for a fully managed Cloud Run domain mapping (the GA
+      # command group covers Cloud Run for Anthos only).
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v2
+        with:
+          install_components: beta
 
       - name: Install Terraform
         uses: hashicorp/setup-terraform@v3

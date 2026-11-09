@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Optional, List, Dict
 
-from gapp.admin.sdk.cloud.base import CloudProvider
+from gapp.admin.sdk.cloud.base import CloudAccessError, CloudProvider
 
 
 class DummyCloudProvider(CloudProvider):
@@ -23,6 +23,7 @@ class DummyCloudProvider(CloudProvider):
         self.last_tfvars = None
         self.verified_domains = set() # domains the identity has verified
         self.domain_mappings = {} # (project_id, domain) -> mapping resource dict
+        self.unreadable_state = set()  # (bucket, prefix) whose Terraform state cannot be read
 
     # -- GCP Foundation --
 
@@ -118,7 +119,12 @@ class DummyCloudProvider(CloudProvider):
         self.tf_outputs[(bucket_name, state_prefix)] = outputs
         return outputs
 
-    def get_infrastructure_outputs(self, staging_dir: Path, bucket_name: str, state_prefix: str) -> Optional[Dict]:
+    def get_infrastructure_outputs(self, staging_dir: Path, bucket_name: str, state_prefix: str,
+                                   strict: bool = False) -> Optional[Dict]:
+        if (bucket_name, state_prefix) in self.unreadable_state:
+            if strict:
+                raise CloudAccessError(f"terraform init against gs://{bucket_name}/{state_prefix} failed: denied")
+            return None
         return self.tf_outputs.get((bucket_name, state_prefix))
 
     # -- Miscellaneous --
