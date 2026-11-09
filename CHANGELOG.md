@@ -3,7 +3,7 @@
 Notable changes to gapp. Versions are git tags (`vX.Y.Z`); the version
 source is `gapp/__init__.py`.
 
-## Unreleased (4.0.0rc4)
+## 4.0.0rc4 (pre-release of 4.0.0)
 
 A CI deploy of a 3.x deployment failed at `gapp setup` on the runner: the
 v-3 to v-4 project label restamp needs a permission the deploy identity
