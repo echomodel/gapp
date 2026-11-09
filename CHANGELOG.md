@@ -78,9 +78,7 @@ clean break from 3.x's project labels.
   the deployment's bucket, in parallel; `gapp status` stops at the first
   match. `gapp list` reads every hosted project's deployment buckets.
 - **Clean break.** No 4.x code reads `gapp__<name>` or
-  `gapp_<owner>_<name>` project labels. Move a 3.x fleet once: mark each project hosted,
-  redeploy each deployment with its project, then set each old label to
-  `v-4` as a tripwire for any leftover 3.x install.
+  `gapp_<owner>_<name>` project labels.
 - The fleet's deploy workflow passes the project from the fleet entry to
   gapp's reusable workflow, so `gapp setup` and `gapp deploy` run with
   `--project` on the runner. Re-run `gapp ci init <fleet-repo>`.
