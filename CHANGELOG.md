@@ -3,7 +3,7 @@
 Notable changes to gapp. Versions are git tags (`vX.Y.Z`); the version
 source is `gapp/__init__.py`.
 
-## Unreleased (4.0.0rc6)
+## 4.0.0rc6 (pre-release of 4.0.0)
 
 - **Environments removed.** A deployment (its own name, project and config)
   is the unit. Gone: the `gapp projects` group (`set-env`, `clear-env`,
