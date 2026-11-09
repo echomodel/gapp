@@ -54,6 +54,22 @@ gapp deploy --project <prod-project-id>
 ```
 When a name is on more than one project, `gapp deploy` and `gapp status` need `--project`; without it they stop and say so, and `gapp list` shows where each one is.
 
+### **What names a deployment, and the limits**
+
+- **Direct (`gapp setup`, `deploy`, `status`):** a deployment is named by the `name` in the app's `gapp.yaml` (else the repo's name). There is one deployment of an app per GCP project. Test and production are separate projects, chosen with `--project`. Two deployments of one app in the same project aren't possible from the app's folder; the CI system can do it with `--copy-of`.
+- **CI (`gapp ci …`):** a deployment is named by its fleet entry's name. Its id, which names its GCP resources, is fixed at setup; `gapp ci rename` changes only the name. To deploy one repo twice, use `gapp ci setup <new> --copy-of <existing>`. A plain `gapp ci setup <new>` for a repo that's already set up is refused on purpose, so a repo isn't set up twice by accident.
+- **A name on two projects:** `gapp status` and `gapp deploy` refuse without `--project` rather than guess. `gapp list` shows one row per project.
+- **No environments:** a deployment and its project replace them ([why](CONTRIBUTING.md#no-environments)).
+- **A fleet entry** carries the deployment's domain (`--domain`). Every other setting comes from the app's own `gapp.yaml`. If `gapp ci status` reports keys gapp.yaml doesn't have, re-running `gapp ci setup <name> --repo <repo> --project <project>` removes them. `--copy-of` never copies them. You shouldn't need to edit `gapp/deployments.yaml` yourself.
+- **`gapp ci status`** says what's deployed, where, and the last deploy. It doesn't check project trust; the next deploy run does, and names `gapp ci project setup <project>` if it's missing.
+- **Allowed sources:** `gapp ci sources` reads and changes a repository variable of the fleet repo. That needs a machine with full GitHub API access; a sandboxed agent session may not reach the variables API.
+
+Known limits:
+- A deploy doesn't record which repo or commit it came from, so gapp can't warn before replacing a deployment built from a different repo.
+- There's no plan-only step that previews infrastructure changes before a deploy applies them.
+- In CI, the app's repo must have a gapp.yaml; the fleet entry adds only the domain. Deploying a repo without a gapp.yaml isn't supported yet.
+- gapp 4 doesn't see deployments made by gapp 3 until each is redeployed once with gapp 4.
+
 ### **5. Teams and Shared Organizations**
 A deployment's name is unique within its GCP project. Teams that must not touch each other's deployments use separate projects (and IAM on them), or separate fleets; gapp has no owner namespaces.
 
@@ -123,7 +139,7 @@ Apps owned by <owner> aren't allowed in your fleet yet (fleet repo <fleet-owner>
 
 Every `gapp ci` command ends the same way: it did the thing, or it prints a plain sentence with the exact fix (no stack traces, no raw errors). Something is called missing only when GitHub confirms it; a read gapp could not make says "Couldn't check ..." in GitHub's own words. Without `gh`, press **Run workflow** on the fleet repo's Actions tab instead. The runner authenticates with Workload Identity Federation, so no key is stored anywhere.
 
-**The entry is the deployment's configuration.** `repo` and `project` are the entry's own fields; every other key is a gapp.yaml key (`domain`, `env`, `service`, ...) merged over the repo's `gapp.yaml` at deploy time, or written as the whole file when the repo has none, so deployment values never live in the deployed repo and a repo that runs on Cloud Run can be deployed without knowing about gapp. An entry carries the deployment's domain (set with `--domain`); every other setting comes from the app repo's own `gapp.yaml`. Private repos work too: install a read-only GitHub App on the organization that holds them and store its id and key in the fleet repo under the fixed names `HOSTING_GITHUB_APP_ID` and `HOSTING_GITHUB_APP_PRIVATE_KEY`; `gapp ci init --verbose` reports them. Design notes and the security model: [CI/CD setup](docs/CI.md).
+**The entry names the deployment.** `repo` and `project` are the entry's own fields, and it carries the deployment's domain (set with `--domain`), so a public repo keeps its real domain out of the repo. Every other setting comes from the app repo's own `gapp.yaml`. Private repos work too: install a read-only GitHub App on the organization that holds them and store its id and key in the fleet repo under the fixed names `HOSTING_GITHUB_APP_ID` and `HOSTING_GITHUB_APP_PRIVATE_KEY`; `gapp ci init --verbose` reports them. Design notes and the security model: [CI/CD setup](docs/CI.md).
 
 ### **8. Custom Domains**
 Map a subdomain to the service with `domain:` in `gapp.yaml` (or `gapp ci setup <name> --repo <owner>/<repo> --project <project> --domain <host>` for fleet deploys), deploy, and add the CNAME `gapp status` shows. Cloud Run only maps a domain for an identity that has verified it, so verify once per domain (`gcloud domains verify example.com`, which opens Search Console; for CI deploys, add the `gapp-deploy` service account as a verified owner there too). Deploys guard the live mapping: one that would replace or remove it is refused unless you pass `gapp deploy --replace-domain`, because Terraform destroys the old mapping before creating the new one.

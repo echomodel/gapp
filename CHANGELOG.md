@@ -30,7 +30,13 @@ Other changes:
   does not have.
 - `gapp ci setup --copy-of` no longer lists "Env copied" and "Secrets …
   needs set" (and its result drops `copied_env` and `secrets`): both came
-  from the entry alone and missed the app's own gapp.yaml.
+  from the entry alone and missed the app's own gapp.yaml. It ends with
+  "Set the secrets the app's gapp.yaml declares on <project> before the
+  first deploy: gapp secrets list shows them from the app's folder."
+- README and CONTRIBUTING state what names a deployment in each system,
+  the rules behind it, and the known limits (among them: in CI, the app's
+  repo must have a gapp.yaml; deploying a repo without one isn't
+  supported yet).
 - `gapp deploy --dry-run` labels the name "Deployment:" (was "Solution:").
 - `gapp ci status <name>` no longer says "Deploy it" for an entry a deploy
   would refuse because it has keys gapp.yaml does not have. It says:

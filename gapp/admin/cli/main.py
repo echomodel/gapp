@@ -590,7 +590,8 @@ def ci_setup_cmd(name, repo, project, domain, copy_of, no_watch, verbose, json_o
         elif copy_of:
             lines.append(f"{nm} is set up as a copy of {copy_of}: {rp} deploys to {pj}"
                          + (" (the same project as the source)." if result.get("project_from_source") else "."))
-            lines.append("The repo's own gapp.yaml secrets, if any, must be set on that project too.")
+            lines.append(f"Set the secrets the app's gapp.yaml declares on {pj} before the first deploy: "
+                         f"gapp secrets list shows them from the app's folder.")
         else:
             lines.append(f"{rp} is set up to deploy to {pj} as {nm}.")
         if result.get("domain"):

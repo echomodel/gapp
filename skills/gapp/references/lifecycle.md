@@ -126,21 +126,18 @@ cloud agent. No terraform or gcloud on the deploying machine.
    command to run again; relay it as is. The same name again updates
    the entry's keys; a repo already deployed under another name is
    refused, with the two ways on (update that one, or `--copy-of`).
-   Deployment values go into the entry, never into the repo: `repo`
-   and `project` are the entry's own fields and every other key is a
-   gapp.yaml key merged over the repo's `gapp.yaml` at deploy time
-   (`domain`, `env`, `service`, ...), or the whole file when the repo
-   has none. `--domain` sets one key, a re-run without it keeps it,
-   `--domain ""` removes it.
+   `repo` and `project` are the entry's own fields, and it carries the
+   deployment's domain; every other setting comes from the app repo's
+   own `gapp.yaml`, which the repo must have. `--domain` sets the
+   domain, a re-run without it keeps it, `--domain ""` removes it.
 5. **Environments and second instances.** `gapp ci setup <new>
    --copy-of <existing> [--project <other-project>] [--domain <d>]`
-   makes another deployment of the same repo: same gapp.yaml keys, its
-   own id (so its own service, account, bucket and secrets), no domain,
-   no history, no secret values; the project defaults to the source's.
-   The output lists the env names copied ("check them for this
-   environment") and the secret names to set on the new project before
-   the first deploy; relay both. `gapp ci rename <old> <new>` changes a
-   name only.
+   makes another deployment of the same repo: its own id (so its own
+   service, account, bucket and secrets), no domain, no history, no
+   secret values; the project defaults to the source's. The output
+   reminds the user to set the secrets the app's gapp.yaml declares on
+   that project before the first deploy. `gapp ci rename <old> <new>`
+   changes a name only.
 6. **Private repo.** The runner's built-in token can read only the
    fleet repo, so a private repo is cloned with a one-hour token from a
    GitHub App the user installs on the repo's owner (a browser step,

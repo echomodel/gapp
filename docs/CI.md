@@ -125,7 +125,7 @@ Deployed repos are reusable, public, GCP-agnostic products. They contain applica
 - Personal credentials or project IDs
 - CI/CD configuration that couples them to gapp or any specific deployment tool
 
-A deployed repo should pass the test: "Can someone else deploy this to their own GCP project using only public repos?" The answer must always be yes. The fleet entry can even supply the whole `gapp.yaml`, so a repo that runs on Cloud Run can be deployed from a fleet without knowing about gapp.
+A deployed repo should pass the test: "Can someone else deploy this to their own GCP project using only public repos?" The answer must always be yes. The deployed repo carries its own `gapp.yaml`; the fleet entry adds only the deployment's domain. Deploying a repo without a `gapp.yaml` isn't supported yet.
 
 ### gapp is a product, not a personal project
 
@@ -139,13 +139,13 @@ This is the key insight. There are three layers:
 |-------|-----------|----------|
 | **Tool** (gapp) | Public product | CLI, Terraform modules, Dockerfile template, runtime wrapper, reusable GitHub workflows |
 | **Application** (deployed repo) | Public product | Application code, optionally `gapp.yaml` |
-| **Operator config** (fleet repo) | Private, per-operator | The deployments file (deployment → repo, project, gapp.yaml keys), per-project Environments holding the WIF references, and gapp's two workflows that wire tool + application to infrastructure |
+| **Operator config** (fleet repo) | Private, per-operator | The deployments file (deployment → repo, project, domain), per-project Environments holding the WIF references, and gapp's two workflows that wire tool + application to infrastructure |
 
 The fleet repo is the only place where "deploy this specific repo to this specific GCP project" is expressed.
 
 ### The fleet repo is not intellectual work
 
-The fleet repo is an address book, not a product. It maps "deployment X → repo Y on GCP project Z, with these gapp.yaml keys." There's nothing reusable or interesting in it. The interesting parts are in gapp (the reusable workflow) and in the deployed repos (the applications). The fleet repo is configuration: one data file of entries, each saying something different, plus two gapp-owned workflows that read and write that file.
+The fleet repo is an address book, not a product. It maps "deployment X → repo Y on GCP project Z, at this domain." There's nothing reusable or interesting in it. The interesting parts are in gapp (the reusable workflow) and in the deployed repos (the applications). The fleet repo is configuration: one data file of entries, each saying something different, plus two gapp-owned workflows that read and write that file.
 
 The repo could be public — project IDs aren't sensitive, and WIF means no credentials are stored. But it's not a product. It's a worked example at best.
 
@@ -239,11 +239,11 @@ my-app-staging:
   project: <staging-project-id>
 ```
 
-**One entry per deployment, keyed by an operator-chosen name; flat shape, no nested block.** `repo` and `project` are the entry's own fields (gapp.yaml has neither). **Every other key is a gapp.yaml key**, deep-merged over the repo's `gapp.yaml` by the deploy run's overlay step (mappings merge key by key, lists of named entries such as `env` merge by name, anything else is replaced), or written as the whole file when the repo has none. Keys the entry doesn't set come from the repo. gapp core is unchanged: it still reads a `gapp.yaml` on the runner; the ci layer builds it.
+**One entry per deployment, keyed by an operator-chosen name; flat shape, no nested block.** `repo` and `project` are the entry's own fields (gapp.yaml has neither), and the entry carries the deployment's domain; every other setting comes from the repo's `gapp.yaml`. The deploy run's overlay step merges the entry's keys over the repo's `gapp.yaml` (mappings merge key by key, lists of named entries such as `env` merge by name, anything else is replaced). gapp core is unchanged: it still reads a `gapp.yaml` on the runner; the ci layer builds it.
 
 **`id`** is what every GCP resource is keyed by: the service and its service account, the bucket, secrets (`<id>-<secret>`), the Terraform state prefix, the label. It is passed to the runner as the solution name (the overlay sets `name: <id>`), so the entry governs whatever the repo's `gapp.yaml` says. Set once, it defaults to the deployment name; when that id is already used by another entry on the same project, the next free variant (`<name>-2`, ...). At most 27 characters (the service account id `<id>-sa` is at most 30); `ci setup` refuses a longer name with a plain message. It is never shown in default output, only in `ci status <name> --verbose`. There is no `--id` flag: binding to arbitrary existing resources is deferred.
 
-**Environments and instances** are more entries for the same repo, typically on other projects. There is no first-class environment concept. `gapp ci setup <new> --copy-of <existing>` makes one: the same repo and gapp.yaml keys, its own id, no domain (a domain maps to one service), no deploy history, no secret values; `--project` defaults to the source's, which is safe because the copy's own id gives it its own service, account, bucket and secrets. There is no lasting link between the two.
+**Environments and instances** are more entries for the same repo, typically on other projects. There is no first-class environment concept. `gapp ci setup <new> --copy-of <existing>` makes one: the same repo, its own id, no domain (a domain maps to one service), no deploy history, no secret values; `--project` defaults to the source's, which is safe because the copy's own id gives it its own service, account, bucket and secrets. There is no lasting link between the two.
 
 **Names** are unique across the fleet file (they are its keys), so `gapp ci deploy <name>` always means one deployment. `gapp ci rename <old> <new>` changes the name only; the id and every GCP resource stay as they are.
 

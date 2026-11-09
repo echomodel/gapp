@@ -614,6 +614,19 @@ gapp 4.0 removed owner namespaces (`gapp config owner`, `gapp list --all`, setup
 
 gapp 4.0 removed environments (the `gapp-env` project label, `gapp projects set-env/clear-env/list`, and `--env` on setup, deploy and status). A deployment is the unit: its own name, project and config. The same app on a test project and a production project is two deployments, addressed by `--project` (or, in CI, two fleet entries made with `gapp ci setup <new> --copy-of <existing>`). No gapp code reads or writes `gapp-env`; a test guards it.
 
+## Deployment identity: deliberate rules
+
+These rules are on purpose; keep them unless the design changes. What they mean for users, and the known limits, are in README, "What names a deployment, and the limits".
+
+- **One deployment per app per project (direct).** The name comes from the app's `gapp.yaml` and keys the bucket (`gapp-<name>-<project>`), so the checkout fully determines the deployment on a project. A second copy in the same project would need a second name the app doesn't carry; the CI system gives it one, the fleet entry's name, which is why only `--copy-of` makes one.
+- **The id is fixed; the name is not (CI).** Every GCP resource is keyed by the id, so renaming must not touch them. `ci rename` changes the entry's key only.
+- **A second entry for a registered repo is refused unless it is `--copy-of`.** Accidental duplicates (a typo in the name) would otherwise create a second service quietly. The explicit flag is the intent.
+- **Never guess between projects.** A name on two hosted projects is refused without `--project` (see "Finding a deployment"); a wrong guess deploys to the wrong place.
+- **No environments.** gapp 3's environment was a project label (`gapp-env`) and nothing else; a deployment plus its project carries the same information (see "No environments").
+- **An entry carries only the domain; gapp.yaml carries the rest.** `--config` merged a local file into the entry. That change could not be repeated or reviewed, so it was removed. Re-running `gapp ci setup` rewrites the entry and drops keys gapp.yaml doesn't have, so setup is the one repair; `--copy-of` never copies such keys. No path asks anyone to edit `gapp/deployments.yaml`.
+- **Status doesn't check trust.** Only a deploy run proves a project trusts the fleet (its Environment and Workload Identity Federation sign-in). A status read could only guess, and the Environments API isn't reachable from every machine. So status reports what's deployed, where, and the last deploy, and the deploy run refuses with the project-setup step.
+- **Allowed sources are a repository variable** (see "Why the allowed sources are a repository variable"). Reading or changing it needs the Actions variables API, which a sandboxed agent session may not reach.
+
 ## Deployment labels
 
 Every setup and deploy, in both modes, writes the same labels on the deployment's own resources: its bucket (by gapp, since the bucket holds Terraform's own state) and every Cloud Run service (by Terraform, through the module's required `labels` variable):
@@ -700,9 +713,10 @@ names and the marker sentence in each `ci` command's help.
 The **fleet repo** (the term replaces "CI repo" everywhere) holds gapp's
 three workflows (deploy, register, status) and `gapp/deployments.yaml`: one entry per **deployment**,
 keyed by an operator-chosen name, flat shape, no nested block. `id`,
-`repo` and `project` are the entry's own fields; **every other key is a
-gapp.yaml key**, deep-merged over the repo's gapp.yaml by the deploy run's
-overlay step, or written as the whole file when the repo has none
+`repo` and `project` are the entry's own fields, and the entry carries
+the deployment's domain; every other setting comes from the app repo's
+gapp.yaml (see "Deployment identity: deliberate rules"). The deploy run's
+overlay step merges the entry's keys over the repo's gapp.yaml
 (`fleet.merge_manifest`). gapp core is unchanged. `id` keys every GCP
 resource and is passed to the runner as the solution name; it defaults to
 the deployment name, takes the next free variant (`<name>-2`, ...) when
