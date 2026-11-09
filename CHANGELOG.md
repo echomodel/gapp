@@ -19,7 +19,6 @@ source is `gapp/__init__.py`.
 - `gapp status` outside a checkout now says: "No gapp.yaml here (or not
   inside a git repository). Run `gapp init` in the app's repo, or run
   `gapp status <name>` to check a deployment."
-- CONTRIBUTING.md no longer carries the one-time 3.x → 4.x migration steps.
 - The gapp skill's description now covers any app that serves HTTP in a
   container (web servers, APIs, MCP servers), not only Python services.
 
