@@ -216,9 +216,9 @@ The operator's private fleet repo holds four gapp-owned files, installed by `gap
 
 | File | Written by | Role |
 |---|---|---|
-| `.github/workflows/gapp-deploy.yml` | `gapp ci init` (installed and updated) | The one deploy workflow. Dispatched with a deployment name and a ref; its runs are named `Deploy <name> (<ref>)`. Its first job reads the deployment's entry from the deployments file; its second job runs in the GitHub Environment named after the entry's project and calls gapp's reusable workflow with the entry's repo, id and gapp.yaml keys. |
-| `.github/workflows/gapp-register.yml` | `gapp ci init` (installed and updated) | The register workflow. Dispatched by `gapp ci setup` and `gapp ci rename`. Installs gapp at the pinned release and runs `gapp ci runner register`, the same code the operator's command ran before dispatching, which validates and writes the entry with the run's own token. |
-| `.github/workflows/gapp-status.yml` | `gapp ci init` (installed and updated) | The read-only status workflow. Dispatched by `gapp ci status <name> --live`; its runs are named `Status <name>`. Its first job reads the deployment's entry; its second runs in the project's Environment, authenticates exactly as a deploy does, runs `gapp status` for the deployment's id (`gapp ci runner status`) and reports the result as one line. It writes nothing. |
+| `.github/workflows/gapp-deploy.yml` | `gapp ci init` (installed and updated) | The one deploy workflow. Dispatched with a deployment name and a ref; its runs are named `Deploy <name> (<ref>) <request id>`, the id gapp passed so it can find the run its dispatch created (empty when dispatched by hand). Its first job reads the deployment's entry from the deployments file; its second job runs in the GitHub Environment named after the entry's project and calls gapp's reusable workflow with the entry's repo, id and gapp.yaml keys. |
+| `.github/workflows/gapp-register.yml` | `gapp ci init` (installed and updated) | The register workflow. Dispatched by `gapp ci setup` and `gapp ci rename`; its runs are named `Register <name> <request id>`. Installs gapp at the pinned release and runs `gapp ci runner register`, the same code the operator's command ran before dispatching, which validates and writes the entry with the run's own token. |
+| `.github/workflows/gapp-status.yml` | `gapp ci init` (installed and updated) | The read-only status workflow. Dispatched by `gapp ci status <name> --live`; its runs are named `Status <name> <request id>`. Its first job reads the deployment's entry; its second runs in the project's Environment, authenticates exactly as a deploy does, runs `gapp status` for the deployment's id (`gapp ci runner status`) and reports the result as one line. It writes nothing. |
 | `gapp/deployments.yaml` | `gapp ci init` (created empty), then the register workflow | The fleet file: one entry per deployment, keyed by its name. Intent only: no live state is ever recorded here. |
 
 ### The deployments file
@@ -325,7 +325,7 @@ A private deployed repo is supported. The principle "public repos must not depen
 
 ### GitHub Enterprise compatibility
 
-All `gapp ci` commands interact with GitHub exclusively through the `gh` CLI, which handles multi-host authentication natively. gapp never talks to GitHub directly, so it works with any GitHub instance that `gh` is authenticated against.
+All `gapp ci` commands interact with GitHub exclusively through `gh api` REST calls, never GraphQL (some sessions, a Claude Code cloud session among them, refuse GraphQL), and `gh` handles multi-host authentication natively. gapp never talks to GitHub directly, so it works with any GitHub instance that `gh` is authenticated against.
 
 ## CLI Design: Where CI Commands Live
 

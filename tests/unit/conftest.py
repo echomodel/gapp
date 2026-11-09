@@ -1,16 +1,19 @@
 """Unit-test fixtures shared by the `gapp ci` tests.
 
-`gapp ci` talks to GitHub only through the `gh` CLI, so the tests swap
-`subprocess.run` for an in-memory GitHub that answers the handful of
-shapes the SDK uses: repo visibility and creation, the fleet repo's files,
-its Actions variables and secrets, its Environments, the repo search by
-topic, workflow dispatch and the runs it produces. A dispatched register
+`gapp ci` talks to GitHub only through `gh api` REST calls, so the tests
+swap `subprocess.run` for an in-memory GitHub that answers the handful of
+REST shapes the SDK uses: repo visibility, default branch, topics and
+creation, the fleet repo's files, its Actions variables and secrets, its
+Environments, the repository search by topic, workflow dispatch, the runs
+it produces and their job logs. Any other `gh` subcommand (they reach for
+GraphQL, which some sessions refuse) and any GraphQL call fail the test. A dispatched register
 run executes the real runner code (`ci.runner_register`) against the same
 in-memory GitHub, so what the fake writes is what the workflow writes.
 Nothing touches the network.
 """
 
 import base64
+import datetime
 import json
 import subprocess
 import time
@@ -21,6 +24,28 @@ import pytest
 class _Result:
     def __init__(self, returncode=0, stdout="", stderr=""):
         self.returncode, self.stdout, self.stderr = returncode, stdout, stderr
+
+
+# What GitHub echoes into a job log for the status workflow's identity-check
+# step: the script itself, with its message templates unexpanded.
+STATUS_SCRIPT_ECHO = """missing=""
+[ -n "$WIF_PROVIDER" ] || missing="GAPP_WIF_PROVIDER"
+if [ -n "$missing" ]; then
+  echo "gapp-status: the Environment '$ENVIRONMENT' of this fleet repo has no $missing variable, so this run cannot authenticate to GCP. Run: gapp ci project setup $ENVIRONMENT"
+  exit 1
+fi"""
+
+
+def job_log(lines, script=""):
+    """A job log as GitHub's REST API returns it: each line an ISO timestamp,
+    a space and the text; each step's `run:` script echoed first (coloured,
+    under a ##[group] header) before what the step printed."""
+    stamp = "2026-01-01T00:00:00.0000000Z"
+    out = [f"\ufeff{stamp} Requested labels: ubuntu-latest", f"{stamp} ##[group]Run {script.splitlines()[0] if script else 'step'}"]
+    out += [f"{stamp} \x1b[36;1m{s}\x1b[0m" for s in script.splitlines()]
+    out += [f"{stamp} shell: /usr/bin/bash -e {{0}}", f"{stamp} ##[endgroup]"]
+    out += [f"{stamp} {line}" for line in lines]
+    return "\n".join(out)
 
 
 class FakeGitHub:
@@ -55,8 +80,15 @@ class FakeGitHub:
         # of running the real runner code: a callable taking the inputs and
         # returning (conclusion, log lines).
         self.register_outcome = None
-        # When set, every `gh workflow run` fails with this stderr.
+        # When set, every workflow dispatch fails with this stderr.
         self.dispatch_refusal = None
+        self.default_branch = "main"
+        # How many run listings a newly dispatched run stays invisible for
+        # (GitHub lists a run some seconds after the dispatch), and whether
+        # a dispatch creates a run at all.
+        self.run_appears_after = 0
+        self.dispatch_creates_run = True
+        self.request_ids = []   # the request id each dispatch carried
         # What a dispatched status run reports: a callable taking the inputs
         # and returning (conclusion, log lines); the default reports a
         # healthy service for the deployment.
@@ -67,29 +99,28 @@ class FakeGitHub:
     def run(self, cmd, **kwargs):
         self.calls.append((cmd, kwargs))
         assert cmd[0] == "gh", f"only gh may be invoked, got {cmd}"
-        assert "clone" not in cmd
-        if cmd[:3] == ["gh", "workflow", "run"]:
-            return self._dispatch(cmd)
-        if cmd[:3] == ["gh", "run", "view"]:
-            run = self.runs.get(cmd[3])
-            return _Result(0, run["log"]) if run else _Result(1, "", "run not found")
-        if cmd[:3] == ["gh", "run", "watch"]:
-            return _Result(0, "")
-        if cmd[:3] == ["gh", "search", "repos"]:
-            return self._search(cmd)
-        if cmd[:3] == ["gh", "repo", "create"]:
-            return self._repo_create(cmd)
-        if cmd[:3] == ["gh", "repo", "edit"]:
-            self.topics.setdefault(cmd[3], set()).add(cmd[cmd.index("--add-topic") + 1])
-            return _Result(0, "")
-        if cmd[:2] != ["gh", "api"]:
-            return self.other(cmd, kwargs)
+        assert cmd[:2] == ["gh", "api"], f"only REST through `gh api` (other gh subcommands use GraphQL): {cmd}"
+        assert "graphql" not in cmd, f"GraphQL is not available in every session: {cmd}"
+        if "-X" in cmd and cmd[cmd.index("-X") + 1] == "GET":
+            endpoint = cmd[cmd.index("-X") + 2]
+            if endpoint == "search/repositories":
+                return self._search(cmd)
+            return self._get(endpoint, cmd)
         if "-X" in cmd:
             method = cmd[cmd.index("-X") + 1]
             endpoint = cmd[cmd.index("-X") + 2]
+            payload = json.loads(kwargs["input"]) if kwargs.get("input") else None
+            # A session's proxy may refuse API writes but allow workflow dispatch.
+            if endpoint.endswith("/dispatches"):
+                return self._dispatch(endpoint, payload)
             if not self.api_writes:
                 return _Result(1, "", "gh: HTTP 403: request blocked: GitHub API writes are not allowed from this session")
-            payload = json.loads(kwargs["input"]) if kwargs.get("input") else None
+            if endpoint == "user/repos" or (endpoint.startswith("orgs/") and endpoint.endswith("/repos")):
+                return self._repo_create(endpoint, payload)
+            if endpoint.endswith("/topics"):
+                repo = "/".join(endpoint.split("/")[1:3])
+                self.topics[repo] = set(payload["names"])
+                return _Result(0, json.dumps({"names": payload["names"]}))
             if "/environments/" in endpoint:
                 return self._environment_write(method, endpoint, payload)
             if "/actions/variables" in endpoint:
@@ -115,48 +146,49 @@ class FakeGitHub:
     # -- repos --
 
     def _search(self, cmd):
-        owner = cmd[cmd.index("--owner") + 1]
-        topic = cmd[cmd.index("--topic") + 1]
-        owner = self.login if owner == "@me" else owner
+        fields = dict(cmd[i + 1].partition("=")[::2] for i, a in enumerate(cmd) if a == "-f")
+        terms = dict(term.partition(":")[::2] for term in fields["q"].split())
+        topic, owner = terms["topic"], terms["user"]
         found = sorted(r for r, topics in self.topics.items() if topic in topics and r.split("/")[0] == owner)
-        return _Result(0, json.dumps([{"fullName": r} for r in found]))
+        return _Result(0, json.dumps({"total_count": len(found), "items": [{"full_name": r} for r in found]}))
 
-    def _repo_create(self, cmd):
-        repo = cmd[3]
+    def _repo_create(self, endpoint, payload):
+        owner = self.login if endpoint == "user/repos" else endpoint.split("/")[1]
+        repo = f"{owner}/{payload['name']}"
         if repo in self.private:
             return _Result(1, "", "gh: HTTP 422: Repository creation failed: name already exists on this account")
-        self.private[repo] = "--private" in cmd
+        self.private[repo] = bool(payload.get("private"))
         self.created.append(repo)
-        return _Result(0, f"https://github.com/{repo}\n")
+        return _Result(0, json.dumps({"full_name": repo}))
 
     # -- workflow dispatch and runs --
 
-    def _dispatch(self, cmd):
-        workflow = cmd[3]
-        repo = cmd[cmd.index("--repo") + 1]
-        inputs = {}
-        for i, arg in enumerate(cmd):
-            if arg == "-f":
-                key, _, value = cmd[i + 1].partition("=")
-                inputs[key] = value
+    def _dispatch(self, endpoint, payload):
+        parts = endpoint.split("/")
+        repo, workflow = "/".join(parts[1:3]), parts[5]
+        inputs = dict(payload.get("inputs") or {})
+        request_id = inputs.pop("request_id", "")
+        assert payload.get("ref") == self.default_branch, f"dispatch must name the default branch, got {payload}"
         if self.dispatch_refusal:
             return _Result(1, "", self.dispatch_refusal)
         if (repo, f".github/workflows/{workflow}") not in self.files:
-            return _Result(1, "", f"could not find any workflows named {workflow}")
+            return _Result(1, "", "gh: Not Found (HTTP 404)")
         self.dispatched.append((repo, workflow, inputs))
+        self.request_ids.append(request_id)
+        if not self.dispatch_creates_run:
+            return _Result(0, "")
         run_id = str(self._next_run)
         self._next_run += 1
         if workflow == "gapp-register.yml":
             conclusion, log = self._register(repo, inputs)
-            name = f"Register {inputs.get('name')}"
+            name = f"Register {inputs.get('name')} {request_id}"
         elif workflow == "gapp-status.yml":
             conclusion, log = self._status(repo, inputs)
-            name = f"Status {inputs.get('deployment')}"
+            name = f"Status {inputs.get('deployment')} {request_id}"
         else:
-            conclusion, log = "success", f"deploy\tRun\t2026-01-01T00:00:00Z gapp-deploy: dispatched {inputs}"
-            name = f"Deploy {inputs.get('deployment')} ({inputs.get('ref', 'main')})"
-        self.runs[run_id] = {"repo": repo, "workflow": workflow, "status": "completed", "conclusion": conclusion,
-                             "log": log, "name": name, "created_at": f"2026-01-01T00:00:{int(run_id) % 60:02d}Z"}
+            conclusion, log = "success", job_log(["gapp-deploy: dispatched"], script='echo "gapp-deploy: $DEPLOYMENT -> $repo"')
+            name = f"Deploy {inputs.get('deployment')} ({inputs.get('ref', 'main')}) {request_id}"
+        self.add_run(run_id, repo, workflow, name, conclusion, log, hidden_polls=self.run_appears_after)
         return _Result(0, "")
 
     def _register(self, repo, inputs):
@@ -183,8 +215,7 @@ class FakeGitHub:
             finally:
                 self.api_writes, self.actions_api, self.unreadable = saved[0], saved[1], saved[2]
             conclusion = "success" if rc == 0 else "failure"
-        log = "\n".join(f"register\tWrite the deployment\t2026-01-01T00:00:00Z gapp-register: {line}" for line in lines)
-        return conclusion, log
+        return conclusion, job_log([f"gapp-register: {line}" for line in lines], script="gapp ci runner register")
 
     def _status(self, repo, inputs):
         if self.status_outcome is not None:
@@ -196,8 +227,7 @@ class FakeGitHub:
                                    "services": [{"name": name, "url": f"https://{name}-abc-uc.a.run.app", "healthy": True}]},
                     "domain": None, "next_step": None}
             conclusion, lines = "success", [f"result={json.dumps(live)}"]
-        log = "\n".join(f"status\tAsk gapp status\t2026-01-01T00:00:00Z gapp-status: {line}" for line in lines)
-        return conclusion, log
+        return conclusion, job_log([f"gapp-status: {line}" for line in lines], script=STATUS_SCRIPT_ECHO)
 
     def _run_get(self, run_id, cmd):
         run = self.runs.get(run_id)
@@ -210,9 +240,22 @@ class FakeGitHub:
             return _Result(0, f"{run['conclusion']}\n")
         return _Result(0, json.dumps(run))
 
+    def add_run(self, run_id, repo, workflow, name, conclusion, log="", hidden_polls=0, created_at=None):
+        """A run GitHub knows of; `created_at` defaults to now, `hidden_polls` delays its listing."""
+        created = created_at or datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        self.runs[str(run_id)] = {"repo": repo, "workflow": workflow, "status": "completed", "conclusion": conclusion,
+                                  "log": log, "name": name, "created_at": created, "hidden_polls": hidden_polls}
+        self._next_run = max(self._next_run, int(run_id) + 1)
+
     def _runs_list(self, repo, workflow, cmd):
-        runs = [(i, r) for i, r in sorted(self.runs.items(), key=lambda kv: int(kv[0]), reverse=True)
-                if r["repo"] == repo and r["workflow"] == workflow]
+        runs = []
+        for i, r in sorted(self.runs.items(), key=lambda kv: int(kv[0]), reverse=True):
+            if r["repo"] != repo or r["workflow"] != workflow:
+                continue
+            if r.get("hidden_polls", 0) > 0:
+                r["hidden_polls"] -= 1
+                continue
+            runs.append((i, r))
         if "--jq" in cmd:
             return _Result(0, f"{runs[0][0]}\n" if runs else "null\n")
         return _Result(0, json.dumps({"total_count": len(runs), "workflow_runs": [
@@ -293,6 +336,8 @@ class FakeGitHub:
         if repo not in self.private and not (rest[:1] == ["actions"] and rest[1:2] == ["runs"]):
             return _Result(1, "", "gh: Not Found (HTTP 404)")      # a repo GitHub does not show this login
         if not rest:
+            if "--jq" in cmd and cmd[cmd.index("--jq") + 1] == ".default_branch":
+                return _Result(0, f"{self.default_branch}\n")
             if "--jq" in cmd and cmd[cmd.index("--jq") + 1] == ".permissions.admin":
                 return _Result(0, "true\n" if self.admin.get(repo, True) else "false\n")
             if repo not in self.private:
@@ -317,6 +362,14 @@ class FakeGitHub:
             return self._runs_list(repo, rest[2], cmd)
         if rest[:2] == ["actions", "runs"] and len(rest) == 3:
             return self._run_get(rest[2], cmd)
+        if rest[:2] == ["actions", "runs"] and rest[3:] == ["jobs"]:
+            run = self.runs.get(rest[2])
+            return _Result(0, f"{int(rest[2]) * 10}\n") if run else _Result(1, "", "gh: Not Found (HTTP 404)")
+        if rest[:2] == ["actions", "jobs"] and rest[3:] == ["logs"]:
+            run = self.runs.get(str(int(rest[2]) // 10))
+            return _Result(0, run["log"]) if run else _Result(1, "", "gh: Not Found (HTTP 404)")
+        if rest == ["topics"]:
+            return _Result(0, json.dumps({"names": sorted(self.topics.get(repo, set()))}))
         return self.other(cmd, {})
 
     def _contents(self, repo, path):

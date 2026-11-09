@@ -184,12 +184,36 @@ def test_setup_accepts_a_private_repo_when_the_hosting_app_is_present(wired):
     assert _setup()["ok"] is True
 
 
-def test_setup_reports_a_refused_dispatch_in_githubs_words(wired):
+def test_setup_reports_a_refused_dispatch_in_githubs_words_without_a_wrong_login_hint(wired):
     wired.dispatch_refusal = "gh: HTTP 403: Resource not accessible by integration (https://api.github.com/x)"
     res = _setup()
     assert res["ok"] is False and res["next_step"]["action"] == "dispatch the register workflow"
     assert "GitHub returned 403: Resource not accessible by integration" in res["next_step"]["hint"]
-    assert "gh auth login" in res["next_step"]["hint"]
+    assert "gh auth login" not in res["next_step"]["hint"]                 # it reached GitHub; signing in won't help
+    assert "GitHub refused the request itself" in res["next_step"]["hint"]
+
+
+def test_setup_suggests_signing_in_only_when_the_login_is_the_problem(wired):
+    wired.dispatch_refusal = "gh: HTTP 401: Bad credentials (https://api.github.com/x)"
+    res = _setup()
+    assert "Sign in with `gh auth login`" in res["next_step"]["hint"]
+
+
+def test_setup_dispatches_through_rest_on_the_default_branch(wired):
+    """The cloud-session failure: `gh workflow run` resolves the default branch through GraphQL."""
+    wired.default_branch = "trunk"
+    res = _setup()
+    assert res["ok"] is True
+    dispatch = next(k for c, k in wired.calls if "-X" in c and c[c.index("-X") + 2].endswith("/dispatches"))
+    import json as _json
+    assert _json.loads(dispatch["input"])["ref"] == "trunk"
+    assert all(c[:2] == ["gh", "api"] and "graphql" not in c for c, _ in wired.calls)
+
+
+def test_setup_reports_an_unreadable_default_branch(wired):
+    wired.fail_with["repos/acme/fleet"] = "gh: HTTP 403: blocked"
+    res = _setup()
+    assert res["ok"] is False
 
 
 def test_setup_reports_a_run_that_did_not_finish_with_its_link(wired, monkeypatch):

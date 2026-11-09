@@ -11,11 +11,16 @@
 # variable and HOSTING_GITHUB_APP_PRIVATE_KEY secret.
 
 name: Deploy a gapp deployment
-run-name: Deploy ${{ inputs.deployment }} (${{ inputs.ref }})
+run-name: Deploy ${{ inputs.deployment }} (${{ inputs.ref }}) ${{ inputs.request_id }}
 
 on:
   workflow_dispatch:
     inputs:
+      request_id:
+        description: Set by gapp to find the run this dispatch created (it ends the run name); leave empty when dispatching by hand
+        required: false
+        default: ''
+        type: string
       deployment:
         description: Deployment to deploy (an entry in gapp/deployments.yaml)
         required: true

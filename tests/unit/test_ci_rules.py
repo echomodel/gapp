@@ -323,3 +323,16 @@ def test_runner_overlay_merges_over_the_repo_file_or_writes_it_whole(tmp_path):
     merged = ci_mod.runner_overlay(str(fresh), json.dumps({"name": "x", "service": {"entrypoint": "b:app"}}), domain="e.example.com")
     assert merged == {"name": "x", "service": {"entrypoint": "b:app"}, "domain": "e.example.com"}
     assert yaml.safe_load(fresh.read_text()) == merged
+
+
+# -- REST only: no gh subcommand that reaches for GraphQL --
+
+
+def test_the_ci_module_calls_github_only_through_gh_api():
+    import re as _re
+    source = (REPO_ROOT / "gapp" / "admin" / "sdk" / "ci.py").read_text()
+    code = _re.sub(r'"""[\s\S]*?"""', "", source)                # docstrings may name the subcommands
+    for sub in ('"workflow", "run"', '"run", "view"', '"run", "watch"', '"repo", "create"', '"repo", "edit"',
+                '"repo", "view"', '"search", "repos"', '"pr",', "graphql"):
+        assert sub not in code, sub
+    assert not _re.search(r'_gh\(\["(?!api")', code)

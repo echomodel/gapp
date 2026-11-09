@@ -869,7 +869,17 @@ change that looks like a convenience, and guarded by the named test.
    `deployments.yaml` stays intent only.
    Guard: `test_ci_deploy_status_list.py` (the hint; the live round trip
    with nothing written) and `test_ci_workflows.py::test_status_workflow_is_read_only_and_asks_the_project_as_the_deploy_identity`.
-8. **`--json` on every `ci` command** prints the command's result dict,
+8. **REST only.** Every GitHub call `gapp ci` makes is a REST call through
+   `gh api`. Higher-level `gh` subcommands (`workflow run`, `run view`,
+   `run watch`, `repo create`, `repo edit`, `search`) reach for GraphQL,
+   which some sessions (a Claude Code cloud session among them) refuse;
+   `gh workflow run` failed there resolving the default branch. Run logs
+   are read per job and only the lines a step printed count, never the
+   script GitHub echoes into the log.
+   Guard: `test_ci_rules.py::test_the_ci_module_calls_github_only_through_gh_api`,
+   the fake GitHub in `tests/unit/conftest.py` (it fails any non-`gh api`
+   call), and `test_ci_deploy_status_list.py::test_emitted_messages_skip_the_echoed_script_and_keep_what_the_step_printed`.
+9. **`--json` on every `ci` command** prints the command's result dict,
    the same one the MCP tool returns, and nothing else; the exit code is
    unchanged. Recorded as the rule for the root commands later.
    Guard: `test_ci_cli.py::test_json_prints_the_sdk_result_exactly_for_every_ci_command`.
