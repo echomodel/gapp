@@ -98,8 +98,8 @@ versions are how label and bucket contracts drift.
 
 Then configure gapp from what is discoverable, asking only when it is
 ambiguous: if exactly one gcloud account is active, pin it with
-`gapp config account <email>`; set `gapp config owner` only when the
-user has named an owner namespace; leave discovery on.
+`gapp config account <email>`; leave discovery on. (gapp has no owner
+namespaces; an `owner:` line in its config is an error to delete.)
 
 What installation cannot supply is an identity. A browser login
 (`gcloud auth login`, `gh auth login`) is the one step that needs the

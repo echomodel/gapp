@@ -68,7 +68,7 @@ variable "data_bucket" {
 }
 
 # Required: the deployment labels gapp writes on every service
-# (gapp-deployment, gapp-version, and gapp-owner when an owner is set). The
+# (gapp-deployment and gapp-version). The
 # version guard and `gapp list` read them, so no default: a deploy that
 # stopped emitting them would fail plan instead of shipping an unlabeled
 # service.

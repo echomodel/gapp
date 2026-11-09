@@ -14,9 +14,8 @@ clean break from 3.x's project labels.
   `gapp=hosted`, written only by an Owner (`gapp setup` from a workstation,
   once per project, or `gapp ci project setup`), and `gapp-env`. Every setup
   and deploy, in both modes, labels the deployment's own bucket (by gapp)
-  and Cloud Run services (by Terraform) with `gapp-deployment=<id>`,
-  `gapp-version=<major>` and, with an owner, `gapp-owner=<owner>`. A CI run
-  never writes a project label.
+  and Cloud Run services (by Terraform) with `gapp-deployment=<id>` and
+  `gapp-version=<major>`. A CI run never writes a project label.
 - **Version guard** reads `gapp-version` from the deployment's services: a
   deployment a newer gapp deployed is refused. The 3.x floor
   (`MIN_SUPPORTED_MAJOR`) is gone.
@@ -32,6 +31,12 @@ clean break from 3.x's project labels.
 - The fleet's deploy workflow passes the project from the fleet entry to
   gapp's reusable workflow, so `gapp setup` and `gapp deploy` run with
   `--project` on the runner. Re-run `gapp ci init <fleet-repo>`.
+- **Owner namespaces removed.** `gapp config owner`, `gapp list --all`,
+  `gapp setup --force` and setup's cross-owner check are gone, as are the
+  `app_owner` argument of `gapp_user`, `all_owners` of `gapp_list` and
+  `force` of `gapp_setup`. A deployment's name is unique within its project;
+  teams separate by project and IAM, or by fleet. An `owner:` key in the
+  user config is now an error that names the key and the file: delete it.
 - On a CI runner, a refused Google Cloud call no longer suggests
   `gcloud auth login`; it says signing in does not apply and names
   `gapp ci project setup <project>` as the fix.
