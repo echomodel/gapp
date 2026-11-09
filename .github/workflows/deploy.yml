@@ -313,13 +313,10 @@ jobs:
           # in v4.
           PROJECT_FLAG: ${{ inputs.project-id != '' && format('--project {0}', inputs.project-id) || '' }}
         run: |
-          # No --solution flag — gapp infers the solution name from
-          # gapp.yaml at the checkout cwd. Passing --solution exercises
-          # gapp's explicit-name code path which (as of v-3) drops
-          # repo_path on the returned context, breaking `gapp deploy`
-          # which needs to load the manifest. Until that v-3 regression
-          # is fixed, the workflow uses cwd inference exclusively. The
-          # checkout above places the solution at `./${solution-name}/`
-          # so the basename inference resolves to the solution name.
+          # No name argument: gapp setup and gapp deploy read the name
+          # from gapp.yaml at the checkout cwd (gapp deploy always
+          # deploys the checkout). The checkout above places the app at
+          # `./${solution-name}/` so the basename inference resolves to
+          # the deployment name.
           gapp setup $PROJECT_FLAG
           gapp deploy --ref ${{ inputs.ref }} $PROJECT_FLAG

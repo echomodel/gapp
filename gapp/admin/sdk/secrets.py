@@ -96,15 +96,15 @@ def remove_secret(secret_name: str, solution: str | None = None) -> dict:
     return {"name": secret_name, "status": "removed"}
 
 
-def set_secret(name: str, value: str, solution: str | None = None) -> dict:
+def set_secret(name: str, value: str) -> dict:
     """Store a secret value in Secret Manager, stamping the solution label.
 
     Returns dict with: name, secret_id, project_id, secret_status.
     """
-    resolved = _find_secret(name, solution=solution)
+    resolved = _find_secret(name)
     project_id = resolved["project_id"]
     if not project_id:
-        raise RuntimeError("No GCP project attached. Run 'gapp setup <project-id>' first.")
+        raise RuntimeError("No GCP project attached. Run 'gapp setup --project <project-id>' first.")
 
     secret_id = resolved["secret_id"]
     solution_name = resolved["solution"]
@@ -119,7 +119,7 @@ def set_secret(name: str, value: str, solution: str | None = None) -> dict:
     }
 
 
-def list_secrets(solution: str | None = None) -> dict:
+def list_secrets(name: str | None = None) -> dict:
     """List secret-backed env vars and diff them against what exists in GCP.
 
     First does a single label-filtered `gcloud secrets list` to enumerate
@@ -137,7 +137,7 @@ def list_secrets(solution: str | None = None) -> dict:
     in the top-level `hints` array; CLI renderers can emit them as
     footnotes after the table.
     """
-    ctx = GappSDK().resolve_solution_with_project(solution)
+    ctx = GappSDK().resolve_solution_with_project(name)
     if not ctx:
         raise RuntimeError(
             "Not inside a gapp solution. Run 'gapp init' first, or cd into a solution repo."
@@ -425,9 +425,9 @@ def materialize_generated_secrets(project_id: str, solution_name: str, manifest:
     return results
 
 
-def _find_secret(name: str, solution: str | None = None) -> dict:
-    """Look up a secret by its short name as declared in gapp.yaml."""
-    ctx = GappSDK().resolve_solution_with_project(solution)
+def _find_secret(name: str) -> dict:
+    """Look up a secret by its short name as declared in the checkout's gapp.yaml."""
+    ctx = GappSDK().resolve_solution_with_project()
     if not ctx:
         raise RuntimeError(
             "Not inside a gapp solution. Run 'gapp init' first, or cd into a solution repo."
@@ -464,14 +464,14 @@ def _find_secret(name: str, solution: str | None = None) -> dict:
     )
 
 
-def get_secret(name: str, plaintext: bool = False, solution: str | None = None) -> dict:
+def get_secret(name: str, plaintext: bool = False) -> dict:
     """Get a secret from Secret Manager by its short name."""
     import hashlib
 
-    resolved = _find_secret(name, solution=solution)
+    resolved = _find_secret(name)
     project_id = resolved["project_id"]
     if not project_id:
-        raise RuntimeError("No GCP project attached. Run 'gapp setup <project-id>' first.")
+        raise RuntimeError("No GCP project attached. Run 'gapp setup --project <project-id>' first.")
 
     secret_id = resolved["secret_id"]
     value = _read_secret_version(project_id, secret_id)

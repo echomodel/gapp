@@ -87,8 +87,8 @@ def gapp_init(
 
 @_tool()
 def gapp_setup(
+    name: str | None = None,
     project_id: str | None = None,
-    solution: str | None = None,
 ) -> dict:
     """Set up GCP foundation for a gapp solution.
 
@@ -100,17 +100,16 @@ def gapp_setup(
     discovery finds the project among those marked gapp=hosted.
 
     Args:
+        name: Deployment name. Defaults to the current directory's app.
         project_id: GCP project ID. Required for first-time install.
-        solution: Solution name. Defaults to current directory's solution.
     """
     from gapp.admin.sdk.core import GappSDK
-    return GappSDK().setup(project_id, solution=solution)
+    return GappSDK().setup(project_id, name=name)
 
 
 @_tool()
 def gapp_deploy(
     ref: str | None = None,
-    solution: str | None = None,
     dry_run: bool = False,
     project_id: str | None = None,
     rebuild: bool = False,
@@ -119,6 +118,7 @@ def gapp_deploy(
     """Deploy a gapp solution to Cloud Run (build + terraform apply).
 
     Prerequisites: gapp_init and gapp_setup must have been run first.
+    Always deploys the app in the current directory.
 
     Custom domains are guarded. The deploy stops before Terraform when
     the domain in gapp.yaml is not verified by the deploying identity
@@ -128,7 +128,6 @@ def gapp_deploy(
 
     Args:
         ref: Git ref to build from (commit, tag, branch). Defaults to HEAD.
-        solution: Solution name. Defaults to current directory's solution.
         dry_run: Preview only — do not build or apply.
         project_id: Explicit GCP project ID override. Discovered if omitted.
         rebuild: Force docker build even if an image already exists in
@@ -142,13 +141,13 @@ def gapp_deploy(
     """
     from gapp.admin.sdk.core import GappSDK
     return GappSDK().deploy(
-        ref=ref, solution=solution, dry_run=dry_run, project_id=project_id,
+        ref=ref, dry_run=dry_run, project_id=project_id,
         rebuild=rebuild, replace_domain=replace_domain,
     )
 
 
 @_tool()
-def gapp_secret_get(name: str, plaintext: bool = False, solution: str | None = None) -> dict:
+def gapp_secret_get(name: str, plaintext: bool = False) -> dict:
     """Get a secret from GCP Secret Manager.
 
     Use this to retrieve secrets that gapp manages for a deployed solution —
@@ -174,14 +173,13 @@ def gapp_secret_get(name: str, plaintext: bool = False, solution: str | None = N
     Args:
         name: The secret's short name from gapp.yaml (e.g. "app-key").
         plaintext: If True, return the actual secret value. Default False.
-        solution: Solution name. Defaults to current directory's solution.
     """
     from gapp.admin.sdk.secrets import get_secret
-    return get_secret(name, plaintext=plaintext, solution=solution)
+    return get_secret(name, plaintext=plaintext)
 
 
 @_tool()
-def gapp_secret_set(name: str, value: str, solution: str | None = None) -> dict:
+def gapp_secret_set(name: str, value: str) -> dict:
     """Store a secret value in GCP Secret Manager for a deployed solution.
 
     Use this to populate secrets that the solution needs at runtime but
@@ -199,14 +197,13 @@ def gapp_secret_set(name: str, value: str, solution: str | None = None) -> dict:
     Args:
         name: The secret's short name from gapp.yaml (e.g. "api-key").
         value: The secret value to store.
-        solution: Solution name. Defaults to current directory's solution.
     """
     from gapp.admin.sdk.secrets import set_secret
-    return set_secret(name, value, solution=solution)
+    return set_secret(name, value)
 
 
 @_tool()
-def gapp_secret_list(solution: str | None = None) -> dict:
+def gapp_secret_list(name: str | None = None) -> dict:
     """List all secret-backed env vars and whether they are ready for deploy.
 
     Shows each secret's env var name, resolved Secret Manager ID, whether
@@ -234,10 +231,10 @@ def gapp_secret_list(solution: str | None = None) -> dict:
              commands. See docs/SECRETS.md for the full recovery guide.
 
     Args:
-        solution: Solution name. Defaults to current directory's solution.
+        name: Deployment name. Defaults to the current directory's app.
     """
     from gapp.admin.sdk.secrets import list_secrets
-    return list_secrets(solution=solution)
+    return list_secrets(name=name)
 
 
 @_tool()
@@ -461,7 +458,7 @@ def gapp_ci_list(repo: str | None = None, verbose: bool = False) -> dict:
 
 
 @_tool()
-def gapp_status(solution: str | None = None, project: str | None = None) -> dict:
+def gapp_status(name: str | None = None, project: str | None = None) -> dict:
     """Infrastructure health check for a gapp solution (the direct system).
 
     Reads deployment labels and Terraform state; never GitHub, never the CI
@@ -474,11 +471,11 @@ def gapp_status(solution: str | None = None, project: str | None = None) -> dict
     the login command.
 
     Args:
-        solution: Solution name. Defaults to current directory's solution.
+        name: Deployment name. Defaults to the current directory's app.
         project: Optional explicit GCP project id, skipping the hosted-project search.
     """
     from gapp.admin.sdk.core import GappSDK
-    return GappSDK().status(name=solution, project=project).model_dump()
+    return GappSDK().status(name=name, project=project).model_dump()
 
 
 @_tool()

@@ -65,7 +65,7 @@ def test_the_cli_prints_the_ambiguity_message_for_deploy_and_status(monkeypatch)
         raise AmbiguousDeployment(AMBIGUOUS)
     monkeypatch.setattr(GappSDK, "deploy", ambiguous)
     monkeypatch.setattr(GappSDK, "status", ambiguous)
-    for args in (["deploy", "--dry-run"], ["status", "-s", "my-app"]):
+    for args in (["deploy", "--dry-run"], ["status", "my-app"]):
         res = CliRunner().invoke(cli_main, args)
         assert AMBIGUOUS in res.output, (args, res.output)
 

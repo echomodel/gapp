@@ -343,7 +343,7 @@ All `gapp ci` commands interact with GitHub exclusively through `gh api` REST ca
 
 ```
 gapp init                                         # scaffold a gapp.yaml (direct system)
-gapp setup <project-id>                           # GCP foundation (direct system)
+gapp setup --project <project-id>                 # GCP foundation (direct system)
 gapp deploy                                       # local deploy (direct system)
 gapp ci init [<owner>/<repo>] [--create]          # CI: the fleet repo (once per operator)
 gapp ci sources add <owner>                       # CI: allow a source owner (once per owner)

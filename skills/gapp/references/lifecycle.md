@@ -39,7 +39,7 @@ name, each set up and deployed with its own project id. Once a name
 is on more than one project, `gapp deploy` and `gapp status` need
 `--project`; without it they stop and say so.
 
-**Run setup.** `gapp setup <project-id>`. The id is required the
+**Run setup.** `gapp setup --project <project-id>`. The id is required the
 first time; later runs find the project among those marked
 `gapp=hosted`. Setup enables APIs, creates the per-solution bucket
 for Terraform state and data and labels it (`gapp-deployment`,
