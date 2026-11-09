@@ -5,6 +5,23 @@ source is `gapp/__init__.py`.
 
 ## Unreleased
 
+Breaking changes:
+
+- `gapp ci setup` no longer takes `--config` (and the `gapp_ci_setup` MCP
+  tool no longer takes `config`). It merged a local file into the entry,
+  which could not be repeated or reviewed. An entry carries the
+  deployment's domain (set with `--domain`); every other setting comes
+  from the app repo's own `gapp.yaml`.
+
+Other changes:
+
+- Re-running `gapp ci setup <name> --repo <repo> --project <project>` on an
+  existing deployment drops any key in its entry that gapp.yaml does not
+  have, keeping the known keys and the domain.
+- `gapp ci status <name>` no longer says "Deploy it" for an entry a deploy
+  would refuse because it has keys gapp.yaml does not have. It says:
+  "Next: rewrite the entry: gapp ci setup <name> --repo <repo> --project
+  <project>".
 - `gapp ci status <name>` no longer reports project trust: the "Project
   trust" line, its read of the project's GitHub Environment, and the
   `environment_record` field of its result (and of the `gapp_ci_status`

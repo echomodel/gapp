@@ -546,17 +546,15 @@ def ci_sources_list_cmd(verbose, json_out):
 @click.option("--repo", default=None, metavar="OWNER/REPO", help="The repo to deploy (never the fleet repo). The name defaults to its repo name.")
 @click.option("--project", default=None, metavar="PROJECT", help="GCP project id the deployment deploys to.")
 @click.option("--domain", default=None, help="Custom domain the deploy maps (a gapp.yaml key). Omit to keep the entry's; pass \"\" to remove it.")
-@click.option("--config", "config_path", default=None, type=click.Path(exists=True, dir_okay=False),
-              help="YAML file of gapp.yaml keys to set on the entry (merged over the repo's gapp.yaml at deploy time).")
 @click.option("--copy-of", default=None, metavar="EXISTING", help="Start NAME as a copy of an existing deployment (same repo and keys; its own id; no domain).")
 @click.option("--no-watch", is_flag=True, help="Return after dispatching the register run instead of waiting for it.")
 @_ci_options
-def ci_setup_cmd(name, repo, project, domain, config_path, copy_of, no_watch, verbose, json_out):
+def ci_setup_cmd(name, repo, project, domain, copy_of, no_watch, verbose, json_out):
     """Add or update a deployment: NAME deploys --repo to --project. Mirrors `gapp setup` for the fleet.
 
     Never uses gcloud and never reads the working directory: the repo is
     named by --repo and the name defaults to the repo's name. Same name
-    again updates its gapp.yaml keys (--domain, --config). A repo already
+    again updates its domain (--domain). A repo already
     deployed under another name is refused: update that one, or add
     another deployment of it with --copy-of. Writes go through the fleet
     repo's register run, so this needs only a `gh` that can dispatch
@@ -568,16 +566,8 @@ def ci_setup_cmd(name, repo, project, domain, config_path, copy_of, no_watch, ve
       gapp ci setup my-app-staging --copy-of my-app --project my-staging-project
     """
     from gapp.admin.sdk.ci import setup_deployment
-    config = None
-    if config_path:
-        import yaml as _yaml
-        with open(config_path) as f:
-            config = _yaml.safe_load(f) or {}
-        if not isinstance(config, dict):
-            click.echo(f"{config_path} is not a mapping of gapp.yaml keys.")
-            raise SystemExit(1)
     command = "gapp " + " ".join(sys.argv[1:]) if sys.argv and sys.argv[0] else None
-    result = setup_deployment(name, repo=repo, project=project, domain=domain, config=config,
+    result = setup_deployment(name, repo=repo, project=project, domain=domain,
                               copy_of=copy_of, watch=not no_watch, command=command)
     if json_out:
         _emit_json(result)

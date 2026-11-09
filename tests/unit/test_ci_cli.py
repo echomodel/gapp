@@ -167,15 +167,6 @@ def test_setup_unchanged_and_no_watch(monkeypatch):
     assert out == [f"Setting up my-app (me/my-app to my-proj): https://github.com/{FLEET}/actions/runs/42", "Next: gapp ci status my-app"]
 
 
-def test_setup_config_file_is_read_as_gapp_yaml_keys(monkeypatch, tmp_path):
-    calls = {}
-    monkeypatch.setattr(ci_mod, "setup_deployment", lambda name=None, **kw: calls.update(kw) or _setup_result())
-    cfg = tmp_path / "staging.yaml"
-    cfg.write_text("env:\n  - name: LOG_LEVEL\n    value: DEBUG\n")
-    _run(["ci", "setup", "--repo", "me/my-app", "--project", "my-proj", "--config", str(cfg), "--domain", "d.example.com"])
-    assert calls["config"] == {"env": [{"name": "LOG_LEVEL", "value": "DEBUG"}]} and calls["domain"] == "d.example.com"
-
-
 def test_setup_without_repo_prints_the_outcome(monkeypatch):
     monkeypatch.setattr(ci_mod, "setup_deployment", lambda name=None, **kw: _setup_result(dispatched=False) | ci_mod._outcome(
         "pass --repo", "Name the repo to deploy: `gapp ci setup [<name>] --repo <owner>/<repo> --project <project>`."))

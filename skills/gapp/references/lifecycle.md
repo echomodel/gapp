@@ -113,7 +113,7 @@ cloud agent. No terraform or gcloud on the deploying machine.
    and `gh` signed in as an admin of the fleet repo, and it is the one
    human step to hand off when this machine lacks them.
 4. `gapp ci setup <name> --repo <owner>/<repo> --project <project-id>
-   [--domain app.example.com] [--config keys.yaml]` adds the
+   [--domain app.example.com]` adds the
    deployment (the name defaults to the repo's name): it dispatches
    the register run, which checks the project's Environment, the
    source allowlist and the repo's reachability, then writes the entry

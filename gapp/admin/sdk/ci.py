@@ -1111,7 +1111,7 @@ def _refusal_action(code: str) -> str:
     }.get(code, "fix the input")
 
 
-def _default_command(name, *, repo=None, project=None, domain=None, copy_of=None, config_path=None) -> str:
+def _default_command(name, *, repo=None, project=None, domain=None, copy_of=None) -> str:
     parts = ["gapp ci setup", name]
     if copy_of:
         parts += ["--copy-of", copy_of]
@@ -1121,19 +1121,17 @@ def _default_command(name, *, repo=None, project=None, domain=None, copy_of=None
         parts += ["--project", project]
     if domain is not None:
         parts += ["--domain", domain or '""']
-    if config_path:
-        parts += ["--config", config_path]
     return " ".join(parts)
 
 
 def setup_deployment(name: str | None = None, *, repo: str | None = None, project: str | None = None,
-                     domain: str | None = None, config: dict | None = None, copy_of: str | None = None,
+                     domain: str | None = None, copy_of: str | None = None,
                      watch: bool = True, command: str | None = None) -> dict:
     """Add or update a deployment of the fleet (`gapp ci setup`). Never uses gcloud, never reads the cwd.
 
     The name defaults to the repo's name, derived only from `repo`. Same
-    name and repo: an update of its gapp.yaml keys (`domain` sets or, as
-    "", removes the domain; `config` is a mapping of gapp.yaml keys). With
+    name and repo: an update of its domain (`domain` sets it or, as "",
+    removes it). With
     `copy_of`, a new deployment from an existing one: the same repo and
     gapp.yaml keys, never the id, the domain, deploy history or secret
     values; `project` defaults to the source's. Every refusal (name taken,
@@ -1146,7 +1144,7 @@ def setup_deployment(name: str | None = None, *, repo: str | None = None, projec
               "copied_env": [], "secrets": [], "project_from_source": False,
               "workflow": REGISTER_WORKFLOW, "dispatched": False, "run_id": None, "run_url": None,
               "conclusion": None, "result_code": None, "messages": [], "next_step": None}
-    changes = dict(config or {})
+    changes = {}
     if domain is not None:
         changes["domain"] = domain.strip() or None
     result["changes"] = changes
@@ -1342,6 +1340,9 @@ def status_deployment(name: str) -> dict:
             f"The entry '{result['name']}' in {DEPLOYMENTS_FILE} has unknown key(s) {', '.join(unknown)}, "
             f"so a deploy would refuse it."
         )
+        result["next_step"] = {"action": "ci setup", "hint": (
+            f"rewrite the entry: gapp ci setup {result['name']} --repo {entry.get('repo')} --project {entry.get('project')}"
+        )}
     result["last_deploy"] = _last_deploy(fleet_repo, result["name"])
     return result
 

@@ -321,7 +321,6 @@ def gapp_ci_setup(
     repo: str | None = None,
     project: str | None = None,
     domain: str | None = None,
-    config: dict | None = None,
     copy_of: str | None = None,
     watch: bool = True,
 ) -> dict:
@@ -329,10 +328,9 @@ def gapp_ci_setup(
 
     Mirrors gapp_setup for the fleet. The name defaults to the repo's name,
     derived only from `repo` (never from a checkout). The same name again
-    updates the deployment's gapp.yaml keys: `domain` sets the custom domain
-    ("" removes it) and `config` is a mapping of gapp.yaml keys merged over
-    the repo's gapp.yaml at deploy time (the entry governs; keys it does not
-    set come from the repo). A repo already deployed under another name is
+    updates the deployment's custom domain: `domain` sets it ("" removes
+    it); every other setting comes from the app repo's own gapp.yaml, and
+    the same call drops any key gapp.yaml does not have. A repo already deployed under another name is
     refused: update that deployment, or add another with `copy_of`, which
     copies the source's repo and gapp.yaml keys but never its id, domain,
     deploy history or secret values, and defaults `project` to the
@@ -352,7 +350,6 @@ def gapp_ci_setup(
         repo: The repo to deploy, owner/name. Never the fleet repo.
         project: GCP project id. Required unless copy_of (then the source's by default).
         domain: Custom domain the deploy maps; "" removes it; None keeps it.
-        config: gapp.yaml keys to set on the entry (None values remove keys).
         copy_of: An existing deployment to copy.
         watch: Wait for the register run (default True); False returns after the dispatch.
 
@@ -361,7 +358,7 @@ def gapp_ci_setup(
     did not succeed.
     """
     from gapp.admin.sdk.ci import setup_deployment
-    return setup_deployment(name, repo=repo, project=project, domain=domain, config=config,
+    return setup_deployment(name, repo=repo, project=project, domain=domain,
                             copy_of=copy_of, watch=watch)
 
 

@@ -96,12 +96,16 @@ def test_setup_again_with_the_same_values_changes_nothing_and_dispatches_nothing
     assert len(wired.dispatched) == dispatched
 
 
-def test_setup_again_updates_keys_keeps_the_domain_and_an_empty_domain_removes_it(wired):
+def test_setup_again_keeps_hand_edited_keys_and_the_domain_and_an_empty_domain_removes_it(wired):
     _setup(domain="mcp.example.com")
-    res = _setup(config={"env": [{"name": "LOG_LEVEL", "value": "DEBUG"}]})
-    assert res["action"] == "updated" and res["domain"] == "mcp.example.com"
+    wired.deploy(FLEET, "my-app", "me/my-app", "my-proj", domain="mcp.example.com",
+                 env=[{"name": "LOG_LEVEL", "value": "DEBUG"}])          # an entry carrying other known keys
+    res = _setup()
+    assert res["action"] == "unchanged" and res["domain"] == "mcp.example.com"
+    res = _setup(domain="d.example.com")
+    assert res["action"] == "updated" and res["domain"] == "d.example.com"
     entry = wired.deployments(FLEET)["my-app"]
-    assert entry["domain"] == "mcp.example.com" and entry["env"] == [{"name": "LOG_LEVEL", "value": "DEBUG"}]
+    assert entry["domain"] == "d.example.com" and entry["env"] == [{"name": "LOG_LEVEL", "value": "DEBUG"}]
     res = _setup(domain="")
     assert res["action"] == "updated" and res["domain"] is None
     assert "domain" not in wired.deployments(FLEET)["my-app"]
@@ -250,8 +254,9 @@ def test_setup_without_the_register_workflow_or_the_deployments_file_points_at_c
 
 
 def test_copy_of_makes_an_independent_deployment_and_echoes_env_and_secrets(wired):
-    _setup(domain="mcp.example.com", config={"env": [
-        {"name": "LOG_LEVEL", "value": "INFO"}, {"name": "API_KEY", "secret": {"name": "api-key"}}]})
+    _setup(domain="mcp.example.com")
+    wired.deploy(FLEET, "my-app", "me/my-app", "my-proj", domain="mcp.example.com", env=[
+        {"name": "LOG_LEVEL", "value": "INFO"}, {"name": "API_KEY", "secret": {"name": "api-key"}}])
     wired.environments[(FLEET, "staging-proj")] = {}
     res = ci_mod.setup_deployment("my-app-staging", copy_of="my-app", project="staging-proj")
     assert res["ok"] is True and res["action"] == "added"
@@ -311,17 +316,53 @@ def test_rename_refuses_a_missing_deployment_or_a_taken_name(wired):
 def test_setup_has_no_working_directory_parameters():
     import inspect
     params = inspect.signature(ci_mod.setup_deployment).parameters
-    assert set(params) == {"name", "repo", "project", "domain", "config", "copy_of", "watch", "command"}
+    assert set(params) == {"name", "repo", "project", "domain", "copy_of", "watch", "command"}
     assert "solution" not in params and "solution_repo" not in params
 
 
-def test_setup_refuses_a_key_gapp_yaml_does_not_have_before_dispatching(wired):
-    res = _setup(config={"memroy": "1Gi"})
-    assert res["ok"] is False and wired.dispatched == []
-    assert "'memroy' is not a gapp.yaml key (check for typos); `gapp manifest schema` lists them." in res["next_step"]["hint"]
-    res = _setup(config={"service": {"memroy": "1Gi"}})
-    assert res["ok"] is False and "'service.memroy' is not a gapp.yaml key" in res["next_step"]["hint"]
+def test_setup_takes_no_config_file_anywhere():
+    """No option merges a local file into an entry: an entry carries the domain (--domain); the app's gapp.yaml the rest."""
+    import inspect
+    from click.testing import CliRunner
+    from gapp.admin.cli.main import main
+    from gapp.admin.mcp import server
+    assert "config" not in inspect.signature(ci_mod.setup_deployment).parameters
+    assert "config" not in inspect.signature(server.gapp_ci_setup).parameters
+    assert "--config" not in {o for p in main.commands["ci"].commands["setup"].params for o in p.opts}
+    res = CliRunner().invoke(main, ["ci", "setup", "--repo", "me/my-app", "--project", "my-proj", "--config", "x.yaml"])
+    assert res.exit_code == 2
 
 
-def test_setup_accepts_real_gapp_yaml_keys_and_removals(wired):
-    assert _setup(config={"public": True, "domain": None})["ok"] is True
+def test_rerunning_setup_drops_unknown_keys_and_keeps_known_ones_and_the_domain(wired):
+    """Re-running setup is the one repair for an entry a deploy would refuse."""
+    _setup(domain="mcp.example.com")
+    wired.deploy(FLEET, "my-app", "me/my-app", "my-proj", domain="mcp.example.com", colour="x",
+                 service={"memory": "1Gi", "memroy": "2Gi"}, env=[{"name": "A", "value": "1", "bogus": 1}])
+    assert ci_mod.status_deployment("my-app")["next_step"]["hint"] == (
+        "rewrite the entry: gapp ci setup my-app --repo me/my-app --project my-proj")
+    res = _setup()
+    assert res["ok"] is True and res["action"] == "updated" and res["dispatched"] is True
+    entry = wired.deployments(FLEET)["my-app"]
+    assert entry == {"id": "my-app", "repo": "me/my-app", "project": "my-proj", "domain": "mcp.example.com",
+                     "service": {"memory": "1Gi"}, "env": [{"name": "A", "value": "1"}]}
+    res = ci_mod.status_deployment("my-app")
+    assert res["problem"] is None and res["next_step"] is None
+    assert _setup()["action"] == "unchanged"                              # idempotent
+
+
+def test_set_entry_drops_unknown_keys_at_any_depth():
+    doc = {"a": {"id": "a", "repo": "me/a", "project": "my-proj", "colour": "x", "public": True,
+                 "service": {"memroy": "1Gi"}, "env": [{"name": "A", "value": "1", "bogus": 1}]}}
+    _, action, entry = fleet.set_entry(doc, "a", repo="me/a", project="my-proj")
+    assert action == "updated"
+    assert entry == {"id": "a", "repo": "me/a", "project": "my-proj", "public": True, "service": {},
+                     "env": [{"name": "A", "value": "1"}]}
+
+
+def test_a_register_change_with_a_key_gapp_yaml_does_not_have_is_still_refused():
+    """The register run takes changes from its dispatch inputs, so the fleet module still validates them."""
+    doc = {}
+    with pytest.raises(fleet.FleetRefusal, match="'memroy' is not a gapp.yaml key"):
+        fleet.set_entry(doc, "my-app", repo="me/my-app", project="my-proj", changes={"memroy": "1Gi"})
+    with pytest.raises(fleet.FleetRefusal, match="'service.memroy' is not a gapp.yaml key"):
+        fleet.set_entry(doc, "my-app", repo="me/my-app", project="my-proj", changes={"service": {"memroy": "1Gi"}})

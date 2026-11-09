@@ -201,6 +201,19 @@ def allocate_id(doc: dict, name: str, project: str, exclude: str | None = None) 
 # --- changes ---
 
 
+def without_unknown_keys(entry: dict) -> dict:
+    """The entry with every gapp.yaml key gapp does not know removed (paths as the validator reports them)."""
+    out = copy.deepcopy(entry)
+    for path in unknown_keys(manifest_keys(entry)):
+        *parents, last = path.split(".")
+        node = out
+        for part in parents:
+            node = node[int(part)] if isinstance(node, list) else node.get(part, {})
+        if isinstance(node, dict):
+            node.pop(last, None)
+    return out
+
+
 def _apply_changes(entry: dict, changes: dict) -> dict:
     out = dict(entry)
     for key, value in changes.items():
@@ -214,7 +227,9 @@ def _apply_changes(entry: dict, changes: dict) -> dict:
 def set_entry(doc: dict, name: str, *, repo: str, project: str, changes: dict | None = None) -> tuple[dict, str, dict]:
     """Add or update the deployment `name`. Returns (doc, "added"|"updated"|"unchanged", entry).
 
-    Same name and repo: an update of its gapp.yaml keys. Same name, another
+    Same name and repo: an update of its gapp.yaml keys, which also drops
+    any key gapp.yaml does not have (so re-running setup repairs an entry
+    a deploy would refuse). Same name, another
     repo or project: refused (a deployment binds to one repo and one
     project; pick another name, or rename). A repo already deployed under
     other names: refused for a new name, since another deployment of the
@@ -238,7 +253,7 @@ def set_entry(doc: dict, name: str, *, repo: str, project: str, changes: dict | 
                 f"A deployment stays on one project, because its id keys that project's resources. For another "
                 f"project, add a deployment: gapp ci setup <new-name> --copy-of {name} --project {project}"
             ))
-        updated = _apply_changes(existing, changes)
+        updated = _apply_changes(without_unknown_keys(existing), changes)
         if updated == existing:
             return doc, "unchanged", existing
         doc[name] = updated
