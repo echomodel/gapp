@@ -3,7 +3,7 @@
 Notable changes to gapp. Versions are git tags (`vX.Y.Z`); the version
 source is `gapp/__init__.py`.
 
-## Unreleased
+## 4.0.0rc7 (pre-release of 4.0.0)
 
 - **The deployment name is an argument.** `gapp status [NAME]` and
   `gapp secrets list [NAME]` take the deployment name the way
