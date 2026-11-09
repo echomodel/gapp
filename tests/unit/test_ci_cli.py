@@ -202,6 +202,20 @@ def test_project_setup_output(monkeypatch):
     monkeypatch.setattr(ci_mod, "setup_ci_project", lambda project: {**base, "changed": False, "environment_record": "unchanged"})
     assert _run(["ci", "project", "setup", "my-proj"]).output.splitlines()[0] == "my-proj already trusts your fleet to deploy to it. Nothing changed."
     assert "WIF pool: created" in _run(["ci", "project", "setup", "my-proj", "--verbose"]).output
+    lag = ("It can take a few minutes before gapp sees the new mark when searching for deployments "
+           "(`gapp list`, and commands run without `--project`).")
+    trusted = {**base, "wif_pool": "exists", "wif_provider": "exists", "environment_record": "unchanged"}
+    monkeypatch.setattr(ci_mod, "setup_ci_project", lambda project: {**trusted, "hosted": "set", "changed": True})
+    out = _run(["ci", "project", "setup", "my-proj"]).output.splitlines()
+    assert out[:2] == ["my-proj already trusts your fleet to deploy to it; marked it gapp=hosted, so `gapp list` "
+                       "and `gapp status <name>` can find its deployments.", lag]
+    assert "Hosted mark (gapp=hosted): set" in _run(["ci", "project", "setup", "my-proj", "--verbose"]).output
+    monkeypatch.setattr(ci_mod, "setup_ci_project", lambda project: {**trusted, "hosted": "exists", "changed": False})
+    out = _run(["ci", "project", "setup", "my-proj"]).output.splitlines()
+    assert out[0] == "my-proj already trusts your fleet to deploy to it. Nothing changed." and lag not in out
+    monkeypatch.setattr(ci_mod, "setup_ci_project", lambda project: {**base, "hosted": "set"})
+    out = _run(["ci", "project", "setup", "my-proj"]).output.splitlines()
+    assert out[:2] == ["my-proj now trusts your fleet to deploy to it.", lag]
     help_text = _run(["ci", "project", "setup", "--help"]).output
     assert "Owner" in help_text and "admin of the fleet repo" in help_text
 

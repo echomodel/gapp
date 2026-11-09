@@ -792,7 +792,7 @@ def setup_ci_project(project: str) -> dict:
             f"steps are idempotent."
         ))}
     result["changed"] = any(result[k] == "created" for k in ("wif_pool", "wif_provider", "service_account")) \
-        or result["environment_record"] != "unchanged"
+        or result["environment_record"] != "unchanged" or result["hosted"] == "set"
     return result
 
 

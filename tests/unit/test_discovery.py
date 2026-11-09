@@ -1,15 +1,17 @@
 """Tests for finding the project that hosts a deployment.
 
 Discovery searches the projects marked gapp=hosted for the deployment's
-bucket (labeled gapp-deployment=<id>); the project's gapp-env comes from the
-same project listing. An explicit project is taken as given, with no search.
-Old per-solution project labels (gapp__<name>, gapp_<owner>_<name>) are
-never read, and neither is any owner label.
+bucket (labeled gapp-deployment=<id>), stopping at the second match. An
+explicit project is taken as given, with no search and no label read. Old
+per-solution project labels (gapp__<name>, gapp_<owner>_<name>) and the
+removed gapp-env label are never read.
 """
 
 import pytest
-from gapp.admin.sdk.core import GappSDK
+from gapp.admin.sdk.core import AmbiguousDeployment, GappSDK
 from gapp.admin.sdk.cloud.dummy import DummyCloudProvider
+
+AMBIGUOUS = "'my-app' exists on more than one project. Pass --project to choose one; `gapp list` shows where each is."
 
 
 @pytest.fixture
@@ -19,11 +21,11 @@ def sdk():
 
 def test_resolve_single_match(sdk):
     """One hosted project with the deployment's bucket → resolves to it."""
-    sdk.provider.host("proj-1", "my-app", env="prod")
+    sdk.provider.host("proj-1", "my-app")
 
     res = sdk.resolve_project_for_solution("my-app")
     assert res["project_id"] == "proj-1"
-    assert res["env"] == "prod"
+    assert "env" not in res
 
 
 def test_resolve_zero_matches_raises(sdk):
@@ -39,77 +41,28 @@ def test_a_project_not_marked_hosted_is_not_searched(sdk):
 
 
 def test_old_project_labels_are_never_read(sdk):
-    """Clean break: a gapp__<name> project label alone finds nothing."""
-    sdk.provider.project_labels["proj-1"] = {"gapp": "hosted", "gapp__my-app": "v-3"}
+    """Clean break: a gapp__<name> or gapp-env project label alone finds nothing."""
+    sdk.provider.project_labels["proj-1"] = {"gapp": "hosted", "gapp__my-app": "v-3", "gapp-env": "prod"}
     with pytest.raises(RuntimeError, match="No deployment 'my-app'"):
         sdk.resolve_project_for_solution("my-app")
 
 
-def test_resolve_multi_match_no_env_raises(sdk):
-    """Multiple projects, no --env → ambiguous, list candidates."""
-    sdk.provider.host("proj-1", "my-app", env="prod")
-    sdk.provider.host("proj-2", "my-app", env="dev")
-
-    with pytest.raises(RuntimeError, match="Deployment 'my-app' exists on multiple projects") as exc:
+def test_a_name_on_two_projects_is_refused_with_the_approved_message(sdk):
+    sdk.provider.host("proj-1", "my-app")
+    sdk.provider.host("proj-2", "my-app")
+    with pytest.raises(AmbiguousDeployment) as exc:
         sdk.resolve_project_for_solution("my-app")
-    assert "proj-1 (env=prod)" in str(exc.value) and "proj-2 (env=dev)" in str(exc.value)
-
-
-def test_resolve_multi_match_env_narrows_to_one(sdk):
-    """Multiple projects, --env narrows to exactly one → resolved."""
-    sdk.provider.host("proj-1", "my-app", env="prod")
-    sdk.provider.host("proj-2", "my-app", env="dev")
-
-    res = sdk.resolve_project_for_solution("my-app", env="prod")
-    assert res["project_id"] == "proj-1"
-
-
-def test_resolve_multi_match_env_zero_after_filter(sdk):
-    """--env that matches none of the candidates → error listing what we DO have."""
-    sdk.provider.host("proj-1", "my-app", env="prod")
-    sdk.provider.host("proj-2", "my-app", env="dev")
-
-    with pytest.raises(RuntimeError, match="not found in env='staging'"):
-        sdk.resolve_project_for_solution("my-app", env="staging")
-
-
-def test_resolve_multi_match_same_env_corruption(sdk):
-    """Multiple projects in the same named env → corruption refusal naming the bucket fix."""
-    sdk.provider.host("proj-1", "my-app", env="prod")
-    sdk.provider.host("proj-2", "my-app", env="prod")
-
-    with pytest.raises(RuntimeError, match="corruption") as exc:
-        sdk.resolve_project_for_solution("my-app", env="prod")
-    assert "gcloud storage buckets update gs://gapp-my-app-<pid> --remove-labels=gapp-deployment" in str(exc.value)
-
-
-def test_first_only_stops_at_the_first_match(sdk):
-    """Status asks with first_only: an ambiguous name returns a match instead of refusing."""
-    sdk.provider.host("proj-1", "my-app", env="prod")
-    sdk.provider.host("proj-2", "my-app", env="dev")
-    res = sdk.resolve_project_for_solution("my-app", first_only=True)
-    assert res["project_id"] in ("proj-1", "proj-2")
-    res = sdk.resolve_project_for_solution("my-app", env="dev", first_only=True)
-    assert res["project_id"] == "proj-2"
+    assert str(exc.value) == AMBIGUOUS
 
 
 def test_resolve_explicit_project_bypasses_discovery(sdk, monkeypatch):
-    """--project takes the project as given: no hosted-project search."""
-    sdk.provider.project_labels["proj-1"] = {"gapp-env": "prod"}
+    """--project takes the project as given: no hosted-project search, no label read."""
     monkeypatch.setattr(sdk.provider, "list_projects", lambda *a, **k: pytest.fail("no search with --project"))
     monkeypatch.setattr(sdk.provider, "list_bucket_labels", lambda *a, **k: pytest.fail("no search with --project"))
+    monkeypatch.setattr(sdk.provider, "get_project_labels", lambda *a, **k: pytest.fail("no label read"))
 
     res = sdk.resolve_project_for_solution("my-app", project="proj-1")
     assert res["project_id"] == "proj-1"
-    assert res["env"] == "prod"
-
-
-def test_resolve_explicit_project_env_mismatch_refuses(sdk):
-    """--project with --env that doesn't match P's gapp-env → refuse."""
-    sdk.provider.host("proj-1", "my-app", env="prod")
-
-    with pytest.raises(RuntimeError, match="bound to env='prod'"):
-        sdk.resolve_project_for_solution("my-app", project="proj-1", env="dev")
 
 
 def test_resolve_discovery_off_requires_project(sdk):
@@ -121,8 +74,8 @@ def test_resolve_discovery_off_requires_project(sdk):
         sdk.resolve_project_for_solution("my-app")
 
 
-def test_an_owner_label_left_on_a_bucket_does_not_scope_the_search(sdk):
-    """Owner namespaces are gone: a stray gapp-owner label changes nothing."""
-    sdk.provider.host("proj-1", "my-app")
-    sdk.provider.buckets["gapp-my-app-proj-1"]["labels"]["gapp-owner"] = "alice"
-    assert sdk.resolve_project_for_solution("my-app")["project_id"] == "proj-1"
+def test_resolvers_take_no_env():
+    import inspect
+    for fn in (GappSDK.resolve_project_for_solution, GappSDK.resolve_solution_with_project,
+               GappSDK.discover_projects_for_solution, GappSDK.setup, GappSDK.deploy, GappSDK.status):
+        assert "env" not in inspect.signature(fn).parameters, fn.__name__

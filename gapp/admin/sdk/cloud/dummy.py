@@ -27,16 +27,13 @@ class DummyCloudProvider(CloudProvider):
         self.services = {}  # (project_id, service_name) -> labels
         self.label_writes = []  # ("project" | "bucket", target, labels) in call order
 
-    def host(self, project_id: str, deployment: str,
-             env: Optional[str] = None, version: str = "4", service: bool = True,
+    def host(self, project_id: str, deployment: str, version: str = "4", service: bool = True,
              hosted: bool = True) -> str:
         """Test setup: a deployment as gapp leaves it, on a project marked
         gapp=hosted (unless hosted=False). Returns the bucket name."""
         labels = self.project_labels.setdefault(project_id, {})
         if hosted:
             labels["gapp"] = "hosted"
-        if env:
-            labels["gapp-env"] = env
         dep_labels = {"gapp-deployment": deployment, "gapp-version": version}
         bucket = f"gapp-{deployment}-{project_id}".lower()
         self.buckets[bucket] = {"project": project_id, "labels": dict(dep_labels)}

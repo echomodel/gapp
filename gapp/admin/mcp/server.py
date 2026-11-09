@@ -89,14 +89,12 @@ def gapp_init(
 def gapp_setup(
     project_id: str | None = None,
     solution: str | None = None,
-    env: str | None = None,
 ) -> dict:
     """Set up GCP foundation for a gapp solution.
 
     Enables APIs, creates the per-solution GCS bucket and labels it
     (gapp-deployment, gapp-version), and marks the
-    project gapp=hosted once (never from a CI run). NEVER writes the
-    project's gapp-env binding — use gapp_projects_set_env for that.
+    project gapp=hosted once (never from a CI run).
 
     First-time install requires project_id. Subsequent runs are idempotent:
     discovery finds the project among those marked gapp=hosted.
@@ -104,19 +102,15 @@ def gapp_setup(
     Args:
         project_id: GCP project ID. Required for first-time install.
         solution: Solution name. Defaults to current directory's solution.
-        env: Optional verification — must match the target project's
-             bound env (gapp-env label). Reserved values like "default"
-             are rejected; omit to skip verification.
     """
     from gapp.admin.sdk.core import GappSDK
-    return GappSDK().setup(project_id, solution=solution, env=env)
+    return GappSDK().setup(project_id, solution=solution)
 
 
 @_tool()
 def gapp_deploy(
     ref: str | None = None,
     solution: str | None = None,
-    env: str | None = None,
     dry_run: bool = False,
     project_id: str | None = None,
     rebuild: bool = False,
@@ -135,9 +129,6 @@ def gapp_deploy(
     Args:
         ref: Git ref to build from (commit, tag, branch). Defaults to HEAD.
         solution: Solution name. Defaults to current directory's solution.
-        env: Optional — disambiguates when multiple projects host this
-             solution, and verifies the resolved project's bound env.
-             Reserved values like "default" are rejected.
         dry_run: Preview only — do not build or apply.
         project_id: Explicit GCP project ID override. Discovered if omitted.
         rebuild: Force docker build even if an image already exists in
@@ -151,7 +142,7 @@ def gapp_deploy(
     """
     from gapp.admin.sdk.core import GappSDK
     return GappSDK().deploy(
-        ref=ref, solution=solution, env=env, dry_run=dry_run, project_id=project_id,
+        ref=ref, solution=solution, dry_run=dry_run, project_id=project_id,
         rebuild=rebuild, replace_domain=replace_domain,
     )
 
@@ -470,7 +461,7 @@ def gapp_ci_list(repo: str | None = None, verbose: bool = False) -> dict:
 
 
 @_tool()
-def gapp_status(solution: str | None = None, env: str | None = None, project: str | None = None) -> dict:
+def gapp_status(solution: str | None = None, project: str | None = None) -> dict:
     """Infrastructure health check for a gapp solution (the direct system).
 
     Reads deployment labels and Terraform state; never GitHub, never the CI
@@ -484,47 +475,10 @@ def gapp_status(solution: str | None = None, env: str | None = None, project: st
 
     Args:
         solution: Solution name. Defaults to current directory's solution.
-        env: Optional — used to disambiguate when multiple projects host
-             this solution.
         project: Optional explicit GCP project id, skipping the hosted-project search.
     """
     from gapp.admin.sdk.core import GappSDK
-    return GappSDK().status(name=solution, env=env, project=project).model_dump()
-
-
-@_tool()
-def gapp_projects_set_env(project_id: str, env: str, force: bool = False) -> dict:
-    """Bind a GCP project to a named env (writes the gapp-env label).
-
-    The gapp-env label is the only place a project's env lives. Setup
-    and deploy never write it. Reserved values like "default" are rejected.
-
-    Args:
-        project_id: GCP project ID.
-        env: Environment name (e.g. "prod", "dev"). Must be non-empty.
-        force: Required to overwrite an existing gapp-env value. Refuses
-               anyway if the rebind would create cross-project corruption.
-    """
-    from gapp.admin.sdk.core import GappSDK
-    return GappSDK().set_project_env(project_id, env=env, force=force)
-
-
-@_tool()
-def gapp_projects_clear_env(project_id: str) -> dict:
-    """Remove the gapp-env label from a project. Project becomes undefined-env.
-
-    Args:
-        project_id: GCP project ID.
-    """
-    from gapp.admin.sdk.core import GappSDK
-    return GappSDK().clear_project_env(project_id)
-
-
-@_tool()
-def gapp_projects_list() -> dict:
-    """List GCP projects that have a gapp-env binding."""
-    from gapp.admin.sdk.core import GappSDK
-    return GappSDK().list_target_projects()
+    return GappSDK().status(name=solution, project=project).model_dump()
 
 
 @_tool()

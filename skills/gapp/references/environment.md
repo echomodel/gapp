@@ -25,7 +25,6 @@ state.
 | Step | gapp admin tools | GCP identity | terraform | GitHub | Notes |
 |---|---|---|---|---|---|
 | init (write `gapp.yaml`) | optional | no | no | optional | `gapp init` adds a repo topic when `gh` is logged in; otherwise it just writes the file. Writing `gapp.yaml` by hand from the schema is fine too. |
-| projects set-env / clear-env | yes | project admin | no | no | one label write |
 | setup | yes | project admin: enable services, create bucket, edit IAM, write labels | no | no | once per solution per project, idempotent |
 | custom domain | yes | the deploying identity must have verified the domain or a parent | no | no | verification happens in Search Console, a browser step for the user; see below |
 | secrets list / get / set | yes | Secret Manager | no | no | |

@@ -3,6 +3,29 @@
 Notable changes to gapp. Versions are git tags (`vX.Y.Z`); the version
 source is `gapp/__init__.py`.
 
+## Unreleased (4.0.0rc6)
+
+- **Environments removed.** A deployment (its own name, project and config)
+  is the unit. Gone: the `gapp projects` group (`set-env`, `clear-env`,
+  `list`), `--env` on `gapp setup`, `deploy` and `status`, the MCP tools
+  `gapp_projects_set_env`, `gapp_projects_clear_env` and `gapp_projects_list`,
+  the `env` argument of `gapp_setup`, `gapp_deploy` and `gapp_status`, the
+  `env` and `duplicate` result keys, and the Env column and duplicate warning
+  of `gapp list`. gapp no longer reads or writes the `gapp-env` project label;
+  removing an existing one is optional.
+- With `--project` (always, in CI), gapp reads no project labels.
+- A name on more than one hosted project is refused by `gapp status` and
+  `gapp deploy` with: "'<name>' exists on more than one project. Pass
+  --project to choose one; `gapp list` shows where each is." The search stops
+  at the second match.
+- `gapp ci project setup` on a project that already trusts the fleet but
+  lacked the `gapp=hosted` mark no longer says "Nothing changed": it says it
+  marked the project, counts the mark as a change, notes that the new mark
+  can take a few minutes to be seen by the hosted-project search, and its
+  `--verbose` output shows "Hosted mark (gapp=hosted): set|exists".
+- `gapp list` with no deployments says "No apps found: no deployments have
+  been set up on any project yet."
+
 ## 4.0.0rc5 (pre-release of 4.0.0)
 
 Fixes found by the first real run of 4.0.0rc4:

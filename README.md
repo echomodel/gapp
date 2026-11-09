@@ -43,50 +43,34 @@ git clone <your-repo>              # Get your source code
 gapp deploy                        # Discovers home in the cloud and "Just Works"
 ```
 
-### **4. Project env binding**
-Bind a GCP project to a named env so you can address it by `--env` later.
+### **4. The Same App on Several Projects**
+Deploy the same app to separate projects, for example one for testing and one for production. Each is its own deployment: the same name, with its own project, config and secrets.
 ```bash
-# Mark a project as your prod environment
-gapp projects set-env <project-id> prod
+gapp setup <test-project-id>
+gapp deploy --project <test-project-id>
 
-# Setup deploys the solution onto a project that's already bound to prod
-gapp init
-gapp setup --project <project-id>
-gapp deploy
+gapp setup <prod-project-id>
+gapp deploy --project <prod-project-id>
 ```
+When a name is on more than one project, `gapp deploy` and `gapp status` need `--project`; without it they stop and say so, and `gapp list` shows where each one is.
 
-### **5. Managing Multiple Environments**
-Deploy the same app to different projects for `dev`, `staging`, or `prod`.
-```bash
-# Bind the production project to env=prod (one-time)
-gapp projects set-env <prod-project-id> prod
-
-# Setup the solution there
-gapp setup --project <prod-project-id>
-
-# Deploy — gapp finds the only project hosting this solution
-gapp deploy
-
-# Or, when the same solution is on multiple projects, disambiguate with --env
-gapp deploy --env prod
-```
-`gapp` ensures you never accidentally deploy to the wrong env: when `--env` is given, it verifies the resolved project's `gapp-env` label matches before applying.
-
-### **6. Teams and Shared Organizations**
+### **5. Teams and Shared Organizations**
 A deployment's name is unique within its GCP project. Teams that must not touch each other's deployments use separate projects (and IAM on them), or separate fleets; gapp has no owner namespaces.
 
-### **7. Audit & Recovery**
+### **6. Audit & Recovery**
 Use this when it's been a while and you have no idea where your apps are.
 ```bash
 # Every deployment on every project marked gapp=hosted
 gapp list
 
 # Result:
-#   app-a    project-123    <undefined>   v-4
-#   app-b    project-456    prod          v-4
+#   App                  Project              Contract
+#   app-a                project-123          v-4
+#   app-a                project-456          v-4
+#   app-b                project-456          v-4
 ```
 
-### **8. Deploy From Anywhere (CI/CD)**
+### **7. Deploy From Anywhere (CI/CD)**
 gapp has **two fleet systems, kept apart**. The root commands (`gapp setup`, `deploy`, `status`, `list`, `secrets`) deploy the local checkout to GCP with gcloud. The `gapp ci` commands manage your **fleet** through GitHub only: they never use gcloud (except `gapp ci project setup`) and never read the working directory. The fleet is kept in a private **fleet repo**: `gapp/deployments.yaml`, one entry per **deployment** (a repo deployed to a project under a name you choose; the same repo deployed twice is two deployments), plus gapp's three workflows (deploy, register, status). The `ci` group mirrors the root verbs.
 
 **From nothing to first deploy:**
@@ -141,10 +125,10 @@ Every `gapp ci` command ends the same way: it did the thing, or it prints a plai
 
 **The entry is the deployment's configuration.** `repo` and `project` are the entry's own fields; every other key is a gapp.yaml key (`domain`, `env`, `service`, ...) merged over the repo's `gapp.yaml` at deploy time, or written as the whole file when the repo has none, so deployment values never live in the deployed repo and a repo that runs on Cloud Run can be deployed without knowing about gapp. `--domain` sets one key, `--config <file>` any. Private repos work too: install a read-only GitHub App on the organization that holds them and store its id and key in the fleet repo under the fixed names `HOSTING_GITHUB_APP_ID` and `HOSTING_GITHUB_APP_PRIVATE_KEY`; `gapp ci init --verbose` reports them. Design notes and the security model: [CI/CD setup](docs/CI.md).
 
-### **9. Custom Domains**
+### **8. Custom Domains**
 Map a subdomain to the service with `domain:` in `gapp.yaml` (or `gapp ci setup <name> --repo <owner>/<repo> --project <project> --domain <host>` for fleet deploys), deploy, and add the CNAME `gapp status` shows. Cloud Run only maps a domain for an identity that has verified it, so verify once per domain (`gcloud domains verify example.com`, which opens Search Console; for CI deploys, add the `gapp-deploy` service account as a verified owner there too). Deploys guard the live mapping: one that would replace or remove it is refused unless you pass `gapp deploy --replace-domain`, because Terraform destroys the old mapping before creating the new one.
 
-### **10. Expert Mode (Explicit Management)**
+### **9. Expert Mode (Explicit Management)**
 Use this when you use a configuration repository or external fleet management tool to track environment locations. In this mode, `gapp` acts as a **stateless deployment tool** where commands leverage only the local `gapp.yaml` and explicit command-line overrides.
 ```bash
 # Turn off the cloud search registry
@@ -165,13 +149,8 @@ gapp deploy --project <project-id>
 
 > **Note on Enterprise Usage**: `gapp` follows your `gcloud` login wherever you go. In a large organization, keep teams apart with GCP projects and IAM; switch between work and personal contexts with `gapp config profile`.
 
-### **Fleet Management (`gapp projects`)**
-*   `gapp projects set-env <id> <env> [--force]`: Bind a project to a named env (writes the `gapp-env` label). `--force` required to overwrite an existing binding.
-*   `gapp projects clear-env <id>`: Remove the env binding (project becomes undefined-env).
-*   `gapp projects list`: View projects with env bindings.
-
 ### **Development**
-*   `gapp deploy [--ref <ref>] [--env <env>] [--project <id>] [--rebuild] [--replace-domain]`: Build with Cloud Build and apply Terraform. `--replace-domain` is required for a deploy that would replace or remove the live custom domain mapping.
+*   `gapp deploy [--ref <ref>] [--project <id>] [--rebuild] [--replace-domain]`: Build with Cloud Build and apply Terraform. `--replace-domain` is required for a deploy that would replace or remove the live custom domain mapping.
 *   `gapp status`: Check infrastructure health, service URLs, and the custom domain's state (`pending_dns`, `pending_cert`, `active`, `error`). Reports the direct system only; with no usable Google Cloud identity it says so and names the login command instead of failing.
 *   `gapp secrets list`: Show declared secrets, deploy-readiness, and remediation hints. See [Secrets, ownership, and recovery scenarios](docs/SECRETS.md) for the full label model and conflict-resolution guide.
 *   `gapp secrets get <name>`: Fetch a secret value or its hash + length.

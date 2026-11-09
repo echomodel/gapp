@@ -42,7 +42,7 @@ def test_status_ready(tmp_path, monkeypatch, sdk):
     monkeypatch.chdir(repo)
 
     # Register project (env-blind label, optional gapp-env)
-    sdk.provider.host("proj-123", "my-app", env="prod")
+    sdk.provider.host("proj-123", "my-app")
 
     # Bucket name: gapp-{solution}-{project_id} — owner-blind, env-blind
     sdk.provider.tf_outputs[("gapp-my-app-proj-123", "terraform/state")] = {"service_url": "https://my-app.run.app"}
@@ -253,37 +253,52 @@ def test_status_uninitialized_carries_a_deployment_and_a_hint(tmp_path, monkeypa
     assert "gapp init" in res.next_step.hint
 
 
-def test_resolve_with_explicit_project_surfaces_label_read_errors(sdk):
-    from gapp.admin.sdk.cloud.base import CloudAccessError
-
-    def failing_labels(project_id):
-        raise CloudAccessError(f"Not authorized to read labels of project '{project_id}' (HTTP 401)")
-
-    sdk.provider.get_project_labels = failing_labels
-    with pytest.raises(CloudAccessError, match="HTTP 401"):
-        sdk.resolve_project_for_solution("my-app", project="proj-123")
+AMBIGUOUS = "'my-app' exists on more than one project. Pass --project to choose one; `gapp list` shows where each is."
 
 
-def test_status_stops_at_the_first_match_instead_of_refusing_an_ambiguous_name(sdk):
-    sdk.provider.host("proj-1", "my-app", env="prod")
-    sdk.provider.host("proj-2", "my-app", env="dev")
-    res = sdk.status(name="my-app")
-    assert res.deployment.project in ("proj-1", "proj-2")
-    assert sdk.status(name="my-app", env="dev").deployment.project == "proj-2"
+def test_an_explicit_project_reads_no_project_labels(sdk, monkeypatch):
+    """--project (every CI run) is taken as given: no search and no label read."""
+    monkeypatch.setattr(sdk.provider, "get_project_labels", lambda *a: pytest.fail("no project label read"))
+    monkeypatch.setattr(sdk.provider, "list_projects", lambda *a, **k: pytest.fail("no search"))
+    res = sdk.resolve_project_for_solution("my-app", project="proj-123")
+    assert res["project_id"] == "proj-123" and res["labels"] is None
+
+
+def test_status_refuses_a_name_on_more_than_one_project(sdk):
+    from gapp.admin.sdk.core import AmbiguousDeployment
+    sdk.provider.host("proj-1", "my-app")
+    sdk.provider.host("proj-2", "my-app")
+    with pytest.raises(AmbiguousDeployment) as exc:
+        sdk.status(name="my-app")
+    assert str(exc.value) == AMBIGUOUS
+    assert sdk.status(name="my-app", project="proj-2").deployment.project == "proj-2"
+
+
+def test_the_search_stops_at_the_second_match(sdk, monkeypatch):
+    """Never counts or lists every match: two are enough to refuse."""
+    for i in range(6):
+        sdk.provider.host(f"proj-{i}", "my-app")
+    asked = []
+    original = sdk.provider.list_bucket_labels
+    import gapp.admin.sdk.core as core_mod
+    monkeypatch.setattr(core_mod, "SEARCH_WORKERS", 1)
+    monkeypatch.setattr(sdk.provider, "list_bucket_labels", lambda pid: asked.append(pid) or original(pid))
+    with pytest.raises(RuntimeError):
+        sdk.resolve_project_for_solution("my-app")
+    assert len(asked) <= 3
 
 
 def test_status_on_a_ci_runner_never_suggests_signing_in(sdk, monkeypatch):
     from gapp.admin.sdk.cloud.base import CloudAccessError
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
 
-    def refused(project_id):
-        raise CloudAccessError("Not authorized to read labels of project 'proj-123' (HTTP 403)")
+    def refused(*a, **k):
+        raise CloudAccessError("Could not list projects (gcloud exit 1): PERMISSION_DENIED")
 
-    sdk.provider.get_project_labels = refused
-    res = sdk.status(name="my-app", project="proj-123")
+    sdk.provider.list_projects = refused
+    res = sdk.status(name="my-app")
     assert res.next_step.action == "sign in"
     assert res.next_step.hint.startswith("This is a CI run as ")
-    assert "`gapp ci project setup proj-123` grants the deploy identity its roles" in res.next_step.hint
     assert "gcloud auth login" not in res.next_step.hint
 
 
