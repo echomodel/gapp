@@ -46,9 +46,18 @@ def test_project_setup_is_idempotent(machine, monkeypatch):
     ci_mod.setup_ci_project("my-proj")
     for step in ("_ensure_wif_pool", "_ensure_wif_provider", "_ensure_deploy_sa"):
         monkeypatch.setattr(ci_mod, step, lambda *a: "exists")
+    monkeypatch.setattr(ci_mod, "_mark_project_hosted", lambda project_id: "exists")
     res = ci_mod.setup_ci_project("my-proj")
     assert res["ok"] is True and res["changed"] is False
-    assert res["wif_pool"] == "exists" and res["environment_record"] == "unchanged"
+    assert res["wif_pool"] == "exists" and res["environment_record"] == "unchanged" and res["hosted"] == "exists"
+
+
+def test_writing_only_the_mark_counts_as_a_change(machine, monkeypatch):
+    ci_mod.setup_ci_project("my-proj")
+    for step in ("_ensure_wif_pool", "_ensure_wif_provider", "_ensure_deploy_sa"):
+        monkeypatch.setattr(ci_mod, step, lambda *a: "exists")
+    res = ci_mod.setup_ci_project("my-proj")             # the fixture's mark returns "set"
+    assert res["changed"] is True and res["hosted"] == "set" and res["environment_record"] == "unchanged"
 
 
 def test_project_setup_without_a_project_gh_or_fleet_repo_stops(machine, monkeypatch):

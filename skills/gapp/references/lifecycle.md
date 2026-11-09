@@ -33,14 +33,11 @@ deployment on the projects marked `gapp=hosted`.
 - Nothing: ask for a project id, or point the user at the Cloud
   Console to create one. gapp never creates projects.
 
-**Env binding.** Env is a property of the project, not the
-solution: a project carries one `gapp-env` label that every solution
-on it inherits. Setup never writes it; only
-`gapp projects set-env <id> <env>` does. An unbound project is
-addressable by `--project` only and lists as `<undefined>`. For
-dev/staging/prod, bind each project once, then `--env prod` resolves
-through discovery. Order does not matter; bind before or after
-setup. The name `default` is reserved.
+**Several projects.** gapp has no environments. The same app on a
+test project and a production project is two deployments of the same
+name, each set up and deployed with its own project id. Once a name
+is on more than one project, `gapp deploy` and `gapp status` need
+`--project`; without it they stop and say so.
 
 **Run setup.** `gapp setup <project-id>`. The id is required the
 first time; later runs find the project among those marked
@@ -75,8 +72,8 @@ chose.
 **Local.** Needs gapp, a GCP identity, terraform, and a clean git
 tree. `gapp deploy` builds the image with Cloud Build and applies
 Terraform in one blocking call, then returns the service URL. Use
-`--env prod` when the solution is on several projects, or
-`--project <id>` to be explicit. The build is skipped when an image
+`--project <id>` when the solution is on several projects, or to be
+explicit. The build is skipped when an image
 for the current commit already exists.
 
 **CI, recommended for ongoing use.** The CI system is the other
@@ -281,10 +278,6 @@ skill or README says what belongs there and how it finds out.
 
 **Status and discovery.** `gapp status` for health, URL, custom
 domain state, and next step. `gapp list` for every deployment on the
-hosted projects, `gapp projects list` for env bindings. An expired or wrong gcloud login surfaces from these
+hosted projects, one row per project it is on. An expired or wrong gcloud login surfaces from these
 as an authorization error naming the account; it is never reported as
 "not deployed", so take such an error at face value and fix the login.
-
-**Env bindings.** `gapp projects set-env <id> <env>` (idempotent for
-the same value, `--force` to overwrite), `gapp projects clear-env
-<id>` to return a project to `<undefined>`.

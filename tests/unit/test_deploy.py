@@ -23,7 +23,7 @@ def _repo(tmp_path, monkeypatch, contents="name: my-app"):
 def test_deploy_dry_run_singular(tmp_path, monkeypatch, sdk):
     """Dry-run resolves a single-match deployment."""
     _repo(tmp_path, monkeypatch)
-    sdk.provider.host("proj-123", "my-app", env="prod")
+    sdk.provider.host("proj-123", "my-app")
 
     res = sdk.deploy(dry_run=True)
 
@@ -32,7 +32,7 @@ def test_deploy_dry_run_singular(tmp_path, monkeypatch, sdk):
     assert res["labels"] == "gapp-deployment=my-app, gapp-version=4"
     assert "owner" not in res
     assert res["project_id"] == "proj-123"
-    assert res["env"] == "prod"
+    assert "env" not in res
 
 
 def test_deploy_dry_run_workspace(tmp_path, monkeypatch, sdk):

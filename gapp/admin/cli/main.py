@@ -6,7 +6,7 @@ import click
 
 from gapp import __version__
 from gapp.admin.sdk.core import (
-    GappSDK, UNDEFINED_ENV_DISPLAY,
+    GappSDK,
 )
 
 
@@ -85,64 +85,6 @@ def config_profile(sdk: GappSDK, name, list_profiles):
         click.echo(sdk.get_active_profile())
 
 
-# -- gapp projects --
-
-@main.group("projects")
-def projects_group():
-    """Manage GCP project env bindings."""
-    pass
-
-
-@projects_group.command("set-env")
-@click.argument("project_id")
-@click.argument("env")
-@click.option("--force", is_flag=True, help="Overwrite an existing gapp-env value.")
-@click.pass_obj
-def projects_set_env(sdk: GappSDK, project_id, env, force):
-    """Bind a GCP project to a named env (writes the gapp-env label)."""
-    try:
-        res = sdk.set_project_env(project_id, env=env, force=force)
-    except (RuntimeError, ValueError) as e:
-        click.echo(f"  Error: {e}", err=True)
-        raise SystemExit(1)
-    if res["status"] == "exists":
-        click.echo(f"  Project {project_id} is already bound to env='{res['env']}'.")
-    elif res["status"] == "added":
-        click.echo(f"  Project {project_id} bound to env='{res['env']}'.")
-    else:
-        click.echo(f"  Project {project_id} env changed: '{res.get('previous')}' → '{res['env']}'.")
-
-
-@projects_group.command("clear-env")
-@click.argument("project_id")
-@click.pass_obj
-def projects_clear_env(sdk: GappSDK, project_id):
-    """Remove the gapp-env label from a project (becomes undefined)."""
-    try:
-        res = sdk.clear_project_env(project_id)
-    except RuntimeError as e:
-        click.echo(f"  Error: {e}", err=True)
-        raise SystemExit(1)
-    if res["status"] == "absent":
-        click.echo(f"  Project {project_id} had no env binding.")
-    else:
-        click.echo(f"  Project {project_id} env binding removed (was '{res['previous']}').")
-
-
-@projects_group.command("list")
-@click.pass_obj
-def projects_list(sdk: GappSDK):
-    """List GCP projects with gapp-env bindings."""
-    res = sdk.list_target_projects()
-    click.echo("\nProject Inventory:")
-    if not res["projects"]:
-        click.echo("  No projects with env bindings found.")
-    else:
-        for p in res["projects"]:
-            click.echo(f"  {p['id']} (env={p['env']})")
-    click.echo()
-
-
 # -- gapp init/setup/deploy --
 
 @main.command()
@@ -171,10 +113,9 @@ def init(sdk: GappSDK):
 @main.command("setup")
 @click.argument("project_id", required=False)
 @click.option("--solution", default=None, help="Solution name.")
-@click.option("--env", default=None, help="Verify project's gapp-env matches.")
 @click.option("--project", "project_arg", help="Explicit GCP Project ID.")
 @click.pass_obj
-def setup_cmd(sdk: GappSDK, project_id, solution, env, project_arg):
+def setup_cmd(sdk: GappSDK, project_id, solution, project_arg):
     """GCP foundation: enable APIs, create and label the solution bucket, mark the project hosted.
 
     Once per solution per project, idempotent. Needs a gcloud login with
@@ -185,14 +126,13 @@ def setup_cmd(sdk: GappSDK, project_id, solution, env, project_arg):
     """
     pid = project_arg or project_id
     try:
-        result = sdk.setup(pid, solution=solution, env=env)
+        result = sdk.setup(pid, solution=solution)
     except (RuntimeError, ValueError) as e:
         click.echo(f"  Error: {e}", err=True)
         raise SystemExit(1)
 
-    env_str = result["env"] or UNDEFINED_ENV_DISPLAY
     click.echo()
-    click.echo(f"  {result['name']} (env: {env_str}) → {result['project_id']}")
+    click.echo(f"  {result['name']} → {result['project_id']}")
     click.echo()
     if result["apis"]:
         for api in result["apis"]:
@@ -209,7 +149,6 @@ def setup_cmd(sdk: GappSDK, project_id, solution, env, project_arg):
 @main.command()
 @click.option("--ref", default=None, help="Git ref (commit/tag/branch) to build from. Defaults to HEAD.")
 @click.option("--solution", default=None, help="Solution name.")
-@click.option("--env", default=None, help="Verify project's gapp-env matches.")
 @click.option("--project", help="Explicit GCP Project ID override.")
 @click.option("--dry-run", is_flag=True, help="Preview deployment.")
 @click.option("--rebuild", is_flag=True, help="Force docker build even if an image already exists for the resolved SHA.")
@@ -219,7 +158,7 @@ def setup_cmd(sdk: GappSDK, project_id, solution, env, project_arg):
          "Without it, a deploy whose domain differs from the mapped one is refused.",
 )
 @click.pass_obj
-def deploy(sdk: GappSDK, ref, solution, env, project, dry_run, rebuild, replace_domain):
+def deploy(sdk: GappSDK, ref, solution, project, dry_run, rebuild, replace_domain):
     """Build the image with Cloud Build and apply Terraform; prints the service URL.
 
     Needs a gcloud login, terraform on PATH, and a clean git tree: the
@@ -235,7 +174,7 @@ def deploy(sdk: GappSDK, ref, solution, env, project, dry_run, rebuild, replace_
     """
     try:
         result = sdk.deploy(
-            ref=ref, solution=solution, env=env, dry_run=dry_run, project_id=project,
+            ref=ref, solution=solution, dry_run=dry_run, project_id=project,
             rebuild=rebuild, replace_domain=replace_domain,
         )
     except (RuntimeError, ValueError) as e:
@@ -243,12 +182,10 @@ def deploy(sdk: GappSDK, ref, solution, env, project, dry_run, rebuild, replace_
         raise SystemExit(1)
 
     if dry_run:
-        env_str = result["env"] or UNDEFINED_ENV_DISPLAY
         click.echo()
         click.echo("  DRY RUN: Project Deployment Preview")
         click.echo(f"    Solution:    {result['name']}")
         click.echo(f"    Labels:      {result['labels']}")
-        click.echo(f"    Environment: {env_str}")
         if result["project_id"]:
             click.echo(f"    Project:     {result['project_id']}")
         if result["bucket"]:
@@ -300,10 +237,9 @@ def _render_status(data: dict) -> list[str]:
     help="Solution name. Bypasses local gapp.yaml discovery and validation; "
          "lets status run from any directory against any deployed solution.",
 )
-@click.option("--env", default=None, help="Verify project's gapp-env matches.")
 @click.option("--project", default=None, help="Explicit GCP project id; skips the hosted-project search.")
 @click.pass_obj
-def status(sdk: GappSDK, solution, env, project):
+def status(sdk: GappSDK, solution, project):
     """Infrastructure health check.
 
     With no --solution flag, status discovers the solution from the current
@@ -311,7 +247,7 @@ def status(sdk: GappSDK, solution, env, project):
     gapp.yaml does not block cloud reads.
     """
     try:
-        result = sdk.status(name=solution, env=env, project=project)
+        result = sdk.status(name=solution, project=project)
     except (RuntimeError, ValueError) as e:
         click.echo(f"  Error: {e}", err=True)
         raise SystemExit(1)
@@ -330,19 +266,14 @@ def list_cmd(sdk: GappSDK, project_limit):
         click.echo(msg)
 
     if not res["apps"]:
-        click.echo("\n  No apps found.")
+        click.echo("\n  No apps found: no deployments have been set up on any project yet.")
     else:
-        header = f"\n  {'App':<20} {'Project':<20} {'Env':<14} {'Contract':<10}"
+        header = f"\n  {'App':<20} {'Project':<20} {'Contract':<10}"
         click.echo(header)
         click.echo("  " + "-" * (len(header) - 2))
         for app in res["apps"]:
             contract = "legacy" if app["is_legacy"] else f"v-{app['contract_major']}"
-            env_disp = app["env"] or UNDEFINED_ENV_DISPLAY
-            marker = "  ⚠" if app.get("duplicate") else ""
-            click.echo(
-                f"  {app['name']:<20} {app['project']:<20} "
-                f"{env_disp:<14} {contract:<10}{marker}"
-            )
+            click.echo(f"  {app['name']:<20} {app['project']:<20} {contract:<10}")
 
     click.echo(
         f"\nSummary: {res['metadata']['apps']['count']} apps across "
@@ -534,21 +465,29 @@ def ci_project_setup_cmd(project, verbose, json_out):
     result = setup_ci_project(project)
     if json_out:
         _emit_json(result)
+    lines = []
     if result.get("ok") is not False:
-        if result.get("changed"):
-            result["next_step"] = {"action": "ci setup", "hint": f"gapp ci setup <name> --repo <owner>/<repo> --project {result['project_id']}"}
-            line = f"{result['project_id']} now trusts your fleet to deploy to it."
+        result["next_step"] = {"action": "ci setup", "hint": f"gapp ci setup <name> --repo <owner>/<repo> --project {result['project_id']}"}
+        marked = result.get("hosted") == "set"
+        mark_only = marked and not any(result.get(k) == "created" for k in ("wif_pool", "wif_provider", "service_account")) \
+            and result.get("environment_record") in (None, "unchanged")
+        if result.get("changed") and not mark_only:
+            lines.append(f"{result['project_id']} now trusts your fleet to deploy to it.")
+        elif marked:
+            lines.append(f"{result['project_id']} already trusts your fleet to deploy to it; marked it gapp=hosted, "
+                         f"so `gapp list` and `gapp status <name>` can find its deployments.")
         else:
-            result["next_step"] = {"action": "ci setup", "hint": f"gapp ci setup <name> --repo <owner>/<repo> --project {result['project_id']}"}
-            line = f"{result['project_id']} already trusts your fleet to deploy to it. Nothing changed."
-    else:
-        line = None
+            lines.append(f"{result['project_id']} already trusts your fleet to deploy to it. Nothing changed.")
+        if marked:
+            lines.append("It can take a few minutes before gapp sees the new mark when searching for deployments "
+                         "(`gapp list`, and commands run without `--project`).")
     details = _fleet_details(result) + [
         f"{label}: {result[key]}" for key, label in (("wif_pool", "WIF pool"), ("wif_provider", "WIF provider"),
                                                       ("service_account", "Service account"), ("binding", "Binding"),
+                                                      ("hosted", "Hosted mark (gapp=hosted)"),
                                                       ("environment_record", f"Environment {result.get('environment')}"))
         if result.get(key)]
-    _ci_finish(result, line, verbose=verbose, details=details)
+    _ci_finish(result, *lines, verbose=verbose, details=details)
 
 
 @ci_group.group("sources")

@@ -45,12 +45,11 @@ SOLUTION REPO (what gets deployed)
 GCP (runtime state)
   Project labels (written only by an Owner):
     gapp=hosted                         ← the project hosts gapp deployments
-    gapp-env=<env>                      ← project env binding (optional)
   Deployment labels (on the bucket and every Cloud Run service):
     gapp-deployment=<id>  gapp-version=<major>
   Secret Manager: labeled gapp-solution=<name>  ← every gapp-managed secret
   Cloud Run: running services           ← runtime
-  GCS: gapp-{name}-{project-id}/       ← per-solution bucket (env-blind)
+  GCS: gapp-{name}-{project-id}/       ← per-solution bucket
     terraform/state/                    ← TF state (not visible to container)
     data/                               ← app data (FUSE-mounted at /mnt/data via only-dir=data)
   Cloud Build: container image builds   ← no local Docker needed
@@ -99,12 +98,11 @@ gapp is GitHub-flavored but not GitHub-locked. The core lifecycle — `gapp init
 
 | Phase | What | Command |
 |-------|------|---------|
-| **Project env (optional)** | Bind a GCP project to a named env | `gapp projects set-env <project-id> <env>` |
 | **Foundation** | Enable APIs, create and label the bucket, mark the project `gapp=hosted` | `gapp setup --project <project-id>` |
 | **Prerequisites** | Secrets populated in Secret Manager | `gapp secret set <name>` |
 | **Application** | Cloud Run service deployed via Terraform | `gapp deploy` |
 
-Each phase completes cleanly and tells the user what comes next. No phase does double duty. In particular, **setup and deploy never write `gapp-env`** — that's exclusively `gapp projects set-env`.
+Each phase completes cleanly and tells the user what comes next. No phase does double duty.
 
 ## The `gapp.yaml` File
 
@@ -463,13 +461,10 @@ The `gapp-mcp` entry point runs a stdio MCP server that exposes admin operations
 Available tools:
 - `gapp_user` — view or set the global gcloud account
 - `gapp_init` — bootstrap a solution (yaml + GitHub topic + registry)
-- `gapp_setup` — GCP foundation (APIs, labeled bucket, `gapp=hosted` on the project). Does NOT write `gapp-env`.
+- `gapp_setup` — GCP foundation (APIs, labeled bucket, `gapp=hosted` on the project).
 - `gapp_deploy` — build + terraform apply
 - `gapp_status` — infrastructure health check
 - `gapp_list` — list the deployments on projects marked `gapp=hosted`
-- `gapp_projects_set_env` — bind a project to a named env (writes `gapp-env`)
-- `gapp_projects_clear_env` — remove a project's env binding
-- `gapp_projects_list` — list projects with env bindings
 - `gapp_secret_set` / `gapp_secret_get` / `gapp_secret_list` — manage gapp-owned secrets
 - `gapp_schema` — live gapp.yaml JSON schema
 - `gapp_ci_init`, `gapp_ci_sources`, `gapp_ci_project_setup`, `gapp_ci_setup`, `gapp_ci_rename`, `gapp_ci_deploy`, `gapp_ci_status`, `gapp_ci_list` — the CI fleet system (GitHub only)
@@ -615,21 +610,9 @@ pipx install -e .   # or: pip install -e .
 
 gapp 4.0 removed owner namespaces (`gapp config owner`, `gapp list --all`, setup's cross-owner check and its `--force`). A deployment's id is unique within its project, and its bucket and service names derive from it. Teams that must not share deployments separate by project and IAM, or by fleet. gapp does not accept configuration it does not understand: an unknown key in the user config (top level or in a profile; `owner:` has its own message) is an error naming the file and the key, never ignored. A deployment entry's gapp.yaml keys go through the same gapp.yaml validator (`validate_manifest`, `extra="forbid"`) when `gapp ci setup` writes them and when `gapp ci status` reads them.
 
-## Project env model
+## No environments
 
-Env is a project property. One optional project-level label, no owner segment:
-
-| Field | Format | Notes |
-|---|---|---|
-| **Key** | `gapp-env` | exactly one literal key, no segments |
-| **Value** | `<env>` | any non-empty named string (`prod`, `dev`, `staging`, ...) |
-| **Absent** | (no label) | project is undefined-env — its own state, not "default" |
-
-A project's env is what `gapp-env` says it is. There is no special string `default`. There is only "env named X" or "env undefined." A `gapp-env=default` label means the project literally bound itself to an env called "default" — that's a normal named value, not a magic word.
-
-**`gapp-env` is set/changed exclusively by `gapp projects set-env`.** Setup and deploy NEVER write it. To bind a project to an env, run set-env first; setup/deploy then operate against that binding (or against an undefined-env project, with limitations).
-
-By construction, two envs of the same solution on the same project is impossible — there's only one `gapp-env` value per project.
+gapp 4.0 removed environments (the `gapp-env` project label, `gapp projects set-env/clear-env/list`, and `--env` on setup, deploy and status). A deployment is the unit: its own name, project and config. The same app on a test project and a production project is two deployments, addressed by `--project` (or, in CI, two fleet entries made with `gapp ci setup <new> --copy-of <existing>`). No gapp code reads or writes `gapp-env`; a test guards it.
 
 ## Deployment labels
 
@@ -640,49 +623,36 @@ Every setup and deploy, in both modes, writes the same labels on the deployment'
 | `gapp-deployment` | `<id>` | the deployment's id; a workspace's services all carry the parent id |
 | `gapp-version` | `<major>` | e.g. `4`, from `__version__`; the version guard reads it from the services |
 
-The project carries at most two gapp labels, both project-wide: `gapp=hosted` (the project hosts gapp deployments) and `gapp-env=<env>`. Only an Owner writes project labels: `gapp setup` marks the project once from a workstation, and `gapp ci project setup` marks it for a CI fleet. A CI run (`GITHUB_ACTIONS=true`) never writes a project label, so the deploy identity needs no project-update permission.
+The project carries one gapp label: `gapp=hosted` (the project hosts gapp deployments). Only an Owner writes project labels: `gapp setup` marks the project once from a workstation, and `gapp ci project setup` marks it for a CI fleet. A CI run (`GITHUB_ACTIONS=true`) never writes a project label, so the deploy identity needs no project-update permission.
 
 A project can host multiple deployments; each id is unique within it.
 
 ## Finding a deployment
 
-- **`--project` given** (always, in CI: the project comes from the fleet entry): no search. "Is it set up" is the deployment's bucket existing (deploy refuses with "Foundation missing" otherwise).
-- **No `--project`**: list the projects marked `gapp=hosted` (one Resource Manager call), then ask each for its buckets labeled `gapp-deployment=<id>`, in parallel. Buckets rather than services, because a deployment has its bucket from setup on, before its first service exists. `gapp status` stops at the first match; `deploy` and `setup` keep every match so that an ambiguous name is refused rather than guessed.
-- **`gapp list`**: the same hosted-project listing, then every labeled deployment bucket per project, in parallel; env from the project's `gapp-env`, major from `gapp-version`.
-
-**Discovery never filters by env first.** The search reads each hosted project's `gapp-env` from the same listing and narrows afterwards (status, which stops at the first match, asks only the projects of the env it was given).
+- **`--project` given** (always, in CI: the project comes from the fleet entry): no search and no project-label read. "Is it set up" is the deployment's bucket existing (deploy refuses with "Foundation missing" otherwise).
+- **No `--project`**: list the projects marked `gapp=hosted` (one Resource Manager call), then ask each for its buckets labeled `gapp-deployment=<id>`, in parallel. Buckets rather than services, because a deployment has its bucket from setup on, before its first service exists. Every command stops searching at the second match: one match is the deployment, and a second means the name is ambiguous, refused with "'<name>' exists on more than one project. Pass --project to choose one; `gapp list` shows where each is." Matches are never counted or listed.
+- **`gapp list`**: the same hosted-project listing, then every labeled deployment bucket per project, in parallel; major from `gapp-version`. The same name on two projects is two rows.
 
 A very large organization could replace the per-project calls with one Cloud Asset Inventory search; it needs an organization scope, the Cloud Asset API and its index lags by minutes, so it is not used.
 
 ## Resolution rules
 
-Every solution-keyed command of the direct system (`setup`, `deploy`, `status`, `secret get/set/list`) routes through `GappSDK.resolve_project_for_solution(solution, env=None, project=None)`. The CI system (`gapp ci`) never calls it: its project comes from `--project` and its record is the fleet repo (see "Two fleet systems"). Inputs: solution name (from gapp.yaml or arg), optional `--env`, optional `--project`.
+Every solution-keyed command of the direct system (`setup`, `deploy`, `status`, `secret get/set/list`) routes through `GappSDK.resolve_project_for_solution(solution, project=None)`. The CI system (`gapp ci`) never calls it: its project comes from `--project` and its record is the fleet repo (see "Two fleet systems"). Inputs: solution name (from gapp.yaml or arg), optional `--project`.
 
-| Deployments found on hosted projects | `--env` | `--project` | Outcome |
-|---|---|---|---|
-| — | omitted, or matches P's `gapp-env` | given (P) | Proceed with P, no search. Deploy then needs the bucket ("Foundation missing" otherwise). |
-| — | mismatches P's `gapp-env` | given (P) | Refuse: "Project P is bound to env=X. You passed --env=Y." |
-| 1 | omitted | omitted | Proceed. |
-| 1 | matches project's `gapp-env` (or both undefined) | omitted | Proceed. |
-| 0 | — | omitted | Error: "No deployment '<id>' found in any project marked gapp=hosted. Pass --project, or run `gapp setup --project <project-id>` first." |
-| 2+ | omitted | omitted | Refuse, list rows with envs (named or `<undefined>`), require `--env` or `--project`. |
-| 2+ | given, narrows to 1 | omitted | Proceed. |
-| 2+ | given, narrows to 0 | omitted | Refuse: "no match for env=X; we have it in env=Y, env=Z." |
-| 2+ | given, narrows to 2+ | omitted | Refuse: corruption (same deployment+named-env on multiple projects); manual cleanup required. |
-
-Undefined-env projects are addressable only by `--project` once they have a peer hosting the same solution (you can't type `--env <undefined>`). Single-match deploys to undefined-env projects work fine without flags.
-
-`--env` requires a non-empty named value. The string `default` is reserved and rejected — it was a v-2 magic value meaning "no env"; in v-3 the absence of a `gapp-env` label is its own state ("undefined"), and `--env` requires an actually-named env to filter on.
+| Deployments found on hosted projects | `--project` | Outcome |
+|---|---|---|
+| — | given (P) | Proceed with P, no search and no project-label read. Deploy then needs the bucket ("Foundation missing" otherwise). |
+| 1 | omitted | Proceed. |
+| 0 | omitted | Error: "No deployment '<id>' found in any project marked gapp=hosted. Pass --project, or run `gapp setup --project <project-id>` first." |
+| 2+ (search stops at the second) | omitted | Refuse: "'<id>' exists on more than one project. Pass --project to choose one; `gapp list` shows where each is." |
 
 ## What writes what
 
-| Command | Writes deployment labels | Writes `gapp=hosted` | Writes `gapp-env` | Writes tfstate identity (planned) |
-|---|---|---|---|---|
-| `gapp setup` | bucket (idempotent) | once per project, from a workstation; never from a CI run | **never** | initial value on first apply (Layer 2) |
-| `gapp deploy` | bucket and services (current major) | **never** | **never** | rewrites if `--takeover`, else verifies (Layer 2) |
-| `gapp ci project setup` | never | yes (as an Owner) | never | never |
-| `gapp projects set-env` | never | never | yes | never |
-| `gapp projects clear-env` | never | never | yes (removes) | never |
+| Command | Writes deployment labels | Writes `gapp=hosted` | Writes tfstate identity (planned) |
+|---|---|---|---|
+| `gapp setup` | bucket (idempotent) | once per project, from a workstation; never from a CI run | initial value on first apply (Layer 2) |
+| `gapp deploy` | bucket and services (current major) | **never** | rewrites if `--takeover`, else verifies (Layer 2) |
+| `gapp ci project setup` | never | yes (as an Owner) | never |
 
 This table is load-bearing: prior versions of gapp had setup/deploy quietly stamping role labels (`gapp-env_<owner>`), and conflating "deploy record" with "default-target hint" drove much of the redesign that landed in v-3. Each command now has exactly one write responsibility. Don't add hidden side-effects.
 
@@ -697,7 +667,8 @@ For an operator moving a fleet from gapp 3.x. 3.x kept one project label per dep
 3. Redeploy every deployment once, passing the project: `gapp ci deploy <name>` (the fleet entry passes it), or `gapp deploy --project <project>` from the checkout. Until then a deployment is invisible to `gapp list` and to name-only `gapp status`/`deploy`.
 4. Verify each: `gcloud run services describe <id> --project <project> --region us-central1 --format='value(metadata.labels)'` shows `gapp-deployment=<id>` and `gapp-version=4`; `gapp list` shows it; `gapp status <id>` finds it by name.
 5. Set each old label to a tripwire rather than removing it: `gcloud projects update <project> --update-labels=gapp__<name>=v-4` (or `gapp_<owner>_<name>=v-4`). A leftover 3.x install refuses a deployment stamped above v-3; 4.x never reads it.
-6. Leave `gapp-env` as it is, and delete any `owner:` line from `~/.config/gapp/config.yaml` (gapp refuses to start until it is gone).
+6. Delete any `owner:` line from `~/.config/gapp/config.yaml` (gapp refuses to start until it is gone).
+7. Optional: remove any `gapp-env` project label, with `gcloud alpha projects update <project> --remove-labels=gapp-env` or the console. 4.x ignores it.
 
 ## CI/CD and Remote Deployment
 
