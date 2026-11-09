@@ -350,18 +350,25 @@ class GCPProvider(CloudProvider):
         outputs = json.loads(res.stdout) if res.returncode == 0 else {}
         return {k: v.get("value") for k, v in outputs.items()}
 
-    def get_infrastructure_outputs(self, staging_dir: Path, bucket_name: str, state_prefix: str) -> Optional[Dict]:
+    def get_infrastructure_outputs(self, staging_dir: Path, bucket_name: str, state_prefix: str,
+                                   strict: bool = False) -> Optional[Dict]:
         token = self.get_auth_token()
         env = os.environ.copy()
         env["GOOGLE_OAUTH_ACCESS_TOKEN"] = token
         if self.account: env["CLOUDSDK_CORE_ACCOUNT"] = self.account
 
         _stage_terraform(staging_dir)
-        res = subprocess.run(["terraform", "init", f"-backend-config=bucket={bucket_name}", f"-backend-config=prefix={state_prefix}", "-input=false", "-upgrade"], cwd=staging_dir, env=env, capture_output=True)
-        if res.returncode != 0: return None
+        res = subprocess.run(["terraform", "init", f"-backend-config=bucket={bucket_name}", f"-backend-config=prefix={state_prefix}", "-input=false", "-upgrade"], cwd=staging_dir, env=env, capture_output=True, text=True)
+        if res.returncode != 0:
+            if strict:
+                raise CloudAccessError(f"terraform init against gs://{bucket_name}/{state_prefix} failed: {(res.stderr or '').strip()[-600:]}")
+            return None
 
         res = subprocess.run(["terraform", "output", "-json"], cwd=staging_dir, env=env, capture_output=True, text=True)
-        if res.returncode != 0: return None
+        if res.returncode != 0:
+            if strict:
+                raise CloudAccessError(f"terraform output in gs://{bucket_name}/{state_prefix} failed: {(res.stderr or '').strip()[-600:]}")
+            return None
         raw = json.loads(res.stdout)
         return {k: v.get("value") for k, v in raw.items()}
 

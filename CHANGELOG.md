@@ -14,6 +14,10 @@ Fixes found by the first real run of 4.0.0rc2:
   `gcloud beta run domain-mappings` (the GA group covers Cloud Run for
   Anthos only). Re-run `gapp ci init <fleet-repo>` to update the installed
   status workflow.
+- A deploy refuses when it cannot read the Terraform state. The live-domain
+  guard took an unreadable state for "no domain mapped", so a deploy could
+  have removed or replaced a serving domain; it now stops before any build
+  or apply and names the state bucket, even with `--replace-domain`.
 
 ## 4.0.0rc2 (pre-release of 4.0.0)
 
