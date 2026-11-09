@@ -3,6 +3,11 @@
 Notable changes to gapp. Versions are git tags (`vX.Y.Z`); the version
 source is `gapp/__init__.py`.
 
+## Unreleased
+
+- The gapp skill's description now covers any app that serves HTTP in a
+  container (web servers, APIs, MCP servers), not only Python services.
+
 ## 4.0.0rc6 (pre-release of 4.0.0)
 
 - **Environments removed.** A deployment (its own name, project and config)
