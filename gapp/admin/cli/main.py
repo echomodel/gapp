@@ -93,7 +93,7 @@ def init(sdk: GappSDK):
     """Write gapp.yaml for this repo and register the solution locally.
 
     Needs no cloud login. Idempotent: re-run after editing gapp.yaml to
-    validate it. Next: `gapp setup <project-id>`.
+    validate it. Next: `gapp setup --project <project-id>`.
     """
     from gapp.admin.sdk.init import init_solution
     try:
@@ -111,22 +111,19 @@ def init(sdk: GappSDK):
 
 
 @main.command("setup")
-@click.argument("project_id", required=False)
-@click.option("--solution", default=None, help="Solution name.")
-@click.option("--project", "project_arg", help="Explicit GCP Project ID.")
+@click.option("--project", help="Explicit GCP Project ID.")
 @click.pass_obj
-def setup_cmd(sdk: GappSDK, project_id, solution, project_arg):
+def setup_cmd(sdk: GappSDK, project):
     """GCP foundation: enable APIs, create and label the solution bucket, mark the project hosted.
 
     Once per solution per project, idempotent. Needs a gcloud login with
-    project-admin rights (enable services, create buckets, edit IAM). The
-    project id is required the first time; later runs find it among the
-    projects marked gapp=hosted. Next: `gapp secrets set` for any declared secrets,
+    project-admin rights (enable services, create buckets, edit IAM).
+    Runs in the app's checkout. --project is required the first time;
+    later runs find it among the projects marked gapp=hosted. Next: `gapp secrets set` for any declared secrets,
     then `gapp deploy`. (CI deploys are the other fleet system: `gapp ci`.)
     """
-    pid = project_arg or project_id
     try:
-        result = sdk.setup(pid, solution=solution)
+        result = sdk.setup(project)
     except (RuntimeError, ValueError) as e:
         click.echo(f"  Error: {e}", err=True)
         raise SystemExit(1)
@@ -148,7 +145,6 @@ def setup_cmd(sdk: GappSDK, project_id, solution, project_arg):
 
 @main.command()
 @click.option("--ref", default=None, help="Git ref (commit/tag/branch) to build from. Defaults to HEAD.")
-@click.option("--solution", default=None, help="Solution name.")
 @click.option("--project", help="Explicit GCP Project ID override.")
 @click.option("--dry-run", is_flag=True, help="Preview deployment.")
 @click.option("--rebuild", is_flag=True, help="Force docker build even if an image already exists for the resolved SHA.")
@@ -158,7 +154,7 @@ def setup_cmd(sdk: GappSDK, project_id, solution, project_arg):
          "Without it, a deploy whose domain differs from the mapped one is refused.",
 )
 @click.pass_obj
-def deploy(sdk: GappSDK, ref, solution, project, dry_run, rebuild, replace_domain):
+def deploy(sdk: GappSDK, ref, project, dry_run, rebuild, replace_domain):
     """Build the image with Cloud Build and apply Terraform; prints the service URL.
 
     Needs a gcloud login, terraform on PATH, and a clean git tree: the
@@ -174,7 +170,7 @@ def deploy(sdk: GappSDK, ref, solution, project, dry_run, rebuild, replace_domai
     """
     try:
         result = sdk.deploy(
-            ref=ref, solution=solution, dry_run=dry_run, project_id=project,
+            ref=ref, dry_run=dry_run, project_id=project,
             rebuild=rebuild, replace_domain=replace_domain,
         )
     except (RuntimeError, ValueError) as e:
@@ -230,24 +226,19 @@ def _render_status(data: dict) -> list[str]:
 
 
 @main.command()
-@click.option(
-    "--solution",
-    "-s",
-    default=None,
-    help="Solution name. Bypasses local gapp.yaml discovery and validation; "
-         "lets status run from any directory against any deployed solution.",
-)
+@click.argument("name", required=False)
 @click.option("--project", default=None, help="Explicit GCP project id; skips the hosted-project search.")
 @click.pass_obj
-def status(sdk: GappSDK, solution, project):
+def status(sdk: GappSDK, name, project):
     """Infrastructure health check.
 
-    With no --solution flag, status discovers the solution from the current
-    repo's gapp.yaml. Schema validation is lenient — a stale or unsupported
-    gapp.yaml does not block cloud reads.
+    NAME is the deployment name; with it, status runs from any directory.
+    Without it, status reads the name from the current repo's gapp.yaml.
+    Schema validation is lenient — a stale or unsupported gapp.yaml does
+    not block cloud reads.
     """
     try:
-        result = sdk.status(name=solution, project=project)
+        result = sdk.status(name=name, project=project)
     except (RuntimeError, ValueError) as e:
         click.echo(f"  Error: {e}", err=True)
         raise SystemExit(1)
@@ -829,12 +820,12 @@ def secrets_group():
 
 
 @secrets_group.command("list")
-@click.option("--solution", "-s", default=None, help="Solution name. Defaults to current directory.")
-def secrets_list_cmd(solution):
+@click.argument("name", required=False)
+def secrets_list_cmd(name):
     """Show declared secrets, deploy-readiness, and remediation hints."""
     from gapp.admin.sdk.secrets import list_secrets
     try:
-        result = list_secrets(solution=solution)
+        result = list_secrets(name=name)
     except RuntimeError as e:
         click.echo(f"  Error: {e}", err=True)
         raise SystemExit(1)
@@ -876,13 +867,12 @@ def secrets_list_cmd(solution):
 
 @secrets_group.command("get")
 @click.argument("name")
-@click.option("--solution", "-s", default=None, help="Solution name. Defaults to current directory.")
 @click.option("--plaintext", is_flag=True, help="Print the actual secret value (default: hash + length only).")
-def secrets_get_cmd(name, solution, plaintext):
+def secrets_get_cmd(name, plaintext):
     """Fetch a secret. Default output is a hash + length; --plaintext prints the value."""
     from gapp.admin.sdk.secrets import get_secret
     try:
-        result = get_secret(name, plaintext=plaintext, solution=solution)
+        result = get_secret(name, plaintext=plaintext)
     except RuntimeError as e:
         click.echo(f"  Error: {e}", err=True)
         raise SystemExit(1)
@@ -899,9 +889,8 @@ def secrets_get_cmd(name, solution, plaintext):
 @secrets_group.command("set")
 @click.argument("name")
 @click.argument("value", required=False)
-@click.option("--solution", "-s", default=None, help="Solution name. Defaults to current directory.")
 @click.option("--from-stdin", is_flag=True, help="Read value from stdin (use to avoid shell history).")
-def secrets_set_cmd(name, value, solution, from_stdin):
+def secrets_set_cmd(name, value, from_stdin):
     """Store a secret value. Without VALUE, prompts (or pass --from-stdin to pipe)."""
     from gapp.admin.sdk.secrets import set_secret
     if from_stdin:
@@ -909,7 +898,7 @@ def secrets_set_cmd(name, value, solution, from_stdin):
     elif value is None:
         value = click.prompt("Value", hide_input=True, confirmation_prompt=True)
     try:
-        result = set_secret(name, value, solution=solution)
+        result = set_secret(name, value)
     except RuntimeError as e:
         click.echo(f"  Error: {e}", err=True)
         raise SystemExit(1)

@@ -367,7 +367,6 @@ class GappSDK:
     def setup(
         self,
         project_id: Optional[str] = None,
-        solution: Optional[str] = None,
     ) -> dict:
         """Provision GCP foundation for a solution on a project.
 
@@ -375,7 +374,7 @@ class GappSDK:
         is not yet. A CI run never writes project labels: there the mark is
         left to `gapp ci project setup`, which runs as an Owner.
         """
-        ctx = self.resolve_solution(solution)
+        ctx = self.resolve_solution()
         if not ctx:
             raise RuntimeError("Not inside a gapp solution.")
         solution_name = ctx["name"]
@@ -449,7 +448,6 @@ class GappSDK:
     def deploy(
         self,
         ref: Optional[str] = None,
-        solution: Optional[str] = None,
         dry_run: bool = False,
         project_id: Optional[str] = None,
         rebuild: bool = False,
@@ -461,7 +459,7 @@ class GappSDK:
         domain mapping is refused unless this is True, because Terraform
         destroys the old mapping before creating the new one.
         """
-        ctx = self.resolve_solution(solution)
+        ctx = self.resolve_solution()
         if not ctx:
             raise RuntimeError("Could not determine solution name.")
         solution_name = ctx["name"]
@@ -541,7 +539,7 @@ class GappSDK:
                 deployment=DeploymentInfo(project=None, pending=True),
                 next_step=NextStep(action="init", hint=(
                     "No gapp.yaml here (or not inside a git repository). Run `gapp init` in the "
-                    "solution's repo, or pass --solution <name> to check a deployed solution."
+                    "app's repo, or run `gapp status <name>` to check a deployment."
                 )),
             )
         warnings = _manifest_warnings(local.get("repo_path"))

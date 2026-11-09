@@ -5,6 +5,21 @@ source is `gapp/__init__.py`.
 
 ## Unreleased
 
+- **The deployment name is an argument.** `gapp status [NAME]` and
+  `gapp secrets list [NAME]` take the deployment name the way
+  `gapp ci status <name>` does; without it they use the checkout's, as
+  before. `--solution`/`-s` is gone from every command. `gapp setup`,
+  `gapp deploy`, `gapp secrets get` and `gapp secrets set` take no
+  deployment name and always use the checkout: without its gapp.yaml, setup
+  would skip the app's required APIs, and deploy and the secrets commands
+  could never work. `gapp setup` no longer takes the project id as an
+  argument: pass `--project`. The MCP tools match:
+  `gapp_status(name=, project=)`, `gapp_secret_list(name=)`, and no
+  `solution` argument on `gapp_setup`, `gapp_deploy`, `gapp_secret_get` or
+  `gapp_secret_set`.
+- `gapp status` outside a checkout now says: "No gapp.yaml here (or not
+  inside a git repository). Run `gapp init` in the app's repo, or run
+  `gapp status <name>` to check a deployment."
 - The gapp skill's description now covers any app that serves HTTP in a
   container (web servers, APIs, MCP servers), not only Python services.
 
@@ -64,10 +79,7 @@ clean break from 3.x's project labels.
   the deployment's bucket, in parallel; `gapp status` stops at the first
   match. `gapp list` reads every hosted project's deployment buckets.
 - **Clean break.** No 4.x code reads `gapp__<name>` or
-  `gapp_<owner>_<name>` project labels. Move a 3.x fleet once with the
-  "Migration 3.x → 4.x" steps in CONTRIBUTING.md: mark each project hosted,
-  redeploy each deployment with its project, then set each old label to
-  `v-4` as a tripwire for any leftover 3.x install.
+  `gapp_<owner>_<name>` project labels.
 - The fleet's deploy workflow passes the project from the fleet entry to
   gapp's reusable workflow, so `gapp setup` and `gapp deploy` run with
   `--project` on the runner. Re-run `gapp ci init <fleet-repo>`.

@@ -518,7 +518,7 @@ def test_cli_secrets_list_renders_table_orphans_and_footnotes(tmp_path, monkeypa
             },
         ],
     }
-    monkeypatch.setattr(sec_mod, "list_secrets", lambda solution=None: fixed)
+    monkeypatch.setattr(sec_mod, "list_secrets", lambda name=None: fixed)
 
     result = CliRunner().invoke(cli_main, ["secrets", "list"])
     assert result.exit_code == 0
@@ -552,7 +552,7 @@ def test_cli_secrets_list_no_hints_when_clean(tmp_path, monkeypatch):
         "orphans": [],
         "hints": [],
     }
-    monkeypatch.setattr(sec_mod, "list_secrets", lambda solution=None: fixed)
+    monkeypatch.setattr(sec_mod, "list_secrets", lambda name=None: fixed)
 
     result = CliRunner().invoke(cli_main, ["secrets", "list"])
     assert result.exit_code == 0

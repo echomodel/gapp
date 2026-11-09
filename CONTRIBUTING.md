@@ -9,10 +9,10 @@ This document covers the design, architecture, and principles behind gapp. Read 
 gapp is a CLI tool that deploys Python MCP servers to Google Cloud Run with Terraform. A developer adds a `gapp.yaml` to their repo and runs four commands:
 
 ```
-gapp init                    # scaffold gapp.yaml + Dockerfile, register locally
-gapp setup <project-id>      # enable GCP APIs, create state bucket, label project
-gapp secret set <name>       # populate secrets in Secret Manager
-gapp deploy                  # build container, terraform apply
+gapp init                            # scaffold gapp.yaml + Dockerfile, register locally
+gapp setup --project <project-id>    # enable GCP APIs, create state bucket, label project
+gapp secret set <name>               # populate secrets in Secret Manager
+gapp deploy                          # build container, terraform apply
 ```
 
 ## Design Goals
@@ -493,7 +493,7 @@ Setup/deploy gating reads `gapp-version` from the deployment's own services (bot
 
 There is no lower floor: 4.x is the first major whose labels live on the deployment's resources, so a missing `gapp-version` means "new, or not yet redeployed by 4.x". Read operations (`gapp list`, `gapp status`) never gate; `gapp list` reports each deployment's major as a structured field.
 
-**4.x is a clean break from the 3.x project labels** (`gapp__<name>=v-N`, `gapp_<owner>_<name>=v-N`): no 4.x code reads or writes them (`tests/unit/test_label_model.py` guards that). An operator moving a fleet from 3.x follows "Migration 3.x → 4.x" below once.
+**4.x is a clean break from the 3.x project labels** (`gapp__<name>=v-N`, `gapp_<owner>_<name>=v-N`): no 4.x code reads or writes them (`tests/unit/test_label_model.py` guards that).
 
 ### What counts as a major bump
 
@@ -656,20 +656,6 @@ Every solution-keyed command of the direct system (`setup`, `deploy`, `status`, 
 
 This table is load-bearing: prior versions of gapp had setup/deploy quietly stamping role labels (`gapp-env_<owner>`), and conflating "deploy record" with "default-target hint" drove much of the redesign that landed in v-3. Each command now has exactly one write responsibility. Don't add hidden side-effects.
 
-## Migration 3.x → 4.x
-
-For an operator moving a fleet from gapp 3.x. 3.x kept one project label per deployment (`gapp__<name>=v-3`, or `gapp_<owner>_<name>=v-3`); 4.x reads none of them and keeps its labels on the deployment's bucket and services. Resources (buckets, Cloud Run services) keep their names. Once, after installing 4.x:
-
-0. Install 4.x on every machine and uninstall 3.x everywhere (`pipx list`).
-1. Inventory the old labels and keep the output:
-   `gcloud projects list --filter='labels:gapp_*' --format='table(projectId,labels)'`
-2. For direct-mode lookup and `gapp list` (not needed for CI, which always passes the project), mark each project that hosts deployments, as an Owner (any one): `gapp ci project setup <project>`, `gapp setup --project <project>` from any of its deployments' checkouts, or `gcloud projects update <project> --update-labels=gapp=hosted`.
-3. Redeploy every deployment once, passing the project: `gapp ci deploy <name>` (the fleet entry passes it), or `gapp deploy --project <project>` from the checkout. Until then a deployment is invisible to `gapp list` and to name-only `gapp status`/`deploy`.
-4. Verify each: `gcloud run services describe <id> --project <project> --region us-central1 --format='value(metadata.labels)'` shows `gapp-deployment=<id>` and `gapp-version=4`; `gapp list` shows it; `gapp status <id>` finds it by name.
-5. Set each old label to a tripwire rather than removing it: `gcloud projects update <project> --update-labels=gapp__<name>=v-4` (or `gapp_<owner>_<name>=v-4`). A leftover 3.x install refuses a deployment stamped above v-3; 4.x never reads it.
-6. Delete any `owner:` line from `~/.config/gapp/config.yaml` (gapp refuses to start until it is gone).
-7. Optional: remove any `gapp-env` project label, with `gcloud alpha projects update <project> --remove-labels=gapp-env` or the console. 4.x ignores it.
-
 ## CI/CD and Remote Deployment
 
 gapp is designed to work without a local machine. The three-layer model — tool (gapp), application (deployed repo), and operator config (the fleet repo) — enables deployment from GitHub Actions, Codespaces, or any stateless environment using Workload Identity Federation for keyless GCP authentication.
@@ -701,9 +687,9 @@ meanings wherever both have the operation:
 
 | Root | `ci` | Same meaning | Where they differ, and why |
 |---|---|---|---|
-| `gapp setup <project>` | `gapp ci setup [<name>] --repo <o>/<r> --project <p>` | make one solution deployable to one project | `ci` names the repo and the deployment, because it never reads the working directory |
+| `gapp setup --project <p>` | `gapp ci setup [<name>] --repo <o>/<r> --project <p>` | make one app deployable to one project | `ci` names the repo, because it never reads the working directory; root setup runs in the app's checkout |
 | `gapp deploy` | `gapp ci deploy <name>` | deploy it | `ci` takes a name for the same reason |
-| `gapp status` | `gapp ci status <name>` | one solution's state and next step | likewise |
+| `gapp status [<name>]` | `gapp ci status <name>` | one deployment's state and next step | the root name defaults to the checkout's; `ci` requires it |
 | `gapp list` | `gapp ci list [--repo <o>/<r>]` | the fleet | `ci` lists the fleet file; root lists the deployments on hosted projects |
 
 `test_ci_rules.py::test_the_ci_group_mirrors_the_root_verbs` asserts the
