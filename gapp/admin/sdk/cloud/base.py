@@ -1,5 +1,6 @@
 """Abstract base class for cloud operations."""
 
+import os
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Optional, List, Dict
@@ -17,6 +18,22 @@ class CloudAccessError(RuntimeError):
 
 class ProjectNotFoundError(CloudAccessError):
     """The project does not exist, or the current identity cannot see it."""
+
+
+def on_ci_runner() -> bool:
+    """True on a GitHub Actions runner, where gapp acts as the deploy identity."""
+    return os.environ.get("GITHUB_ACTIONS") == "true"
+
+
+def ci_identity_hint(account: Optional[str] = None, project_id: Optional[str] = None) -> str:
+    """What to do about a refused call on a CI runner: signing in does not apply there."""
+    who = account or "the deploy identity"
+    project = project_id or "<project>"
+    return (
+        f"This is a CI run as {who}, so signing in again does not apply: the error above names what "
+        f"it lacks. `gapp ci project setup {project}` grants the deploy identity its roles; run it as "
+        f"a project Owner, then deploy again."
+    )
 
 
 class CloudProvider(ABC):
@@ -72,6 +89,25 @@ class CloudProvider(ABC):
         empty list means no project matched; a failed listing raises
         CloudAccessError instead.
         """
+        pass
+
+    # -- Deployment labels on buckets and services --
+
+    @abstractmethod
+    def list_bucket_labels(self, project_id: str) -> Dict[str, Dict[str, str]]:
+        """Every bucket of the project, by name, with its labels (possibly empty).
+        A failed listing raises CloudAccessError."""
+        pass
+
+    @abstractmethod
+    def set_bucket_labels(self, project_id: str, bucket_name: str, labels: Dict[str, str]) -> None:
+        """Add or update the given labels on a bucket, keeping its others."""
+        pass
+
+    @abstractmethod
+    def get_service_labels(self, project_id: str, region: str, service_name: str) -> Optional[Dict[str, str]]:
+        """A Cloud Run service's labels, or None when the service does not exist.
+        Any other failure raises CloudAccessError."""
         pass
 
     # -- Custom domains --

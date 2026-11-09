@@ -43,13 +43,14 @@ def test_discovery_toggle(sdk):
     assert sdk.is_discovery_on() is False
 
 
-def test_label_key_generation(sdk):
-    """Solution label keys are env-blind. Owner segment empty for global."""
+def test_deployment_labels(sdk):
+    """Every bucket and service carries gapp-deployment and gapp-version; gapp-owner only with an owner."""
     sdk.set_owner(None)
-    assert sdk.get_label_key("my-app") == "gapp__my-app"
+    assert sdk.deployment_labels("my-app") == {"gapp-deployment": "my-app", "gapp-version": "4"}
 
     sdk.set_owner("owner-a")
-    assert sdk.get_label_key("my-app") == "gapp_owner-a_my-app"
+    assert sdk.deployment_labels("my-app") == {
+        "gapp-deployment": "my-app", "gapp-version": "4", "gapp-owner": "owner-a"}
 
 
 def test_bucket_name_is_owner_blind_and_env_blind(sdk):

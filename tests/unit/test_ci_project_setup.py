@@ -29,6 +29,7 @@ def machine(monkeypatch, fleet_repo, fake_gh):
     monkeypatch.setattr(ci_mod, "_ensure_deploy_sa", lambda project_id: "created")
     monkeypatch.setattr(ci_mod, "_ensure_wif_binding", lambda project_id, fleet_repo: "set")
     monkeypatch.setattr(ci_mod, "_get_project_number", lambda project_id: "123456789012")
+    monkeypatch.setattr(ci_mod, "_mark_project_hosted", lambda project_id: "set")
     return fake_gh
 
 
@@ -36,6 +37,7 @@ def test_project_setup_creates_the_resources_and_records_the_environment(machine
     res = ci_mod.setup_ci_project("my-proj")
     assert res["ok"] is True and res["next_step"] is None and res["changed"] is True
     assert res["fleet_repo"] == FLEET and res["wif_pool"] == "created" and res["binding"] == "set"
+    assert res["hosted"] == "set"
     assert res["environment_record"] == "created"
     assert machine.environments[(FLEET, "my-proj")] == {"GAPP_WIF_PROVIDER": WIF, "GAPP_DEPLOY_SERVICE_ACCOUNT": SA}
 
@@ -112,3 +114,15 @@ def test_project_setup_reports_a_refused_environment_write(machine):
     assert "GCP is ready" in res["next_step"]["hint"]
     assert "could not create the Environment 'my-proj': GitHub returned 403" in res["next_step"]["hint"]
     assert res["wif_pool"] == "created"
+
+
+def test_marking_the_project_hosted_keeps_its_other_labels(monkeypatch):
+    """`gcloud projects update --update-labels` merges: gapp=hosted joins the project's labels."""
+    calls = []
+
+    class Done:
+        returncode, stdout, stderr = 0, "", ""
+
+    monkeypatch.setattr(ci_mod, "run_gcloud", lambda args, **kw: calls.append(args) or Done())
+    assert ci_mod._mark_project_hosted("my-proj") == "set"
+    assert calls == [["projects", "update", "my-proj", "--update-labels=gapp=hosted"]]

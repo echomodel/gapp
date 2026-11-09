@@ -43,10 +43,12 @@ through discovery. Order does not matter; bind before or after
 setup. The name `default` is reserved.
 
 **Run setup.** `gapp setup <project-id>`. The id is required the
-first time on a project (there are no labels to discover from);
-later runs find it. Setup enables APIs, creates the per-solution
-bucket for Terraform state and data, grants Cloud Build its
-permissions, and writes the solution label. If another owner has a
+first time; later runs find the project among those marked
+`gapp=hosted`. Setup enables APIs, creates the per-solution bucket
+for Terraform state and data and labels it (`gapp-deployment`,
+`gapp-version`), grants Cloud Build its permissions, and marks the
+project `gapp=hosted` once (it needs an Owner for that; a CI run
+never writes project labels). If another owner has a
 solution of the same name on that project, setup refuses with a
 cross-owner warning; pass `--force` only when the user means to
 share, because bucket and service names are owner-blind.
@@ -82,7 +84,7 @@ for the current commit already exists.
 **CI, recommended for ongoing use.** The CI system is the other
 fleet system: it needs GitHub, never a Google Cloud identity (one
 command excepted), never reads the working directory, and its record
-is the fleet repo, not the project label. Its unit is a **deployment**:
+is the fleet repo, not the GCP labels. Its unit is a **deployment**:
 a repo deployed to a project under a name the user chooses; the same
 repo deployed twice (staging and prod, two instances) is two
 deployments. A solution is deployed by one system or the other; never

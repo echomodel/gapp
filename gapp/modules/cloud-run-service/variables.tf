@@ -67,3 +67,12 @@ variable "data_bucket" {
   type        = string
 }
 
+# Required: the deployment labels gapp writes on every service
+# (gapp-deployment, gapp-version, and gapp-owner when an owner is set). The
+# version guard and `gapp list` read them, so no default: a deploy that
+# stopped emitting them would fail plan instead of shipping an unlabeled
+# service.
+variable "labels" {
+  description = "Deployment labels for the Cloud Run service"
+  type        = map(string)
+}

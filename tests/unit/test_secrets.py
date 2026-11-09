@@ -589,7 +589,7 @@ def test_resolve_solution_with_project_populates_project_id_via_label_discovery(
 
     _solution_repo(tmp_path, monkeypatch)
     sdk = GappSDK(provider=DummyCloudProvider())
-    sdk.provider.project_labels["proj-found"] = {"gapp__my-app": "v-3"}
+    sdk.provider.host("proj-found", "my-app")
 
     ctx = sdk.resolve_solution_with_project()
 
@@ -646,7 +646,7 @@ def test_list_secrets_resolves_project_via_chain(tmp_path, monkeypatch):
         ),
     )
     sdk = GappSDK(provider=DummyCloudProvider())
-    sdk.provider.project_labels["proj-found"] = {"gapp__my-app": "v-3"}
+    sdk.provider.host("proj-found", "my-app")
     monkeypatch.setattr(sec_mod, "GappSDK", lambda: sdk)
     monkeypatch.setattr(
         sec_mod, "list_secrets_by_label",
@@ -676,7 +676,7 @@ def test_get_secret_resolves_project_via_chain(tmp_path, monkeypatch):
         ),
     )
     sdk = GappSDK(provider=DummyCloudProvider())
-    sdk.provider.project_labels["proj-found"] = {"gapp__my-app": "v-3"}
+    sdk.provider.host("proj-found", "my-app")
     monkeypatch.setattr(sec_mod, "GappSDK", lambda: sdk)
     monkeypatch.setattr(
         sec_mod, "_read_secret_version",
@@ -705,7 +705,7 @@ def test_set_secret_resolves_project_via_chain(tmp_path, monkeypatch):
         ),
     )
     sdk = GappSDK(provider=DummyCloudProvider())
-    sdk.provider.project_labels["proj-found"] = {"gapp__my-app": "v-3"}
+    sdk.provider.host("proj-found", "my-app")
     monkeypatch.setattr(sec_mod, "GappSDK", lambda: sdk)
 
     ensured = []

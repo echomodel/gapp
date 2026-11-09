@@ -20,6 +20,7 @@ resource "google_cloud_run_v2_service" "service" {
   name                = var.service_name
   location            = var.region
   deletion_protection = false
+  labels              = var.labels
 
   template {
     service_account = google_service_account.service.email

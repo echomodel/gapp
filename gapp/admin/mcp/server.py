@@ -49,7 +49,7 @@ def gapp_user(account: str | None = None, app_owner: str | None = None) -> dict:
 
     Args:
         account: Google account email for gcloud commands.
-        app_owner: Global app owner name for project labels.
+        app_owner: Global app owner name for deployment labels.
     """
     from gapp.admin.sdk.core import GappSDK
     sdk = GappSDK()
@@ -100,12 +100,13 @@ def gapp_setup(
 ) -> dict:
     """Set up GCP foundation for a gapp solution.
 
-    Enables APIs, creates per-solution GCS bucket, and writes the solution
-    label (gapp_<owner>_<solution>=v-N) on the project. NEVER writes the
+    Enables APIs, creates the per-solution GCS bucket and labels it
+    (gapp-deployment, gapp-version, gapp-owner when set), and marks the
+    project gapp=hosted once (never from a CI run). NEVER writes the
     project's gapp-env binding — use gapp_projects_set_env for that.
 
-    First-time install requires project_id (no labels exist to discover from).
-    Subsequent runs are idempotent — discovery finds the existing project.
+    First-time install requires project_id. Subsequent runs are idempotent:
+    discovery finds the project among those marked gapp=hosted.
 
     Args:
         project_id: GCP project ID. Required for first-time install.
@@ -482,7 +483,7 @@ def gapp_ci_list(repo: str | None = None, verbose: bool = False) -> dict:
 def gapp_status(solution: str | None = None, env: str | None = None, project: str | None = None) -> dict:
     """Infrastructure health check for a gapp solution (the direct system).
 
-    Reads GCP labels and Terraform state; never GitHub, never the CI
+    Reads deployment labels and Terraform state; never GitHub, never the CI
     system (use gapp_ci_status for that). Returns initialized,
     deployment.project, deployment.pending, deployment.services, domain
     (the live custom domain mapping's state: pending_dns, pending_cert,
@@ -495,7 +496,7 @@ def gapp_status(solution: str | None = None, env: str | None = None, project: st
         solution: Solution name. Defaults to current directory's solution.
         env: Optional — used to disambiguate when multiple projects host
              this solution.
-        project: Optional explicit GCP project id, skipping label discovery.
+        project: Optional explicit GCP project id, skipping the hosted-project search.
     """
     from gapp.admin.sdk.core import GappSDK
     return GappSDK().status(name=solution, env=env, project=project).model_dump()
@@ -542,14 +543,14 @@ def gapp_projects_list() -> dict:
 
 @_tool()
 def gapp_list(all_owners: bool = False, project_limit: int = 50) -> dict:
-    """List deployed gapp solutions discovered via GCP project labels.
+    """List deployments found on projects marked gapp=hosted.
 
     Args:
         all_owners: When False (default), scope listing to the active owner
             namespace (or global apps if no owner is configured). When True,
             return apps across every owner namespace. Maps to the CLI flag
             `--all` on `gapp list`.
-        project_limit: Max projects to scan (default 50).
+        project_limit: Max hosted projects to scan (default 50).
     """
     from gapp.admin.sdk.core import GappSDK
     return GappSDK().list_apps(all_owners=all_owners, project_limit=project_limit)

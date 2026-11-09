@@ -43,10 +43,11 @@ SOLUTION REPO (what gets deployed)
   Dockerfile                            ← optional; if absent, gapp generates one at build time
 
 GCP (runtime state)
-  Project labels:
-    gapp_<owner>_<name>=v-N             ← solution label (env-blind)
-    gapp__<name>=v-N                    ← global-namespace solution (no owner)
+  Project labels (written only by an Owner):
+    gapp=hosted                         ← the project hosts gapp deployments
     gapp-env=<env>                      ← project env binding (optional)
+  Deployment labels (on the bucket and every Cloud Run service):
+    gapp-deployment=<id>  gapp-version=<major>  [gapp-owner=<owner>]
   Secret Manager: labeled gapp-solution=<name>  ← every gapp-managed secret
   Cloud Run: running services           ← runtime
   GCS: gapp-{name}-{project-id}/       ← per-solution bucket (owner-blind, env-blind)
@@ -90,7 +91,7 @@ Modeled on: npm workspaces (`package.json`), Cargo workspaces (`Cargo.toml`), Ma
 
 ### GitHub-Centric Discovery
 
-Solutions are discovered via GitHub repos and topics, not GCP project configurations. GitHub is more durable and discoverable than GCP for this purpose — repos have READMEs, topics, and are browsable. GCP labels (`gapp_<owner>_<name>=v-N`) are the secondary source, used to map a solution to its GCP project. Local config (`~/.config/gapp/config.yaml`) is a working registry reconstructable from GitHub + GCP.
+Solutions are discovered via GitHub repos and topics, not GCP project configurations. GitHub is more durable and discoverable than GCP for this purpose — repos have READMEs, topics, and are browsable. GCP labels (`gapp=hosted` on the project, `gapp-deployment=<id>` on the deployment's bucket and services) are the secondary source, used to map a solution to its GCP project. Local config (`~/.config/gapp/config.yaml`) is a working registry reconstructable from GitHub + GCP.
 
 gapp is GitHub-flavored but not GitHub-locked. The core lifecycle — `gapp init`, `gapp setup`, `gapp secret set`, `gapp deploy` — works with any local git repo and requires no GitHub account, no GitHub API, and no GitHub Actions. GitHub is required only for optional features: remote discovery (`gapp list --available`), CI/CD automation (`gapp ci`), and installing the runtime wrapper during container build. The CI layer calls `gapp deploy` — not the other way around.
 
@@ -99,7 +100,7 @@ gapp is GitHub-flavored but not GitHub-locked. The core lifecycle — `gapp init
 | Phase | What | Command |
 |-------|------|---------|
 | **Project env (optional)** | Bind a GCP project to a named env | `gapp projects set-env <project-id> <env>` |
-| **Foundation** | Enable APIs, create bucket, write solution label | `gapp setup --project <project-id>` |
+| **Foundation** | Enable APIs, create and label the bucket, mark the project `gapp=hosted` | `gapp setup --project <project-id>` |
 | **Prerequisites** | Secrets populated in Secret Manager | `gapp secret set <name>` |
 | **Application** | Cloud Run service deployed via Terraform | `gapp deploy` |
 
@@ -364,7 +365,7 @@ it. If no, pick something more generic.
 
 ### 1. Separate the Tool from the Deployment
 
-**This repo is the tool** — application code, Dockerfile, and `gapp.yaml` live in solution repos. **GCP is the deployment** — project labels, Secret Manager, Cloud Run. **Local machine is ephemeral** — `~/.config/gapp/` is a reconstructable cache.
+**This repo is the tool** — application code, Dockerfile, and `gapp.yaml` live in solution repos. **GCP is the deployment** — labels, Secret Manager, Cloud Run. **Local machine is ephemeral** — `~/.config/gapp/` is a reconstructable cache.
 
 These tiers must not bleed: no project IDs in public repos, no credential values in any repo, no state that can't be reconstructed from GitHub + GCP.
 
@@ -462,10 +463,10 @@ The `gapp-mcp` entry point runs a stdio MCP server that exposes admin operations
 Available tools:
 - `gapp_user` — view or set the global gcloud account and app owner
 - `gapp_init` — bootstrap a solution (yaml + GitHub topic + registry)
-- `gapp_setup` — GCP foundation (APIs, bucket, solution label). Does NOT write `gapp-env`.
+- `gapp_setup` — GCP foundation (APIs, labeled bucket, `gapp=hosted` on the project). Does NOT write `gapp-env`.
 - `gapp_deploy` — build + terraform apply
 - `gapp_status` — infrastructure health check
-- `gapp_list` — list deployed apps via project labels
+- `gapp_list` — list the deployments on projects marked `gapp=hosted`
 - `gapp_projects_set_env` — bind a project to a named env (writes `gapp-env`)
 - `gapp_projects_clear_env` — remove a project's env binding
 - `gapp_projects_list` — list projects with env bindings
@@ -482,37 +483,28 @@ agy mcp add gapp-admin -- gapp-mcp                   # Antigravity CLI
 
 ## Version Management
 
-**Single source of truth:** `gapp/__init__.py` contains `__version__` and `MIN_SUPPORTED_MAJOR`. Git tags match the version with a `v` prefix (e.g. `v3.0.0` for `3.0.0`).
+**Single source of truth:** `gapp/__init__.py` contains `__version__`. Git tags match the version with a `v` prefix (e.g. `v3.0.0` for `3.0.0`).
 
 ### Label contract versioning
 
-The gapp **major version IS the contract version**. Bumping major == breaking the contract. The label sentinel `v-N` written into project labels at deploy time is derived directly from `__version__` major:
+The gapp **major version IS the contract version**. Bumping major == breaking the contract. Every setup and deploy writes `gapp-version=<major>` on the deployment's bucket and Cloud Run services, derived directly from `__version__` major (`CURRENT_MAJOR` in `core.py`). There is no separate `CONTRACT_VERSION` constant — multiple version numbers create complexity and drift. One number, one source.
 
-```python
-from gapp import __version__
-label_value = f"v-{int(__version__.split('.')[0])}"   # 3.0.4 → "v-3"
-```
+Setup/deploy gating reads `gapp-version` from the deployment's own services (both modes), never from a project label:
 
-A 3.x build stamps `v-3`. A future 4.x build stamps `v-4`. There is no separate `CONTRACT_VERSION` constant — multiple version numbers create complexity and drift. One number, one source.
-
-`MIN_SUPPORTED_MAJOR` is the read-floor — the oldest contract this build can manage. Setup/deploy gating policy:
-
-| Project's contract | Action |
+| Service's `gapp-version` | Action |
 |---|---|
-| `n > __version__` major | Refuse writes — "deployed by newer gapp; upgrade." Read ops still work. |
-| `n < MIN_SUPPORTED_MAJOR` | Refuse writes — "deployed by unsupported gapp; migrate manually or use older build." Read ops still work. |
-| `MIN_SUPPORTED_MAJOR ≤ n ≤ current major` | Allow. On write, restamp to current `v-N`. |
+| `n > __version__` major | Refuse — "Deployment '<id>' on project '<p>' was deployed by gapp n.x ...; upgrade gapp to deploy it." Read ops still work. |
+| `n ≤ __version__` major, absent, or no service yet | Allow. The deploy writes the current major. |
 
-Read operations (`gapp list`, `gapp status`) never gate — they show all `gapp_*` labeled projects regardless of contract version, with the parsed contract major reported as a structured field.
+There is no lower floor: 4.x is the first major whose labels live on the deployment's resources, so a missing `gapp-version` means "new, or not yet redeployed by 4.x". Read operations (`gapp list`, `gapp status`) never gate; `gapp list` reports each deployment's major as a structured field.
 
-**Default policy is `MIN_SUPPORTED_MAJOR == __version__` major** — a hard cutover at every major bump. Carrying older contracts forward (e.g., `MIN_SUPPORTED_MAJOR = N-1`) is opt-in and requires that the SDK actually still supports the older shape. Don't lower the floor unless backward compatibility is intentionally implemented and tested.
+**4.x is a clean break from the 3.x project labels** (`gapp__<name>=v-N`, `gapp_<owner>_<name>=v-N`): no 4.x code reads or writes them (`tests/unit/test_label_model.py` guards that). An operator moving a fleet from 3.x follows "Migration 3.x → 4.x" below once.
 
 ### What counts as a major bump
 
 Anything that changes the *contract* between deployed projects and the gapp build that manages them:
 
-- Solution label key format
-- Solution label value format (the `v-N[_…]` shape)
+- Deployment label keys and values (`gapp-deployment`, `gapp-version`, `gapp-owner`) and the project mark (`gapp=hosted`)
 - Bucket naming convention
 - Secret naming convention
 - Terraform state path layout
@@ -604,9 +596,9 @@ their client as shown under "MCP Admin Server".
 - `pip install --upgrade` only installs if the version number is
   higher. Same version = pip thinks nothing changed and silently
   keeps the old code.
-- The label sentinel `v-N` derives from `__version__` major.
+- The `gapp-version` label derives from `__version__` major.
   Forgetting to bump major on a contract-breaking change means the
-  new code stamps the same `v-N` as the old code — silently
+  new code writes the same `gapp-version` as the old code — silently
   incompatible deployments. Always bump major when the contract
   changes.
 - Editable installs (`pip install -e .`) always use live code
@@ -624,12 +616,12 @@ pipx install -e .   # or: pip install -e .
 Owner is a per-profile setting in `~/.config/gapp/config.yaml`. It can be set or unset, and both are first-class.
 
 **Owned mode** — the active profile declares an owner (e.g. `alice`). The user is asserting an identity. That identity surfaces in:
-- solution label keys: `gapp_alice_<solution>=v-N`
+- the deployment's bucket and service labels: `gapp-owner=alice`
 - terraform state metadata (when written): `last_deployed_by_owner=alice`
 - `gapp list` output: OWNER column shows `alice`
 
 **Global mode** — the active profile has no owner. The user is asserting "I live in my own world. Maybe I'm in a GCP org with other teams, but they don't use gapp, or I'm confident enough they won't ever share a project with me that I don't need a namespace." That assertion surfaces in:
-- solution label keys: `gapp__<solution>=v-N` (double underscore is the no-owner sentinel)
+- the deployment's bucket and service labels: no `gapp-owner` label
 - terraform state: no `last_deployed_by_owner` field written
 - `gapp list` output: OWNER column shows `<global>`
 
@@ -637,7 +629,7 @@ Identity is for clobber prevention at deploy time, not for resource partitioning
 
 | Layer | When | Where it lives |
 |---|---|---|
-| **Layer 1** (advisory) | At setup time | Project label scan: refuses if a different owner already has the same solution name on the target project. Bypassable with `--force`. |
+| **Layer 1** (advisory) | At setup time | The deployment bucket's `gapp-owner` label: refuses if a different owner already has the same deployment on the target project. Bypassable with `--force`. |
 | **Layer 2** (load-bearing, planned) | At deploy time | Terraform state output `last_deployed_by_owner`. Cross-owner or anonymous-vs-owned mismatch refuses without `--takeover`. Required for the stateless / no-discovery usage pattern where labels can't be relied on. |
 
 Layer 1 ships in v-3.0.0. Layer 2 is on the v-3.x roadmap — until then, the only protection against cross-owner clobber on shared projects is the setup-time check, which is bypassable. Documented as a known gap.
@@ -660,52 +652,45 @@ A project's env is what `gapp-env` says it is. There is no special string `defau
 
 By construction, two envs of the same solution on the same project is impossible — there's only one `gapp-env` value per project.
 
-## Solution label
+## Deployment labels
 
-Env-blind. One label per (owner, solution) per project:
+Every setup and deploy, in both modes, writes the same labels on the deployment's own resources: its bucket (by gapp, since the bucket holds Terraform's own state) and every Cloud Run service (by Terraform, through the module's required `labels` variable):
 
-| Field | Format | Notes |
+| Label | Value | Notes |
 |---|---|---|
-| **Key** (owned) | `gapp_<owner>_<solution>` | env-blind |
-| **Key** (global) | `gapp__<solution>` | double underscore — no-owner sentinel |
-| **Value** | `v-<contract-major>` | e.g., `v-3` — derived from `__version__` |
+| `gapp-deployment` | `<id>` | the deployment's id; a workspace's services all carry the parent id |
+| `gapp-version` | `<major>` | e.g. `4`, from `__version__`; the version guard reads it from the services |
+| `gapp-owner` | `<owner>` | only when the active profile has an owner |
 
-A project can host multiple solutions, multiple owners, owned + global mixed — all fine. Env is project-wide via `gapp-env`. The solution label only declares "this solution is deployed here under this contract version."
+The project carries at most two gapp labels, both project-wide: `gapp=hosted` (the project hosts gapp deployments) and `gapp-env=<env>`. Only an Owner writes project labels: `gapp setup` marks the project once from a workstation, and `gapp ci project setup` marks it for a CI fleet. A CI run (`GITHUB_ACTIONS=true`) never writes a project label, so the deploy identity needs no project-update permission.
 
-## Label keyspace
+A project can host multiple deployments, multiple owners, owned + global mixed — all fine.
 
-Deliberate prefix-query partitioning enables O(1) `gcloud projects list --filter=labels:<prefix>*` lookups with zero post-filter parsing:
+## Finding a deployment
 
-| Filter prefix | Matches |
-|---|---|
-| `labels:gapp_*` | All solution labels (owned + global) |
-| `labels:gapp__*` | Global-namespace solutions only |
-| `labels:gapp_<owner>_*` | One specific owner's solutions only |
-| `labels:gapp-env` | Projects with an env binding |
+- **`--project` given** (always, in CI: the project comes from the fleet entry): no search. "Is it set up" is the deployment's bucket existing (deploy refuses with "Foundation missing" otherwise).
+- **No `--project`**: list the projects marked `gapp=hosted` (one Resource Manager call), then ask each for its buckets labeled `gapp-deployment=<id>` under the active owner, in parallel. Buckets rather than services, because a deployment has its bucket from setup on, before its first service exists. `gapp status` stops at the first match; `deploy` and `setup` keep every match so that an ambiguous name is refused rather than guessed.
+- **`gapp list`**: the same hosted-project listing, then every labeled deployment bucket per project, in parallel; env from the project's `gapp-env`, owner from `gapp-owner`, major from `gapp-version`.
 
-Two design choices make this work:
+**Discovery never filters by env first.** The search reads each hosted project's `gapp-env` from the same listing and narrows afterwards (status, which stops at the first match, asks only the projects of the env it was given).
 
-**Prefix-sentinel separation.** The `gapp-env` hyphen-prefix and `gapp_` underscore-prefix never collide. Solution labels use `_` everywhere; the project env label is the literal string `gapp-env`. A single prefix query targets one keyspace without sweeping in the other — no reserved owner names required.
-
-**Double-underscore for empty owner.** `gapp__<solution>` (two underscores between `gapp` and the solution name) is the no-owner sentinel. It preserves positional regularity for prefix matching: `gapp_<X>_<Y>` always parses as 3 segments, where `<X>` empty means global. This is intentional — it lets `labels:gapp__*` match global-namespace solutions exclusively without parsing every label value, and it avoids reserving "global" or any other word as a forbidden owner name.
-
-**Discovery never filters by env.** All resolution queries filter by solution (rare, specific) and read each project's `gapp-env` from the same response. Filtering by `gapp-env=prod` would drag in every prod project across the fleet, gapp-managed or not. Don't add that filter.
+A very large organization could replace the per-project calls with one Cloud Asset Inventory search; it needs an organization scope, the Cloud Asset API and its index lags by minutes, so it is not used.
 
 ## Resolution rules
 
 Every solution-keyed command of the direct system (`setup`, `deploy`, `status`, `secret get/set/list`) routes through `GappSDK.resolve_project_for_solution(solution, env=None, project=None)`. The CI system (`gapp ci`) never calls it: its project comes from `--project` and its record is the fleet repo (see "Two fleet systems"). Inputs: solution name (from gapp.yaml or arg), owner (from active profile, may be None for global), optional `--env`, optional `--project`.
 
-| Solution-label matches | `--env` | `--project` | Outcome |
+| Deployments found on hosted projects | `--env` | `--project` | Outcome |
 |---|---|---|---|
+| — | omitted, or matches P's `gapp-env` | given (P) | Proceed with P, no search. Deploy then needs the bucket ("Foundation missing" otherwise). |
+| — | mismatches P's `gapp-env` | given (P) | Refuse: "Project P is bound to env=X. You passed --env=Y." |
 | 1 | omitted | omitted | Proceed. |
-| 1 | matches project's `gapp-env` (or both undefined) | — | Proceed. |
-| 1 | mismatches | — | Refuse: "solution lives on P (env=X); you passed env=Y." |
-| 0 | — | given | Setup only: first-time install. Other commands: error. |
-| 0 | — | omitted | Error: "solution not deployed; run setup." |
+| 1 | matches project's `gapp-env` (or both undefined) | omitted | Proceed. |
+| 0 | — | omitted | Error: "No deployment '<id>' found in any project marked gapp=hosted. Pass --project, or run `gapp setup --project <project-id>` first." |
 | 2+ | omitted | omitted | Refuse, list rows with envs (named or `<undefined>`), require `--env` or `--project`. |
 | 2+ | given, narrows to 1 | omitted | Proceed. |
 | 2+ | given, narrows to 0 | omitted | Refuse: "no match for env=X; we have it in env=Y, env=Z." |
-| 2+ | given, narrows to 2+ | omitted | Refuse: corruption (same owner+solution+named-env on multiple projects); manual cleanup required. |
+| 2+ | given, narrows to 2+ | omitted | Refuse: corruption (same owner+deployment+named-env on multiple projects); manual cleanup required. |
 
 Undefined-env projects are addressable only by `--project` once they have a peer hosting the same solution (you can't type `--env <undefined>`). Single-match deploys to undefined-env projects work fine without flags.
 
@@ -713,43 +698,28 @@ Undefined-env projects are addressable only by `--project` once they have a peer
 
 ## What writes what
 
-| Command | Writes solution label | Writes `gapp-env` | Writes tfstate identity (planned) |
-|---|---|---|---|
-| `gapp setup` | yes (idempotent) | **never** | initial value on first apply (Layer 2) |
-| `gapp deploy` | rewrites value (current `v-N`) | **never** | rewrites if `--takeover`, else verifies (Layer 2) |
-| `gapp projects set-env` | never | yes | never |
-| `gapp projects clear-env` | never | yes (removes) | never |
+| Command | Writes deployment labels | Writes `gapp=hosted` | Writes `gapp-env` | Writes tfstate identity (planned) |
+|---|---|---|---|---|
+| `gapp setup` | bucket (idempotent) | once per project, from a workstation; never from a CI run | **never** | initial value on first apply (Layer 2) |
+| `gapp deploy` | bucket and services (current major) | **never** | **never** | rewrites if `--takeover`, else verifies (Layer 2) |
+| `gapp ci project setup` | never | yes (as an Owner) | never | never |
+| `gapp projects set-env` | never | never | yes | never |
+| `gapp projects clear-env` | never | never | yes (removes) | never |
 
 This table is load-bearing: prior versions of gapp had setup/deploy quietly stamping role labels (`gapp-env_<owner>`), and conflating "deploy record" with "default-target hint" drove much of the redesign that landed in v-3. Each command now has exactly one write responsibility. Don't add hidden side-effects.
 
-## Migration v-2 → v-3
+## Migration 3.x → 4.x
 
-For contributors operating their own pre-v3 fleet. v-2 used env-suffixed solution-label keys (`gapp_<owner>_<solution>_<env>=v-2_env-<env>`) and per-owner role labels (`gapp-env_<owner>=<env>`). v-3 uses env-blind solution labels and a single project-wide `gapp-env`.
+For an operator moving a fleet from gapp 3.x. 3.x kept one project label per deployment (`gapp__<name>=v-3`, or `gapp_<owner>_<name>=v-3`); 4.x reads none of them and keeps its labels on the deployment's bucket and services. Resources (buckets, Cloud Run services) keep their names. Once, after installing 4.x:
 
-Per project, run with gcloud (one project at a time):
-
-**Default-env solution** (v-2: `gapp_<owner>_<solution>=v-2`):
-
-```bash
-gcloud projects update <pid> \
-  --update-labels=gapp_<owner>_<solution>=v-3
-```
-
-`gapp-env` is NOT written — the project remains undefined-env in v-3.
-
-**Named-env solution** (v-2: `gapp_<owner>_<solution>_<env>=v-2_env-<env>`):
-
-```bash
-gcloud projects update <pid> \
-  --remove-labels=gapp_<owner>_<solution>_<env>,gapp-env_<owner> \
-  --update-labels=gapp_<owner>_<solution>=v-3,gapp-env=<env>
-```
-
-Two writes added (env-blind solution label + project env binding) and two old labels removed (env-suffixed solution label + role label).
-
-**Global solutions** are the same with `gapp__<solution>` instead.
-
-Resources (buckets, Cloud Run services) don't change names — they were already env-blind in late v-2, and v-3 also makes them owner-blind. No bucket renames required.
+0. Install 4.x on every machine and uninstall 3.x everywhere (`pipx list`).
+1. Inventory the old labels and keep the output:
+   `gcloud projects list --filter='labels:gapp_*' --format='table(projectId,labels)'`
+2. Mark each project that hosts deployments, as an Owner (any one): `gapp ci project setup <project>`, `gapp setup --project <project>` from any of its deployments' checkouts, or `gcloud projects update <project> --update-labels=gapp=hosted`.
+3. Redeploy every deployment once, passing the project: `gapp ci deploy <name>` (the fleet entry passes it), or `gapp deploy --project <project>` from the checkout. Until then a deployment is invisible to `gapp list` and to name-only `gapp status`/`deploy`.
+4. Verify each: `gcloud run services describe <id> --project <project> --region us-central1 --format='value(metadata.labels)'` shows `gapp-deployment=<id>` and `gapp-version=4`; `gapp list` shows it; `gapp status <id>` finds it by name.
+5. Set each old label to a tripwire rather than removing it: `gcloud projects update <project> --update-labels=gapp__<name>=v-4` (or `gapp_<owner>_<name>=v-4`). A leftover 3.x install refuses a deployment stamped above v-3; 4.x never reads it.
+6. Leave `gapp-env` as it is.
 
 ## CI/CD and Remote Deployment
 
@@ -763,7 +733,8 @@ gapp has **two fleet systems that do not talk to each other**:
 
 - **Root commands** (`gapp setup`, `deploy`, `status`, `list`, `secrets`)
   deploy the local checkout to GCP with gcloud. Their record of where a
-  solution lives is the GCP project label. They never read GitHub.
+  solution lives is its labels in GCP (`gapp=hosted` on the project,
+  `gapp-deployment` on its bucket and services). They never read GitHub.
 - **`gapp ci` commands** manage the fleet through GitHub only. They never
   use gcloud (except `ci project setup`, once per project) and never read
   the working directory. Their record is `gapp/deployments.yaml` in the
@@ -784,7 +755,7 @@ meanings wherever both have the operation:
 | `gapp setup <project>` | `gapp ci setup [<name>] --repo <o>/<r> --project <p>` | make one solution deployable to one project | `ci` names the repo and the deployment, because it never reads the working directory |
 | `gapp deploy` | `gapp ci deploy <name>` | deploy it | `ci` takes a name for the same reason |
 | `gapp status` | `gapp ci status <name>` | one solution's state and next step | likewise |
-| `gapp list` | `gapp ci list [--repo <o>/<r>]` | the fleet | `ci` lists the fleet file; root lists project labels |
+| `gapp list` | `gapp ci list [--repo <o>/<r>]` | the fleet | `ci` lists the fleet file; root lists the deployments on hosted projects |
 
 `test_ci_rules.py::test_the_ci_group_mirrors_the_root_verbs` asserts the
 names and the marker sentence in each `ci` command's help.

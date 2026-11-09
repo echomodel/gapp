@@ -52,6 +52,7 @@ module "svc" {{
   service_name = "s"
   image        = "us-central1-docker.pkg.dev/p/r/i:t"
   data_bucket  = "gapp-s-p"
+  labels       = {{ "gapp-deployment" = "s", "gapp-version" = "4" }}
 }}
 ''')
     res = _run(["terraform", "validate"], tmp_path)
@@ -71,6 +72,7 @@ module "svc" {{
   project_id   = "p"
   service_name = "s"
   image        = "us-central1-docker.pkg.dev/p/r/i:t"
+  labels       = {{}}
 }}
 ''')
     res = _run(["terraform", "validate"], tmp_path)
@@ -78,3 +80,19 @@ module "svc" {{
     combined = res.stdout + res.stderr
     assert "data_bucket" in combined
     assert "required" in combined.lower()
+
+
+def test_module_rejects_missing_labels(tmp_path):
+    """labels omitted → validate fails: the version guard and `gapp list` depend on them."""
+    _wrapper(tmp_path, f'''
+module "svc" {{
+  source       = "{MODULE_PATH}"
+  project_id   = "p"
+  service_name = "s"
+  image        = "us-central1-docker.pkg.dev/p/r/i:t"
+  data_bucket  = "gapp-s-p"
+}}
+''')
+    res = _run(["terraform", "validate"], tmp_path)
+    assert res.returncode != 0
+    assert "labels" in res.stdout + res.stderr

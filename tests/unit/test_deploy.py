@@ -23,16 +23,13 @@ def _repo(tmp_path, monkeypatch, contents="name: my-app"):
 def test_deploy_dry_run_singular(tmp_path, monkeypatch, sdk):
     """Dry-run resolves a single-match deployment."""
     _repo(tmp_path, monkeypatch)
-    sdk.provider.project_labels["proj-123"] = {
-        "gapp-env": "prod",
-        "gapp__my-app": "v-3",
-    }
+    sdk.provider.host("proj-123", "my-app", env="prod")
 
     res = sdk.deploy(dry_run=True)
 
     assert res["dry_run"] is True
     assert res["name"] == "my-app"
-    assert res["label"] == "gapp__my-app"
+    assert res["labels"] == "gapp-deployment=my-app, gapp-version=4"
     assert res["project_id"] == "proj-123"
     assert res["env"] == "prod"
 
@@ -51,7 +48,7 @@ def test_deploy_dry_run_workspace(tmp_path, monkeypatch, sdk):
     (worker_dir / "gapp.yaml").write_text("name: my-worker")
     monkeypatch.chdir(repo)
 
-    sdk.provider.project_labels["proj-ws"] = {"gapp__app": "v-3"}
+    sdk.provider.host("proj-ws", "app")
 
     res = sdk.deploy(dry_run=True)
 
@@ -60,17 +57,15 @@ def test_deploy_dry_run_workspace(tmp_path, monkeypatch, sdk):
 
 
 def test_deploy_dry_run_with_owner(tmp_path, monkeypatch, sdk):
-    """Dry-run includes owner-scoped label."""
+    """Dry-run includes the owner label."""
     _repo(tmp_path, monkeypatch)
     sdk.set_owner("owner-a")
-    sdk.provider.project_labels["proj-123"] = {
-        "gapp_owner-a_my-app": "v-3",
-    }
+    sdk.provider.host("proj-123", "my-app", owner="owner-a")
 
     res = sdk.deploy(dry_run=True)
 
     assert res["owner"] == "owner-a"
-    assert res["label"] == "gapp_owner-a_my-app"
+    assert res["labels"] == "gapp-deployment=my-app, gapp-version=4, gapp-owner=owner-a"
     assert res["env"] is None  # project has no gapp-env binding
 
 
@@ -90,10 +85,7 @@ def test_deploy_dry_run_no_setup_pending(tmp_path, monkeypatch, sdk):
 def _setup_real_deploy(tmp_path, monkeypatch, sdk, ref_sha="abc123def456"):
     """Set up a deployable repo + populate provider state for a real apply."""
     repo = _repo(tmp_path, monkeypatch)
-    sdk.provider.project_labels["proj-123"] = {
-        "gapp__my-app": "v-3",
-    }
-    sdk.provider.buckets["gapp-my-app-proj-123"] = {"project": "proj-123"}
+    sdk.provider.host("proj-123", "my-app", service=False)
 
     captured = {}
 
@@ -367,8 +359,7 @@ def test_deploy_threads_data_bucket_into_apply_tfvars(tmp_path, monkeypatch, sdk
     tfvars call — the exact shape of issue #35.
     """
     _repo(tmp_path, monkeypatch)
-    sdk.provider.project_labels["proj-123"] = {"gapp__my-app": "v-3"}
-    sdk.provider.buckets["gapp-my-app-proj-123"] = {"project": "proj-123"}
+    sdk.provider.host("proj-123", "my-app", service=False)
 
     monkeypatch.setattr(GappSDK, "_resolve_ref", lambda self, p, r: "abc123")
     import gapp.admin.sdk.core as core_mod
@@ -398,8 +389,7 @@ def test_deploy_workspace_threads_parent_data_bucket_into_each_service(
     (api_dir / "gapp.yaml").write_text("name: my-api\n")
     monkeypatch.chdir(repo)
 
-    sdk.provider.project_labels["proj-ws"] = {"gapp__app": "v-3"}
-    sdk.provider.buckets["gapp-app-proj-ws"] = {"project": "proj-ws"}
+    sdk.provider.host("proj-ws", "app", service=False)
 
     monkeypatch.setattr(GappSDK, "_resolve_ref", lambda self, p, r: "abc123")
     import gapp.admin.sdk.core as core_mod
@@ -415,6 +405,9 @@ def test_deploy_workspace_threads_parent_data_bucket_into_each_service(
 
     # Service was deployed under the parent solution's bucket, not "gapp-my-api-…".
     assert sdk.provider.last_tfvars["data_bucket"] == "gapp-app-proj-ws"
+    # Each service carries its parent deployment's labels.
+    assert sdk.provider.last_tfvars["labels"] == {"gapp-deployment": "app", "gapp-version": "4"}
+    assert sdk.provider.services[("proj-ws", "my-api")]["gapp-deployment"] == "app"
 
 
 def test_deploy_materializes_generated_secrets(tmp_path, monkeypatch, sdk):
@@ -429,8 +422,7 @@ def test_deploy_materializes_generated_secrets(tmp_path, monkeypatch, sdk):
             "    secret: {name: app-key, generate: true}\n"
         ),
     )
-    sdk.provider.project_labels["proj-123"] = {"gapp__my-app": "v-3"}
-    sdk.provider.buckets["gapp-my-app-proj-123"] = {"project": "proj-123"}
+    sdk.provider.host("proj-123", "my-app", service=False)
 
     monkeypatch.setattr(GappSDK, "_resolve_ref", lambda self, p, r: "abc123")
     import gapp.admin.sdk.core as core_mod
@@ -462,8 +454,7 @@ def test_deploy_skips_existing_generated_secret(tmp_path, monkeypatch, sdk):
             "    secret: {name: app-key, generate: true}\n"
         ),
     )
-    sdk.provider.project_labels["proj-123"] = {"gapp__my-app": "v-3"}
-    sdk.provider.buckets["gapp-my-app-proj-123"] = {"project": "proj-123"}
+    sdk.provider.host("proj-123", "my-app", service=False)
 
     monkeypatch.setattr(GappSDK, "_resolve_ref", lambda self, p, r: "abc123")
     import gapp.admin.sdk.core as core_mod
@@ -494,8 +485,7 @@ def test_deploy_fails_fast_on_missing_non_generate_secret(tmp_path, monkeypatch,
             "    secret: {name: api-token}\n"
         ),
     )
-    sdk.provider.project_labels["proj-123"] = {"gapp__my-app": "v-3"}
-    sdk.provider.buckets["gapp-my-app-proj-123"] = {"project": "proj-123"}
+    sdk.provider.host("proj-123", "my-app", service=False)
 
     monkeypatch.setattr(GappSDK, "_resolve_ref", lambda self, p, r: "abc123")
     import gapp.admin.sdk.core as core_mod
@@ -542,8 +532,7 @@ def test_materialize_generated_secrets_idempotent(monkeypatch):
 def _domain_deploy(tmp_path, monkeypatch, sdk, manifest, live_domain=None, verified=()):
     """A deployable repo with `manifest`, a recorded live mapping, and a verified-domain list."""
     _repo(tmp_path, monkeypatch, contents=manifest)
-    sdk.provider.project_labels["proj-123"] = {"gapp__my-app": "v-3"}
-    sdk.provider.buckets["gapp-my-app-proj-123"] = {"project": "proj-123"}
+    sdk.provider.host("proj-123", "my-app", service=False)
     if live_domain is not None:
         sdk.provider.tf_outputs[("gapp-my-app-proj-123", "terraform/state")] = {
             "service_url": "https://my-app.a.run.app", "custom_domain": live_domain,
@@ -668,3 +657,86 @@ def test_deploy_fails_closed_when_the_terraform_state_cannot_be_read(tmp_path, m
         sdk.deploy(replace_domain=True)                    # not even the flag gets past an unknown state
     assert "Nothing was built or changed" in str(exc.value) and "gapp-my-app-proj-123" in str(exc.value)
     assert builds["count"] == 0 and sdk.provider.last_tfvars is None
+
+
+# -- deployment labels, the version guard, CI runs, and the migration --
+
+
+def _plain_deploy(tmp_path, monkeypatch, sdk):
+    """A deployable single-service repo; nothing in GCP yet."""
+    _repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(GappSDK, "_resolve_ref", lambda self, p, r: "abc123")
+    import gapp.admin.sdk.core as core_mod
+    monkeypatch.setattr(core_mod, "_prepare_build_dir",
+                        lambda path, image, ep, ref="HEAD": (str(tmp_path / "build"), ep))
+    (tmp_path / "build").mkdir(exist_ok=True)
+    sdk.provider.image_exists = lambda *a, **kw: True
+    _patch_secret_calls(monkeypatch, present_ids=())
+
+
+def test_every_deploy_labels_the_bucket_and_the_service(tmp_path, monkeypatch, sdk):
+    _plain_deploy(tmp_path, monkeypatch, sdk)
+    sdk.provider.host("proj-123", "my-app", service=False, version="3")
+    sdk.deploy()
+    assert sdk.provider.last_tfvars["labels"] == {"gapp-deployment": "my-app", "gapp-version": "4"}
+    assert sdk.provider.services[("proj-123", "my-app")] == {"gapp-deployment": "my-app", "gapp-version": "4"}
+    assert sdk.provider.buckets["gapp-my-app-proj-123"]["labels"]["gapp-version"] == "4"
+    sdk.deploy()                                                    # a redeploy labels again, cleanly
+    assert sdk.provider.services[("proj-123", "my-app")]["gapp-version"] == "4"
+
+
+def test_a_deploy_never_writes_project_labels(tmp_path, monkeypatch, sdk):
+    _plain_deploy(tmp_path, monkeypatch, sdk)
+    sdk.provider.host("proj-123", "my-app", service=False)
+    sdk.deploy()
+    assert not [w for w in sdk.provider.label_writes if w[0] == "project"]
+
+
+def test_deploy_refuses_a_deployment_a_newer_gapp_deployed(tmp_path, monkeypatch, sdk):
+    _plain_deploy(tmp_path, monkeypatch, sdk)
+    sdk.provider.host("proj-123", "my-app", version="5")
+    with pytest.raises(RuntimeError) as exc:
+        sdk.deploy()
+    assert str(exc.value) == (
+        "Deployment 'my-app' on project 'proj-123' was deployed by gapp 5.x (service label "
+        f"gapp-version=5); this gapp is v{__import__('gapp').__version__}. Upgrade gapp to deploy it."
+    )
+    assert sdk.provider.last_tfvars is None
+
+
+def test_deploy_without_a_bucket_is_foundation_missing(tmp_path, monkeypatch, sdk):
+    _plain_deploy(tmp_path, monkeypatch, sdk)
+    with pytest.raises(RuntimeError, match="Foundation missing. Run 'gapp setup'."):
+        sdk.deploy(project_id="proj-123")
+
+
+def test_ci_deploy_with_project_needs_no_project_labels_at_all(tmp_path, monkeypatch, sdk):
+    """The CI path: setup and deploy with --project as the deploy identity, which may not
+    write project labels. Everything but the project mark is done, and the deploy succeeds."""
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    _plain_deploy(tmp_path, monkeypatch, sdk)
+
+    def refuse(project_id, labels):
+        raise AssertionError("a CI run must not write project labels")
+
+    sdk.provider.set_project_labels = refuse
+    monkeypatch.setattr(sdk.provider, "list_projects", lambda *a, **k: pytest.fail("no search with --project"))
+    res = sdk.setup(project_id="proj-123")
+    assert res["label_status"] == "skipped" and res["bucket_status"] == "created"
+    sdk.deploy(project_id="proj-123")
+    assert sdk.provider.services[("proj-123", "my-app")]["gapp-version"] == "4"
+
+
+def test_migration_a_3x_deployment_is_found_by_name_after_one_redeploy_with_project(tmp_path, monkeypatch, sdk):
+    """As 3.x left it: a v-3 project label, a bucket and service without gapp labels.
+    By name it is not found; after `gapp setup` (marks the project) and a redeploy with
+    --project, it is found by name. The old label is never read."""
+    _plain_deploy(tmp_path, monkeypatch, sdk)
+    sdk.provider.project_labels["proj-123"] = {"gapp__my-app": "v-3"}
+    sdk.provider.buckets["gapp-my-app-proj-123"] = {"project": "proj-123", "labels": {}}
+    with pytest.raises(RuntimeError, match="No deployment 'my-app' found in any project marked gapp=hosted"):
+        sdk.deploy()
+    sdk.setup(project_id="proj-123")
+    sdk.deploy(project_id="proj-123")
+    assert sdk.resolve_project_for_solution("my-app")["project_id"] == "proj-123"
+    assert sdk.provider.project_labels["proj-123"]["gapp__my-app"] == "v-3"      # untouched

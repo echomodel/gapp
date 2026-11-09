@@ -100,8 +100,8 @@ Use this when it's been a while and you have no idea where your apps are or what
 gapp list --all
 
 # Result:
-#   app-a    project-123    <global>      <undefined>   v-3
-#   app-b    project-456    owner-a       prod          v-3
+#   app-a    project-123    <global>      <undefined>   v-4
+#   app-b    project-456    owner-a       prod          v-4
 
 # Insight: Now you know you have one global app (no owner declared) and
 # one owned by 'owner-a' under env=prod. You can set your owner to 'owner-a'
