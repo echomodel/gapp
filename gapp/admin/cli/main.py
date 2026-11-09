@@ -728,9 +728,6 @@ def ci_status_cmd(name, live, verbose, json_out):
             lines.append(f"Last deploy: {outcome}, {run.get('created_at')} (ref {run.get('ref')}): {run.get('url')}")
         else:
             lines.append("No deploys yet.")
-        record = result.get("environment_record") or {}
-        if record.get("exists") is None and record.get("note"):
-            lines.append(f"Project trust: {record['note']}")
         if result.get("next_step") is None:
             lines.append(f"Deploy it: gapp ci deploy {name}")
     details = _fleet_details(result)

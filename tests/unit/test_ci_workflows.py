@@ -206,7 +206,7 @@ def _with_fleet_file(tmp_path, doc):
     (tmp_path / "gapp" / "deployments.yaml").write_text(fleet.dump(doc))
 
 
-DEPLOY_ENV = {"DEPLOYMENT": "my-app", "APP_ID": "", "GH_TOKEN": "x", "DATA_FILE": "gapp/deployments.yaml"}
+DEPLOY_ENV = {"DEPLOYMENT": "my-app", "APP_ID": "", "ALLOWED_SOURCES": "me", "GH_TOKEN": "x", "DATA_FILE": "gapp/deployments.yaml"}
 
 
 @needs_yq
@@ -243,6 +243,37 @@ def test_deploy_refuses_an_unknown_deployment_a_private_repo_without_app_and_an_
     _with_fleet_file(tmp_path / "two", {"my-app": {"id": "my-app", "repo": "me/my-app", "project": "my-proj"}})
     ok, log = runner.run_resolve(DEPLOY_ENV)
     assert not ok and "no Environment named 'my-proj'" in log and "gapp ci project setup my-proj" in log
+
+
+def test_deploy_reads_the_allowed_sources_from_the_vars_context_in_the_existing_step():
+    """The owner re-check costs nothing: the repository variable, read in the step that already reads the entry."""
+    doc = yaml.safe_load(_rendered(ci_mod.DEPLOY_WORKFLOW))
+    assert list(doc["jobs"]) == ["resolve", "deploy"]
+    step = doc["jobs"]["resolve"]["steps"][1]
+    assert step["name"] == "Read the entry"
+    assert step["env"]["ALLOWED_SOURCES"] == "${{ vars.GAPP_ALLOWED_SOURCES }}"
+    assert doc["jobs"]["resolve"]["permissions"] == {"contents": "read", "actions": "read"}
+
+
+@needs_yq
+def test_deploy_refuses_an_entry_whose_owner_is_not_allowed_even_if_added_by_hand(tmp_path):
+    _with_fleet_file(tmp_path, {"my-app": {"id": "my-app", "repo": "Other/my-app", "project": "my-proj"}})
+    runner = _Runner(tmp_path, {"environments": ["my-proj"], "repos": {"Other/my-app": False}})
+    for allowed in ("me", "", "me,other-org"):
+        ok, log = runner.run_resolve({**DEPLOY_ENV, "ALLOWED_SOURCES": allowed})
+        assert not ok, allowed
+        assert ("gapp-deploy: Apps owned by Other aren't allowed in this fleet, so 'my-app' (Other/my-app) was not "
+                "deployed. Allow the owner with: gapp ci sources add Other") in log
+        assert runner.outputs() == {}
+
+
+@needs_yq
+def test_deploy_matches_the_allowed_owner_case_insensitively_and_ignores_spaces(tmp_path):
+    _with_fleet_file(tmp_path, {"my-app": {"id": "my-app", "repo": "Me/my-app", "project": "my-proj"}})
+    runner = _Runner(tmp_path, {"environments": ["my-proj"], "repos": {"Me/my-app": False}})
+    ok, log = runner.run_resolve({**DEPLOY_ENV, "ALLOWED_SOURCES": "someone, ME "})
+    assert ok, log
+    assert runner.outputs()["repo"] == "Me/my-app"
 
 
 @pytest.mark.parametrize("path", [ci_mod.DEPLOY_WORKFLOW, ci_mod.REGISTER_WORKFLOW, ci_mod.STATUS_WORKFLOW])
