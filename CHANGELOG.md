@@ -3,7 +3,7 @@
 Notable changes to gapp. Versions are git tags (`vX.Y.Z`); the version
 source is `gapp/__init__.py`.
 
-## Unreleased (4.0.0)
+## 4.0.0rc1 (pre-release of 4.0.0)
 
 gapp now has two fleet systems, kept apart. The root commands (`gapp
 setup`, `deploy`, `status`, `list`, `secrets`) deploy the local checkout
