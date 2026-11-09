@@ -62,15 +62,20 @@ ENV_DEPLOY_SA_VAR = "GAPP_DEPLOY_SERVICE_ACCOUNT"
 # The gapp-owned files in the fleet repo.
 DEPLOY_WORKFLOW = "gapp-deploy.yml"
 REGISTER_WORKFLOW = "gapp-register.yml"
+STATUS_WORKFLOW = "gapp-status.yml"
 WORKFLOWS_DIR = ".github/workflows"
 DEPLOY_WORKFLOW_PATH = f"{WORKFLOWS_DIR}/{DEPLOY_WORKFLOW}"
 REGISTER_WORKFLOW_PATH = f"{WORKFLOWS_DIR}/{REGISTER_WORKFLOW}"
+STATUS_WORKFLOW_PATH = f"{WORKFLOWS_DIR}/{STATUS_WORKFLOW}"
+GAPP_WORKFLOWS = (DEPLOY_WORKFLOW, REGISTER_WORKFLOW, STATUS_WORKFLOW)
 LEGACY_SOLUTIONS_FILE = "gapp/solutions.yaml"
 
 # The register workflow prefixes every line meant for the operator, and
 # reports its outcome as `gapp-register: result=<code>`.
 REGISTER_LOG_PREFIX = "gapp-register:"
 REGISTER_SUCCESS_CODES = ("added", "updated", "unchanged", "renamed")
+# The status workflow reports `gapp-status: result=<json>`.
+STATUS_LOG_PREFIX = "gapp-status:"
 
 # --- the messages the operator reads, verbatim ---
 
@@ -410,15 +415,12 @@ def _render_template(name: str, gapp_repo: str, gapp_ref: str) -> str:
 
 
 def _operator_files(gapp_repo: str, gapp_ref: str) -> dict[str, str]:
-    """Path -> content of the two workflows `ci init` installs."""
-    return {
-        DEPLOY_WORKFLOW_PATH: _render_template(DEPLOY_WORKFLOW, gapp_repo, gapp_ref),
-        REGISTER_WORKFLOW_PATH: _render_template(REGISTER_WORKFLOW, gapp_repo, gapp_ref),
-    }
+    """Path -> content of the workflows `ci init` installs (deploy, register, status)."""
+    return {f"{WORKFLOWS_DIR}/{name}": _render_template(name, gapp_repo, gapp_ref) for name in GAPP_WORKFLOWS}
 
 
 def _install_operator_files(fleet_repo: str) -> dict[str, str]:
-    """Install or update the two workflows and create the deployments file.
+    """Install or update gapp's workflows and create the deployments file.
 
     The workflows are written whenever the rendered content differs from
     what the repo holds (a new gapp release pins a new reusable-workflow
@@ -444,14 +446,14 @@ def _install_operator_files(fleet_repo: str) -> dict[str, str]:
 
 def _files_report(fleet_repo: str) -> dict:
     """Presence (or that it couldn't be checked), and currency against this
-    gapp's templates, of the three files."""
+    gapp's templates, of the four files."""
     report = {}
     try:
         gapp_repo = _get_gapp_repo()
         expected = _operator_files(gapp_repo, _resolve_gapp_ref(gapp_repo))
     except RuntimeError:
         expected = {}
-    for path in (DEPLOY_WORKFLOW_PATH, REGISTER_WORKFLOW_PATH, DEPLOYMENTS_FILE):
+    for path in (DEPLOY_WORKFLOW_PATH, REGISTER_WORKFLOW_PATH, STATUS_WORKFLOW_PATH, DEPLOYMENTS_FILE):
         rd = _read_file(fleet_repo, path)
         current = (rd.content == expected[path]) if (rd.present and path in expected) else None
         report[path] = {"present": None if rd.unchecked else rd.present, "current": current, "note": rd.note}
@@ -461,14 +463,14 @@ def _files_report(fleet_repo: str) -> dict:
 def _legacy_workflows(fleet_repo: str) -> list[str]:
     """Deployments still run by a per-solution caller workflow from gapp 3.x.
 
-    Any workflow other than the two gapp-owned ones that calls gapp's
+    Any workflow other than gapp's own that calls gapp's
     reusable deploy workflow is one; they keep working from the Actions
     tab until deleted, and `ci list --verbose` notes them.
     """
     names = []
     listing = _list_dir(fleet_repo, WORKFLOWS_DIR)
     for name in (listing.data or []) if listing.present else []:
-        if name in (DEPLOY_WORKFLOW, REGISTER_WORKFLOW) or not name.endswith((".yml", ".yaml")):
+        if name in GAPP_WORKFLOWS or not name.endswith((".yml", ".yaml")):
             continue
         rd = _read_file(fleet_repo, f"{WORKFLOWS_DIR}/{name}")
         if rd.present and rd.content and "/.github/workflows/deploy.yml@" in rd.content:
@@ -607,7 +609,7 @@ def init_fleet(repo: str | None = None, *, owner: str | None = None, create: boo
         result.update(_outcome("install gapp's files", (
             f"{repo} is your fleet repo now, but gapp's files could not be installed in it from this machine: "
             f"{e}. Run `gapp ci init {repo}` from a machine whose `gh` can write to the repo; it installs "
-            f"{DEPLOY_WORKFLOW_PATH}, {REGISTER_WORKFLOW_PATH} and {DEPLOYMENTS_FILE}."
+            f"{DEPLOY_WORKFLOW_PATH}, {REGISTER_WORKFLOW_PATH}, {STATUS_WORKFLOW_PATH} and {DEPLOYMENTS_FILE}."
         )))
         return result
 
@@ -1182,7 +1184,7 @@ def status_deployment(name: str) -> dict:
     domain, last deploy, and whether a deploy can run now. Never touches GCP."""
     result = {"ok": True, "name": (name or "").strip(), "fleet_repo": None, "registered": None, "id": None,
               "repo": None, "project": None, "domain": None, "overlay": None, "environment_record": None,
-              "last_deploy": None, "problem": None, "next_step": None}
+              "last_deploy": None, "problem": None, "live_hint": None, "next_step": None}
     if not result["name"]:
         return {**result, **_outcome("pass the name", "Name the deployment: `gapp ci status <name>`. See them: gapp ci list")}
     fleet_repo, stop = _require(result)
@@ -1199,7 +1201,8 @@ def status_deployment(name: str) -> dict:
             f"--repo <owner>/<repo> --project <project>. See the deployments: gapp ci list"
         ))}
     result.update(id=entry.get("id"), repo=entry.get("repo"), project=entry.get("project"),
-                  domain=entry.get("domain"), overlay=fleet.manifest_keys(entry))
+                  domain=entry.get("domain"), overlay=fleet.manifest_keys(entry),
+                  live_hint=f"For the live service state: gapp ci status {result['name']} --live")
     record = _environment_record_status(fleet_repo, entry["project"]) if entry.get("project") else None
     result["environment_record"] = record
     result["last_deploy"] = _last_deploy(fleet_repo, result["name"])
@@ -1218,6 +1221,80 @@ def status_deployment(name: str) -> dict:
                 f"deploy cannot authenticate; recording the deploy identity again fixes it."
             )
             result["next_step"] = {"action": "ci project setup", "hint": f"gapp ci project setup {entry['project']}"}
+    return result
+
+
+def status_live(name: str) -> dict:
+    """The live service state of one deployment (`gapp ci status <name> --live`).
+
+    Dispatches the fleet repo's read-only status workflow, which runs
+    `gapp status` for the deployment's id on a runner authenticated as the
+    project's existing deploy identity, and returns that result (the same
+    dict `gapp_status` returns) as `live`. Takes about as long as a runner
+    start. Nothing is stored: live state is asked of the project, never
+    written to the fleet repo.
+    """
+    result = {"ok": True, "name": (name or "").strip(), "fleet_repo": None, "id": None, "repo": None,
+              "project": None, "workflow": STATUS_WORKFLOW, "dispatched": False, "run_id": None, "run_url": None,
+              "conclusion": None, "live": None, "messages": [], "next_step": None}
+    if not result["name"]:
+        return {**result, **_outcome("pass the name", "Name the deployment: `gapp ci status <name> --live`. See them: gapp ci list")}
+    fleet_repo, stop = _require(result)
+    if stop:
+        return stop
+    doc, rd = _load_fleet(fleet_repo)
+    if doc is None:
+        return {**result, **_fleet_file_outcome(fleet_repo, rd)}
+    entry = doc.get(result["name"])
+    if entry is None:
+        return {**result, **_outcome("ci setup", (
+            f"'{result['name']}' is not a deployment in {fleet_repo}. Set it up: gapp ci setup {result['name']} "
+            f"--repo <owner>/<repo> --project <project>. See the deployments: gapp ci list"
+        ))}
+    result.update(id=entry.get("id"), repo=entry.get("repo"), project=entry.get("project"))
+    workflow = _read_file(fleet_repo, STATUS_WORKFLOW_PATH)
+    if workflow.absent:
+        return {**result, **_outcome("ci init", (
+            f"{fleet_repo} has no {STATUS_WORKFLOW_PATH}, so there is nothing to ask. Install gapp's files: "
+            f"gapp ci init {fleet_repo}"
+        ))}
+    if workflow.unchecked:
+        return {**result, **_outcome("check GitHub access", workflow.note)}
+
+    refused = _dispatch(fleet_repo, STATUS_WORKFLOW, {"deployment": result["name"]})
+    if refused:
+        return {**result, **_outcome("dispatch the status workflow", (
+            f"The status workflow could not be dispatched in {fleet_repo}: {refused}. `gapp ci status --live` needs a "
+            f"`gh` signed in with access to dispatch workflows in {fleet_repo} (`gh auth login`)."
+        ))}
+    result["dispatched"] = True
+    result["run_id"] = _latest_run_id(fleet_repo, STATUS_WORKFLOW)
+    result["run_url"] = _run_url(fleet_repo, result["run_id"])
+    if not result["run_id"]:
+        return {**result, **_outcome("check the run", (
+            f"Dispatched {STATUS_WORKFLOW} in {fleet_repo} for '{result['name']}', but its run could not be found "
+            f"yet. Check the repo's Actions tab."
+        ))}
+    status, conclusion = _wait_for_run(fleet_repo, result["run_id"])
+    result["conclusion"] = conclusion
+    result["messages"] = _run_messages(fleet_repo, result["run_id"], STATUS_LOG_PREFIX)
+    for message in result["messages"]:
+        if message.startswith("result="):
+            try:
+                result["live"] = json.loads(message[len("result="):])
+            except json.JSONDecodeError:
+                result["live"] = None
+    texts = [m for m in result["messages"] if not m.startswith("result=")]
+    if status != "completed":
+        return {**result, **_outcome("check the run", (
+            f"The status run did not finish within the wait: {result['run_url']}. Check it there, or run "
+            f"`gapp ci status {result['name']} --live` again."
+        ))}
+    if conclusion != "success" or result["live"] is None:
+        said = " ".join(t[len("error="):] if t.startswith("error=") else t for t in texts) or "it ended with no message"
+        return {**result, **_outcome("read the run log", (
+            f"The status run for '{result['name']}' did not report the live state: {said} ({result['run_url']})."
+        ))}
     return result
 
 

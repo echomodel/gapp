@@ -42,7 +42,7 @@ state.
 | ci setup, private repo | yes | no | as above, plus the hosting GitHub App's id and key stored in the fleet repo | | the app is created and installed by the user in a browser, once per operator; see below |
 | ci rename | yes | no | workflow dispatch | | the name only |
 | ci deploy | yes (or any GitHub tool that dispatches a workflow) | no | workflow dispatch | any time | the runner authenticates with WIF |
-| ci status / ci list | yes | no | read the fleet repo | any time | never touches GCP |
+| ci status / ci list | yes | no | read the fleet repo | any time | never touches GCP from this machine; `ci status <name> --live` dispatches the read-only status workflow, which asks the project on a runner with its deploy identity |
 
 "Project admin" means an identity that can enable APIs, create
 service accounts, edit project IAM, and create Workload Identity

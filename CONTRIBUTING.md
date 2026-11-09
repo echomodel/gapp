@@ -445,7 +445,7 @@ When adding new operations, never reach for an unfiltered list of project-wide r
 ### 16. gapp Is Not a Git Client for the Operator's Repos
 
 gapp never clones, commits to, or pushes an operator's repository on their
-behalf. Generated files gapp owns (the two workflows and the deployments
+behalf. Generated files gapp owns (the three workflows and the deployments
 file of the fleet repo) are written through the GitHub API as config-store
 updates, by `ci init` from the operator's machine and by the register run's
 own token from the runner; anything a human authors goes through the
@@ -791,7 +791,7 @@ names and the marker sentence in each `ci` command's help.
 ### The fleet
 
 The **fleet repo** (the term replaces "CI repo" everywhere) holds gapp's
-two workflows and `gapp/deployments.yaml`: one entry per **deployment**,
+three workflows (deploy, register, status) and `gapp/deployments.yaml`: one entry per **deployment**,
 keyed by an operator-chosen name, flat shape, no nested block. `id`,
 `repo` and `project` are the entry's own fields; **every other key is a
 gapp.yaml key**, deep-merged over the repo's gapp.yaml by the deploy run's
@@ -857,6 +857,22 @@ change that looks like a convenience, and guarded by the named test.
 6. **Names are unique across the fleet file** (they are its keys), so
    `ci deploy <name>` always means one deployment.
    Guard: `test_fleet.py`.
+7. **`ci status` is fast by default and asks the project only on
+   request.** `gapp ci status <name>` is GitHub only (the entry, the last
+   deploy run with its link, any problem) and ends with "For the live
+   service state: gapp ci status <name> --live". `--live` dispatches the
+   fleet repo's read-only status workflow, which authenticates exactly as
+   a deploy does (the project's Environment, WIF), runs `gapp status` for
+   the deployment's id and reports the result, which the command prints
+   like the root `gapp status`. **No recorded status file**: live state is
+   asked of the project, never stored in the fleet repo, so
+   `deployments.yaml` stays intent only.
+   Guard: `test_ci_deploy_status_list.py` (the hint; the live round trip
+   with nothing written) and `test_ci_workflows.py::test_status_workflow_is_read_only_and_asks_the_project_as_the_deploy_identity`.
+8. **`--json` on every `ci` command** prints the command's result dict,
+   the same one the MCP tool returns, and nothing else; the exit code is
+   unchanged. Recorded as the rule for the root commands later.
+   Guard: `test_ci_cli.py::test_json_prints_the_sdk_result_exactly_for_every_ci_command`.
 
 Other guards from the design: the deployment's id governs over the repo's
 gapp.yaml name (`test_ci_rules.py::test_runner_overlay_merges_over_the_repo_file_or_writes_it_whole`);
@@ -886,7 +902,7 @@ Recorded as deferred, not overlooked:
   not enforced).
 - Renaming "solution" in gapp core (labels and buckets keep the solution
   name = the deployment's id).
-- The output rule for the root commands.
+- The output rule and `--json` for the root commands.
 
 ### How we got here
 

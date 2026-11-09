@@ -267,7 +267,7 @@ def gapp_ci_init(repo: str | None = None, owner: str | None = None, create: bool
     local checkout to GCP with gcloud; the gapp_ci_* tools manage the fleet
     through GitHub only, never gcloud (except gapp_ci_project_setup) and
     never the working directory. The fleet repo is a private GitHub repo
-    holding gapp/deployments.yaml (one entry per deployment) and gapp's two
+    holding gapp/deployments.yaml (one entry per deployment) and gapp's three
     workflows; it is never the deployed app's repo.
 
     Without `repo`: the saved fleet repo and how it was set (fleet_repo,
@@ -435,21 +435,30 @@ def gapp_ci_trigger(name: str, ref: str = "main", watch: bool = True) -> dict:
 
 
 @_tool()
-def gapp_ci_status(name: str) -> dict:
-    """One deployment's state: repo, project, domain, last deploy. Mirrors gapp_status for the fleet.
+def gapp_ci_status(name: str, live: bool = False) -> dict:
+    """One deployment's state. Mirrors gapp_status for the fleet.
 
-    Never touches GCP. Returns registered, id (what the GCP resources are
-    keyed by), repo, project, domain, overlay (the gapp.yaml keys the entry
-    sets), environment_record (the project's Environment and its two
+    Fast by default and GitHub only: registered, id (what the GCP resources
+    are keyed by), repo, project, domain, overlay (the gapp.yaml keys the
+    entry sets), environment_record (the project's Environment and its two
     variables, or that they could not be checked), last_deploy (the newest
-    run named "Deploy <name> (<ref>)", or that runs could not be read) and
-    next_step naming the gap when a deploy would fail as things stand.
+    run named "Deploy <name> (<ref>)", or that runs could not be read),
+    problem and next_step naming the gap when a deploy would fail as things
+    stand.
+
+    With live=True it dispatches the fleet repo's read-only status
+    workflow, which runs gapp status for the deployment's id on a runner
+    authenticated as the project's existing deploy identity, and returns
+    that result as `live` (the same dict gapp_status returns: deployment
+    services and URLs, domain state, next_step). Takes about as long as a
+    runner start. Nothing is stored in the fleet repo.
 
     Args:
         name: The deployment.
+        live: Ask the project for the live service state (slow).
     """
-    from gapp.admin.sdk.ci import status_deployment
-    return status_deployment(name)
+    from gapp.admin.sdk.ci import status_deployment, status_live
+    return status_live(name) if live else status_deployment(name)
 
 
 @_tool()
@@ -458,7 +467,7 @@ def gapp_ci_list(repo: str | None = None, verbose: bool = False) -> dict:
 
     Never touches GCP. Each deployment has name, id, repo, project, domain
     and the gapp.yaml keys it sets. With verbose, also the fleet repo's
-    three files (present, current, or not checked), its variables, and the
+    four files (present, current, or not checked), its variables, and the
     per-solution workflows left from gapp 3.x.
 
     Args:
@@ -470,7 +479,7 @@ def gapp_ci_list(repo: str | None = None, verbose: bool = False) -> dict:
 
 
 @_tool()
-def gapp_status(solution: str | None = None, env: str | None = None) -> dict:
+def gapp_status(solution: str | None = None, env: str | None = None, project: str | None = None) -> dict:
     """Infrastructure health check for a gapp solution (the direct system).
 
     Reads GCP labels and Terraform state; never GitHub, never the CI
@@ -486,9 +495,10 @@ def gapp_status(solution: str | None = None, env: str | None = None) -> dict:
         solution: Solution name. Defaults to current directory's solution.
         env: Optional — used to disambiguate when multiple projects host
              this solution.
+        project: Optional explicit GCP project id, skipping label discovery.
     """
     from gapp.admin.sdk.core import GappSDK
-    return GappSDK().status(name=solution, env=env).model_dump()
+    return GappSDK().status(name=solution, env=env, project=project).model_dump()
 
 
 @_tool()

@@ -57,6 +57,10 @@ class FakeGitHub:
         self.register_outcome = None
         # When set, every `gh workflow run` fails with this stderr.
         self.dispatch_refusal = None
+        # What a dispatched status run reports: a callable taking the inputs
+        # and returning (conclusion, log lines); the default reports a
+        # healthy service for the deployment.
+        self.status_outcome = None
 
     # -- entry point --
 
@@ -145,6 +149,9 @@ class FakeGitHub:
         if workflow == "gapp-register.yml":
             conclusion, log = self._register(repo, inputs)
             name = f"Register {inputs.get('name')}"
+        elif workflow == "gapp-status.yml":
+            conclusion, log = self._status(repo, inputs)
+            name = f"Status {inputs.get('deployment')}"
         else:
             conclusion, log = "success", f"deploy\tRun\t2026-01-01T00:00:00Z gapp-deploy: dispatched {inputs}"
             name = f"Deploy {inputs.get('deployment')} ({inputs.get('ref', 'main')})"
@@ -177,6 +184,19 @@ class FakeGitHub:
                 self.api_writes, self.actions_api, self.unreadable = saved[0], saved[1], saved[2]
             conclusion = "success" if rc == 0 else "failure"
         log = "\n".join(f"register\tWrite the deployment\t2026-01-01T00:00:00Z gapp-register: {line}" for line in lines)
+        return conclusion, log
+
+    def _status(self, repo, inputs):
+        if self.status_outcome is not None:
+            conclusion, lines = self.status_outcome(inputs)
+        else:
+            name = inputs.get("deployment")
+            live = {"initialized": True, "name": name, "repo_path": None,
+                    "deployment": {"project": "my-proj", "pending": False,
+                                   "services": [{"name": name, "url": f"https://{name}-abc-uc.a.run.app", "healthy": True}]},
+                    "domain": None, "next_step": None}
+            conclusion, lines = "success", [f"result={json.dumps(live)}"]
+        log = "\n".join(f"status\tAsk gapp status\t2026-01-01T00:00:00Z gapp-status: {line}" for line in lines)
         return conclusion, log
 
     def _run_get(self, run_id, cmd):

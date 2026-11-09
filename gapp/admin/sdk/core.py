@@ -834,7 +834,8 @@ class GappSDK:
             ref=build_ref, rebuild=rebuild, replace_domain=replace_domain,
         )
 
-    def status(self, name: str | None = None, env: Optional[str] = None) -> StatusResult:
+    def status(self, name: str | None = None, env: Optional[str] = None,
+               project: Optional[str] = None) -> StatusResult:
         # Lenient: status is read-only and must work even if the local
         # gapp.yaml predates the current schema or is missing fields the
         # build pipeline would require. It reports the direct system only
@@ -852,7 +853,7 @@ class GappSDK:
                 )),
             )
         try:
-            ctx = self.resolve_solution_with_project(name, env=env, strict=False)
+            ctx = self.resolve_solution_with_project(name, env=env, project=project, strict=False)
         except CloudAccessError:
             return StatusResult(
                 initialized=True,

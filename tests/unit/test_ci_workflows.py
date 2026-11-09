@@ -73,10 +73,33 @@ def test_register_workflow_installs_gapp_and_runs_the_runner_with_inputs_through
     assert "__GAPP_" not in _rendered(ci_mod.REGISTER_WORKFLOW)
 
 
+def test_status_workflow_is_read_only_and_asks_the_project_as_the_deploy_identity():
+    doc = yaml.safe_load(_rendered(ci_mod.STATUS_WORKFLOW))
+    assert set(doc[True]["workflow_dispatch"]["inputs"]) == {"deployment"}
+    assert doc["run-name"] == "Status ${{ inputs.deployment }}"
+    assert doc["permissions"] == {}
+    resolve, status = doc["jobs"]["resolve"], doc["jobs"]["status"]
+    assert resolve["permissions"] == {"contents": "read"}
+    assert status["permissions"] == {"id-token": "write", "contents": "read"}      # read-only: no contents write
+    assert status["environment"] == "${{ needs.resolve.outputs.project }}"
+    assert status["needs"] == "resolve"
+    names = [s.get("name") for s in status["steps"]]
+    assert names == ["Check the deploy identity", "Authenticate to Google Cloud", "Set up gcloud", "Install gapp", "Ask gapp status"]
+    auth = status["steps"][1]["with"]
+    assert auth == {"workload_identity_provider": "${{ vars.GAPP_WIF_PROVIDER }}", "service_account": "${{ vars.GAPP_DEPLOY_SERVICE_ACCOUNT }}"}
+    ask = status["steps"][-1]
+    assert ask["run"] == "gapp ci runner status"
+    assert ask["env"]["SOLUTION_ID"] == "${{ needs.resolve.outputs.id }}" and ask["env"]["PROJECT"] == "${{ needs.resolve.outputs.project }}"
+    assert status["steps"][3]["run"] == f'pip install --quiet "gapp @ git+https://github.com/{GAPP_REPO}.git@{GAPP_REF}"'
+    for step in [s for s in resolve["steps"] + status["steps"] if "run" in s]:
+        assert "${{" not in step["run"]
+    assert not any("PUT" in (s.get("run") or "") or "gh api -X" in (s.get("run") or "") for s in status["steps"])
+
+
 def test_templates_ship_with_the_package():
     assert "__GAPP_REPO__" not in _rendered(ci_mod.DEPLOY_WORKFLOW)
     files = ci_mod._operator_files(GAPP_REPO, GAPP_REF)
-    assert set(files) == {ci_mod.DEPLOY_WORKFLOW_PATH, ci_mod.REGISTER_WORKFLOW_PATH}
+    assert set(files) == {ci_mod.DEPLOY_WORKFLOW_PATH, ci_mod.REGISTER_WORKFLOW_PATH, ci_mod.STATUS_WORKFLOW_PATH}
 
 
 def test_reusable_workflow_takes_an_overlay_and_applies_it_with_gapp_after_installing_it():

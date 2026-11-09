@@ -31,10 +31,11 @@ No command consults the other system's state, there is no shared local store, an
 | `gapp ci setup <name> --copy-of <existing> [--project <p>] [--domain <d>]` | A new deployment from an existing one | `gh` that can dispatch |
 | `gapp ci rename <old> <new>` | Changes the name only | `gh` that can dispatch |
 | `gapp ci deploy <name>` | Dispatches the generic deploy workflow | `gh` that can dispatch |
-| `gapp ci status <name>` | One deployment: project, domain, last deploy | `gh` that can read |
+| `gapp ci status <name>` | One deployment: project, domain, last deploy; GitHub only, fast | `gh` that can read |
+| `gapp ci status <name> --live` | Dispatches the read-only status workflow, which runs `gapp status` for the deployment on a runner with the project's deploy identity and returns the result | `gh` that can dispatch |
 | `gapp ci list [--repo <owner>/<repo>]` | The deployments, optionally one repo's | `gh` that can read |
 
-`--repo` always means the deployed app's repo, never the fleet repo.
+`--repo` always means the deployed app's repo, never the fleet repo. Every `ci` command takes `--verbose` (the fleet detail) and `--json` (the result dict, as the MCP tool returns it, and nothing else).
 
 Every command ends in a plain outcome: it did the thing, or it states what stands in the way and the exact fix. No stack trace, raw HTTP error or raw gcloud error reaches the user; the SDK returns `ok` and `next_step` in every result, the CLI prints the step and exits 1, and the MCP tools return the same dict.
 
@@ -211,13 +212,14 @@ gapp needs `gcloud` on the runner because it shells out to `gcloud` for everythi
 
 ## The Fleet Repo
 
-The operator's private fleet repo holds three gapp-owned files, installed by `gapp ci init`:
+The operator's private fleet repo holds four gapp-owned files, installed by `gapp ci init`:
 
 | File | Written by | Role |
 |---|---|---|
 | `.github/workflows/gapp-deploy.yml` | `gapp ci init` (installed and updated) | The one deploy workflow. Dispatched with a deployment name and a ref; its runs are named `Deploy <name> (<ref>)`. Its first job reads the deployment's entry from the deployments file; its second job runs in the GitHub Environment named after the entry's project and calls gapp's reusable workflow with the entry's repo, id and gapp.yaml keys. |
 | `.github/workflows/gapp-register.yml` | `gapp ci init` (installed and updated) | The register workflow. Dispatched by `gapp ci setup` and `gapp ci rename`. Installs gapp at the pinned release and runs `gapp ci runner register`, the same code the operator's command ran before dispatching, which validates and writes the entry with the run's own token. |
-| `gapp/deployments.yaml` | `gapp ci init` (created empty), then the register workflow | The fleet file: one entry per deployment, keyed by its name. |
+| `.github/workflows/gapp-status.yml` | `gapp ci init` (installed and updated) | The read-only status workflow. Dispatched by `gapp ci status <name> --live`; its runs are named `Status <name>`. Its first job reads the deployment's entry; its second runs in the project's Environment, authenticates exactly as a deploy does, runs `gapp status` for the deployment's id (`gapp ci runner status`) and reports the result as one line. It writes nothing. |
+| `gapp/deployments.yaml` | `gapp ci init` (created empty), then the register workflow | The fleet file: one entry per deployment, keyed by its name. Intent only: no live state is ever recorded here. |
 
 ### The deployments file
 
@@ -262,7 +264,7 @@ For operators who want automatic deployments, a scheduled poller workflow in the
 
 ### Trigger options (operator's choice)
 
-The fleet repo is plain GitHub Actions configuration. gapp's two workflows are rewritten by `gapp ci init`, so customization goes in a workflow of the operator's own that dispatches `gapp-deploy.yml` (with `gh workflow run gapp-deploy.yml -f deployment=<name> -f ref=<ref>`, or the `workflow_dispatch` API): `workflow_dispatch` (default), `schedule` (polling), push-triggered from a deployed repo the operator owns (couples that repo to one operator, not recommended), or `repository_dispatch` (needs a sender).
+The fleet repo is plain GitHub Actions configuration. gapp's three workflows are rewritten by `gapp ci init`, so customization goes in a workflow of the operator's own that dispatches `gapp-deploy.yml` (with `gh workflow run gapp-deploy.yml -f deployment=<name> -f ref=<ref>`, or the `workflow_dispatch` API): `workflow_dispatch` (default), `schedule` (polling), push-triggered from a deployed repo the operator owns (couples that repo to one operator, not recommended), or `repository_dispatch` (needs a sender).
 
 ### Security model
 
@@ -358,7 +360,7 @@ gapp ci status <name>  /  gapp ci list            # CI: where things stand
 The only command that sets the fleet repo, stored in gapp's local config (the active profile of `~/.config/gapp/config.yaml`, keys `fleet_repo` and `fleet_repo_set_by`). No other command looks it up anywhere else, caches it or writes it; when it is unset they stop with the one message above.
 
 - Without a repo: shows the saved fleet repo and how it was set. With none saved (or with `--owner`), one `gh search repos --topic gapp-ci --owner <owner>` call: one match is saved and shown; several are listed and the command stops; none gives the `--create` guidance.
-- `gapp ci init <owner>/<repo>`: the repo must exist (otherwise the `--create` message). Sets it, adds the `gapp-ci` topic (so other machines find it), installs or updates the two workflows (pinned to the installed gapp's release tag) and creates `gapp/deployments.yaml` when missing, never overwriting it. Removes an empty `gapp/solutions.yaml` left by gapp 3.9 and reports a non-empty one with the plain next step. Reports the three variables with `--verbose`.
+- `gapp ci init <owner>/<repo>`: the repo must exist (otherwise the `--create` message). Sets it, adds the `gapp-ci` topic (so other machines find it), installs or updates the three workflows (pinned to the installed gapp's release tag) and creates `gapp/deployments.yaml` when missing, never overwriting it. Removes an empty `gapp/solutions.yaml` left by gapp 3.9 and reports a non-empty one with the plain next step. Reports the three variables with `--verbose`.
 - `gapp ci init <owner>/<repo> --create`: the repo must not exist (otherwise the plain `init` message). Creates it private, then as above.
 
 Default output: "gapp can now deploy your apps through GitHub Actions.", what changed (or "Nothing changed."), "(Your fleet is kept in <fleet-repo>.)", then `Next: gapp ci sources add <owner>` (or `gapp ci project setup <project>` once the allowlist exists).
@@ -387,7 +389,9 @@ Dispatches `gapp-deploy.yml` with `deployment` and `ref` and streams the run. An
 
 #### `gapp ci status <name>` and `gapp ci list`
 
-`status` is one deployment: "<name>: <repo> deploys to <project>[, domain <d>].", its last deploy (the newest run named `Deploy <name> (...)`), and either "Deploy it: gapp ci deploy <name>" or the problem with its command (the project's Environment missing, or missing one of its two variables). `--verbose` adds the id and the gapp.yaml keys the fleet sets. `list` is the fleet's deployments, `--repo` narrows to one repo's, and `--verbose` adds the fleet repo's three files (present, current, or not checked), its variables and the per-solution workflows left from gapp 3.x.
+`status` is one deployment, GitHub only and fast: "<name>: <repo> deploys to <project>[, domain <d>].", its last deploy (the newest run named `Deploy <name> (...)`), and either "Deploy it: gapp ci deploy <name>" or the problem with its command (the project's Environment missing, or missing one of its two variables); it ends with "For the live service state: gapp ci status <name> --live". `--verbose` adds the id and the gapp.yaml keys the fleet sets.
+
+`status --live` dispatches `gapp-status.yml`, waits for the run (about a runner start; the command says so) and prints the root `gapp status` result the run reported: service up or not, URL, domain state, next step. The run has read-only permissions (`contents: read`, plus the OIDC token), uses the project's existing deploy identity and no new one, and stores nothing. Refusals and failures are plain outcomes with the run link. `list` is the fleet's deployments, `--repo` narrows to one repo's, and `--verbose` adds the fleet repo's three files (present, current, or not checked), its variables and the per-solution workflows left from gapp 3.x.
 
 ### Missing only when GitHub says so
 
@@ -395,7 +399,7 @@ A thing is reported missing only when GitHub's answer confirms it does not exist
 
 ### Why gapp's files are written through the API, not git
 
-gapp is not a git client for the operator's repo. The two workflows and the deployments file are generated configuration: every value in them is already known to gapp, there is no free-form text and, by gapp's secrets invariant, no credential can appear in them. So they are written the way gapp does every other GitHub operation, with one API call that creates or updates the file by path. GitHub makes the commit server-side; nothing on the operator's machine is cloned, committed, or pushed, and the operator's local git hooks are neither triggered nor bypassed. Re-runs are idempotent for free: the API takes the file's current SHA and either updates it or reports it unchanged.
+gapp is not a git client for the operator's repo. The three workflows and the deployments file are generated configuration: every value in them is already known to gapp, there is no free-form text and, by gapp's secrets invariant, no credential can appear in them. So they are written the way gapp does every other GitHub operation, with one API call that creates or updates the file by path. GitHub makes the commit server-side; nothing on the operator's machine is cloned, committed, or pushed, and the operator's local git hooks are neither triggered nor bypassed. Re-runs are idempotent for free: the API takes the file's current SHA and either updates it or reports it unchanged.
 
 Two writers use that path. `gapp ci init` writes the workflows and creates the deployments file from the operator's machine, which therefore needs a `gh` login that can write to the fleet repo. The register run writes the deployments file's entries from the runner with the run's own token (`contents: write`), which is why adding a deployment needs no API write from the machine that asks for it: a session behind a proxy that refuses GitHub API writes, or that has no gcloud identity, still completes `gapp ci setup` by dispatching the run. There is no separate verify or pre-flight workflow: the register run validates what it writes, and the deploy run verifies the credential (its first step) and the project.
 

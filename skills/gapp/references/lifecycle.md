@@ -95,7 +95,7 @@ cloud agent. No terraform or gcloud on the deploying machine.
    the one tagged `gapp-ci` under the user's account (`--owner <org>`
    for an organization). None: `gapp ci init <owner>/<fleet-repo>
    --create` makes a private one (an address book of deployments, not
-   a product) with gapp's two workflows and an empty
+   a product) with gapp's three workflows and an empty
    `gapp/deployments.yaml`; `gapp ci init <owner>/<fleet-repo>` sets
    an existing one and installs or updates gapp's files in it (needs a
    `gh` that can write). Once per operator, and once per machine to
@@ -159,9 +159,14 @@ cloud agent. No terraform or gcloud on the deploying machine.
    and `ref` and read the run does the same job. An unknown name is not
    deployed; the outcome names step 4 and `gapp ci list`.
 8. `gapp ci status <name>` is one deployment (repo, project, domain,
-   last deploy, and the next step if a deploy cannot run); `gapp ci
-   list` is the fleet. `--verbose` adds the fleet repo, its files and
-   variables, and the id.
+   last deploy, and the next step if a deploy cannot run), GitHub only
+   and fast; `gapp ci status <name> --live` asks the project for the
+   live service state (service up, URL, domain) through the fleet's
+   read-only status workflow, which runs `gapp status` on a runner with
+   the project's deploy identity, so it takes a runner start and needs
+   only `gh`; `gapp ci list` is the fleet. `--verbose` adds the fleet
+   repo, its files and variables, and the id; `--json` on any `ci`
+   command returns the result dict only.
 
 When you explain this to the user, say explicitly which parts are
 per operator, per project, per source owner and per deployment,

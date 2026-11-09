@@ -144,6 +144,34 @@ def test_status_reports_unchecked_variables_and_runs_instead_of_missing(ci):
     assert res["last_deploy"]["note"].startswith("Couldn't check the deploy runs of acme/fleet: GitHub returned 403: request blocked.")
 
 
+def test_status_default_is_github_only_and_ends_with_the_live_hint(ci):
+    res = ci_mod.status_deployment("my-app")
+    assert res["live_hint"] == "For the live service state: gapp ci status my-app --live"
+    assert not any(c[:3] == ["gh", "workflow", "run"] for c, _ in ci.calls)      # fast: nothing dispatched
+
+
+def test_status_live_dispatches_the_status_workflow_and_returns_gapp_status_result(ci):
+    res = ci_mod.status_live("my-app")
+    assert res["ok"] is True and res["workflow"] == "gapp-status.yml"
+    assert ci.dispatched == [(FLEET, "gapp-status.yml", {"deployment": "my-app"})]
+    assert res["run_url"].endswith("/actions/runs/100") and res["conclusion"] == "success"
+    assert res["live"]["deployment"]["services"][0]["url"].startswith("https://my-app-")
+    assert res["live"]["deployment"]["pending"] is False and res["next_step"] is None
+    assert ci.puts == []                                           # nothing stored in the fleet repo
+
+
+def test_status_live_reports_a_failed_run_in_its_words_and_an_unknown_name(ci):
+    ci.status_outcome = lambda inputs: ("failure", ["error=No Google Cloud identity this run can use."])
+    res = ci_mod.status_live("my-app")
+    assert res["ok"] is False and res["live"] is None and res["next_step"]["action"] == "read the run log"
+    assert "No Google Cloud identity this run can use." in res["next_step"]["hint"] and res["run_url"] in res["next_step"]["hint"]
+    res = ci_mod.status_live("nope")
+    assert res["ok"] is False and res["next_step"]["action"] == "ci setup"
+    del ci.files[(FLEET, ci_mod.STATUS_WORKFLOW_PATH)]
+    res = ci_mod.status_live("my-app")
+    assert res["ok"] is False and res["next_step"]["action"] == "ci init"
+
+
 def test_status_never_reads_the_deployed_repo_or_gcp(ci):
     ci_mod.status_deployment("my-app")
     assert not any(cmd[:3] == ["gh", "api", "repos/me/my-app"] for cmd, _ in ci.calls)

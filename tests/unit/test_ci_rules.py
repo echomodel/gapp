@@ -94,6 +94,8 @@ def test_every_ci_command_gives_the_same_result_from_any_directory_and_only_invo
         ["ci", "rename", "zzz", "yyy"],                                          # refused: no run
         ["ci", "deploy", "my-app", "--no-watch"],
         ["ci", "status", "my-app"],
+        ["ci", "status", "my-app", "--live"],
+        ["ci", "status", "my-app", "--json"],
         ["ci", "list"],
         ["ci", "list", "--repo", "me/my-app", "--verbose"],
         ["ci", "project", "setup", "my-proj"],                                   # no gcloud here: an outcome
@@ -122,6 +124,9 @@ def test_the_ci_module_has_no_working_directory_or_git_dependency():
     source = (REPO_ROOT / "gapp" / "admin" / "sdk" / "ci.py").read_text()
     for forbidden in ("resolve_solution", "discover_github_repo", "getcwd", "Path.cwd", "load_manifest", "GappSDK", '"git"'):
         assert forbidden not in source, forbidden
+    # The one touch of the direct system's code runs on the runner only.
+    runner = (REPO_ROOT / "gapp" / "admin" / "sdk" / "ci_runner.py").read_text()
+    assert "GappSDK().status(name=solution_id, project=project)" in runner
     source = (REPO_ROOT / "gapp" / "admin" / "sdk" / "fleet.py").read_text()
     assert "import os" not in source and "subprocess" not in source
 

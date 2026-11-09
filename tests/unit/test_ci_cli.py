@@ -244,12 +244,13 @@ def test_status_output(monkeypatch):
             "environment_record": {"exists": True, "checked": True, "wif_provider_present": True, "service_account_present": True, "note": None},
             "last_deploy": {"checked": True, "note": None, "run": {"id": "42", "status": "completed", "conclusion": "success",
                             "created_at": "2026-01-01T00:00:00Z", "ref": "main", "url": f"https://github.com/{FLEET}/actions/runs/42"}},
-            "problem": None, "next_step": None}
+            "problem": None, "live_hint": "For the live service state: gapp ci status my-app --live", "next_step": None}
     monkeypatch.setattr(ci_mod, "status_deployment", lambda name: base)
     out = _run(["ci", "status", "my-app"]).output.splitlines()
     assert out == ["my-app: me/my-app deploys to my-proj, domain mcp.example.com.",
                    f"Last deploy: success, 2026-01-01T00:00:00Z (ref main): https://github.com/{FLEET}/actions/runs/42",
-                   "Deploy it: gapp ci deploy my-app"]
+                   "Deploy it: gapp ci deploy my-app",
+                   "For the live service state: gapp ci status my-app --live"]
     assert "my-app-2" not in "\n".join(out)
     verbose = _run(["ci", "status", "my-app", "--verbose"]).output
     assert "Id: my-app-2" in verbose and "gapp.yaml keys set by the fleet: domain" in verbose
@@ -257,8 +258,52 @@ def test_status_output(monkeypatch):
                                                                    "problem": "acme/fleet has no Environment named 'my-proj', so a deploy cannot authenticate to that project.",
                                                                    "next_step": {"action": "ci project setup", "hint": "gapp ci project setup my-proj"}})
     out = _run(["ci", "status", "my-app"]).output.splitlines()
-    assert out[1] == "No deploys yet." and out[-2].startswith("acme/fleet has no Environment") and out[-1] == "Next: gapp ci project setup my-proj"
+    assert out[1] == "No deploys yet." and out[-3].startswith("acme/fleet has no Environment") and out[-2] == "Next: gapp ci project setup my-proj"
+    assert out[-1] == "For the live service state: gapp ci status my-app --live"
     assert "Deploy it" not in "\n".join(out)
+
+
+def test_status_live_prints_the_root_status_lines_from_the_run(monkeypatch):
+    live = {"initialized": True, "name": "my-app", "repo_path": None,
+            "deployment": {"project": "my-proj", "pending": False,
+                           "services": [{"name": "my-app", "url": "https://my-app-abc-uc.a.run.app", "healthy": True}]},
+            "domain": {"name": "mcp.example.com", "status": "active", "cname_target": "ghs.googlehosted.com", "detail": None},
+            "next_step": None}
+    monkeypatch.setattr(ci_mod, "status_live", lambda name: {
+        "ok": True, "name": name, "fleet_repo": FLEET, "id": "my-app", "repo": "me/my-app", "project": "my-proj",
+        "workflow": "gapp-status.yml", "dispatched": True, "run_id": "7", "run_url": f"https://github.com/{FLEET}/actions/runs/7",
+        "conclusion": "success", "live": live, "messages": [], "next_step": None})
+    out = _run(["ci", "status", "my-app", "--live"]).output.splitlines()
+    assert out[0] == "Asking the project for the live state of my-app; this takes about as long as a runner start."
+    assert out[1] == f"my-app: live state from my-proj (https://github.com/{FLEET}/actions/runs/7)"
+    assert "Status:   READY" in out and "  URL:     https://my-app-abc-uc.a.run.app" in out and "Domain:   mcp.example.com (active)" in out
+    monkeypatch.setattr(ci_mod, "status_live", lambda name: {"ok": False, "name": name, "fleet_repo": FLEET, "live": None,
+        "next_step": {"action": "read the run log", "hint": "The status run for 'my-app' did not report the live state: x (url)."}})
+    result = _run(["ci", "status", "my-app", "--live"])
+    assert result.exit_code == 1 and result.output.splitlines()[-1].startswith("The status run for 'my-app'")
+
+
+def test_json_prints_the_sdk_result_exactly_for_every_ci_command(monkeypatch):
+    import json
+    cases = {
+        "init_fleet": (["ci", "init", FLEET, "--json"], {"ok": True, "fleet_repo": FLEET, "files": {"a": "created"}, "next_step": None}),
+        "setup_ci_project": (["ci", "project", "setup", "my-proj", "--json"], {"ok": True, "project_id": "my-proj", "changed": True, "next_step": None}),
+        "manage_sources": (["ci", "sources", "list", "--json"], {"ok": True, "owners": ["me"], "next_step": None}),
+        "setup_deployment": (["ci", "setup", "--repo", "me/my-app", "--project", "my-proj", "--json"], {"ok": True, "name": "my-app", "action": "added", "next_step": None}),
+        "rename_deployment": (["ci", "rename", "a", "b", "--json"], {"ok": True, "name": "b", "action": "renamed", "next_step": None}),
+        "deploy_deployment": (["ci", "deploy", "my-app", "--json"], {"ok": True, "name": "my-app", "run_url": "u", "watched": True, "conclusion": "success", "next_step": None}),
+        "status_deployment": (["ci", "status", "my-app", "--json"], {"ok": True, "name": "my-app", "live_hint": "x", "next_step": None}),
+        "status_live": (["ci", "status", "my-app", "--live", "--json"], {"ok": True, "name": "my-app", "live": {"initialized": True}, "next_step": None}),
+        "list_deployments": (["ci", "list", "--json"], {"ok": True, "deployments": [], "next_step": {"action": "ci setup", "hint": "gapp ci setup ..."}}),
+    }
+    for fn, (argv, payload) in cases.items():
+        monkeypatch.setattr(ci_mod, fn, lambda *a, _p=payload, **kw: dict(_p))
+        result = _run(argv)
+        assert result.exit_code == 0, (fn, result.output)
+        assert json.loads(result.output) == payload, fn
+    monkeypatch.setattr(ci_mod, "list_deployments", lambda *a, **kw: {"ok": False, "next_step": {"action": "ci init", "hint": "No fleet repo"}})
+    result = _run(["ci", "list", "--json"])
+    assert result.exit_code == 1 and json.loads(result.output) == {"ok": False, "next_step": {"action": "ci init", "hint": "No fleet repo"}}
 
 
 def test_list_output(monkeypatch):

@@ -74,7 +74,7 @@ def test_init_with_an_existing_repo_sets_it_and_installs_the_files(machine):
     assert res["ok"] is True and res["fleet_repo"] == FLEET and res["created"] is False
     assert config_mod.get_fleet_repo() == (FLEET, "gapp ci init acme/fleet")
     assert res["files"] == {ci_mod.DEPLOY_WORKFLOW_PATH: "created", ci_mod.REGISTER_WORKFLOW_PATH: "created",
-                            fleet.DEPLOYMENTS_FILE: "created"}
+                            ci_mod.STATUS_WORKFLOW_PATH: "created", fleet.DEPLOYMENTS_FILE: "created"}
     assert "gapp-ci" in machine.topics[FLEET]
     assert fleet.parse(machine.files[(FLEET, fleet.DEPLOYMENTS_FILE)]) == {}
     assert "deploy.yml@v4.0.0" in machine.files[(FLEET, ci_mod.DEPLOY_WORKFLOW_PATH)]
@@ -88,6 +88,7 @@ def test_init_is_idempotent_updates_outdated_workflows_and_never_touches_the_dep
     res = ci_mod.init_fleet(FLEET)
     assert res["files"][ci_mod.DEPLOY_WORKFLOW_PATH] == "updated"
     assert res["files"][ci_mod.REGISTER_WORKFLOW_PATH] == "updated"
+    assert res["files"][ci_mod.STATUS_WORKFLOW_PATH] == "updated"
     assert res["files"][fleet.DEPLOYMENTS_FILE] == "unchanged"
     assert "my-app" in machine.files[(FLEET, fleet.DEPLOYMENTS_FILE)]
     assert res["next_step"] == {"action": "ci project setup", "hint": "gapp ci project setup <project>"}
@@ -108,7 +109,7 @@ def test_init_create_makes_a_private_tagged_populated_repo_and_sets_it(machine):
     assert res["ok"] is True and res["created"] is True
     assert machine.created == [FLEET] and machine.private[FLEET] is True
     assert "gapp-ci" in machine.topics[FLEET]
-    assert set(res["files"]) == {ci_mod.DEPLOY_WORKFLOW_PATH, ci_mod.REGISTER_WORKFLOW_PATH, fleet.DEPLOYMENTS_FILE}
+    assert set(res["files"]) == {ci_mod.DEPLOY_WORKFLOW_PATH, ci_mod.REGISTER_WORKFLOW_PATH, ci_mod.STATUS_WORKFLOW_PATH, fleet.DEPLOYMENTS_FILE}
     assert config_mod.get_fleet_repo() == (FLEET, "gapp ci init acme/fleet --create")
 
 

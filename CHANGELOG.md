@@ -71,6 +71,14 @@ Also:
   `Next: <exact command>`; the fleet repo, files, topic, variables and
   id appear only with `--verbose` or when they are the problem. `gapp ci
   --help` and the README tell the story from nothing to first deploy.
+  `--json` on every `ci` command prints the result dict (the same one
+  the MCP tool returns) and nothing else.
+- `gapp ci status <name>` is GitHub only and fast; `--live` dispatches a
+  new read-only status workflow (`gapp-status.yml`, installed by `ci
+  init`) that runs `gapp status` for the deployment on a runner with the
+  project's deploy identity and returns the service state. Nothing is
+  stored in the fleet repo. `gapp status` and `gapp_status` take an
+  explicit `--project`.
 - Every failure is a plain sentence with the exact fix. Something is
   reported missing only when GitHub confirms it; otherwise "Couldn't
   check <thing>: GitHub returned <status>: <message>" with the request

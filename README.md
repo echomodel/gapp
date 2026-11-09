@@ -109,7 +109,7 @@ gapp list --all
 ```
 
 ### **8. Deploy From Anywhere (CI/CD)**
-gapp has **two fleet systems, kept apart**. The root commands (`gapp setup`, `deploy`, `status`, `list`, `secrets`) deploy the local checkout to GCP with gcloud. The `gapp ci` commands manage your **fleet** through GitHub only: they never use gcloud (except `gapp ci project setup`) and never read the working directory. The fleet is kept in a private **fleet repo**: `gapp/deployments.yaml`, one entry per **deployment** (a repo deployed to a project under a name you choose; the same repo deployed twice is two deployments), plus gapp's two workflows. The `ci` group mirrors the root verbs.
+gapp has **two fleet systems, kept apart**. The root commands (`gapp setup`, `deploy`, `status`, `list`, `secrets`) deploy the local checkout to GCP with gcloud. The `gapp ci` commands manage your **fleet** through GitHub only: they never use gcloud (except `gapp ci project setup`) and never read the working directory. The fleet is kept in a private **fleet repo**: `gapp/deployments.yaml`, one entry per **deployment** (a repo deployed to a project under a name you choose; the same repo deployed twice is two deployments), plus gapp's three workflows (deploy, register, status). The `ci` group mirrors the root verbs.
 
 **From nothing to first deploy:**
 
@@ -122,7 +122,7 @@ gapp ci setup my-app --repo <owner>/my-app --project <project-id> --domain app.e
 gapp ci deploy my-app                            # any time, from any machine with gh
 ```
 
-Each step's output names the next. `gapp ci status my-app` is one deployment (project, domain, last deploy); `gapp ci list` is the fleet; `--verbose` adds the fleet repo, its files and variables, and ids.
+Each step's output names the next. `gapp ci status my-app` is one deployment (project, domain, last deploy; GitHub only, fast); `gapp ci status my-app --live` asks the project for the live service state (service up, URL, domain) through a read-only status workflow that runs `gapp status` on a runner with the project's deploy identity; `gapp ci list` is the fleet. `--verbose` adds the fleet repo, its files and variables, and ids; `--json` on any `ci` command prints the result dict (the same one the MCP tool returns) and nothing else.
 
 | Command | Does | Needs |
 |---|---|---|
@@ -133,7 +133,7 @@ Each step's output names the next. `gapp ci status my-app` is one deployment (pr
 | `gapp ci setup <name> --copy-of <existing> [--project <p>]` | a new deployment from an existing one (an environment, a second instance) | `gh` dispatch |
 | `gapp ci rename <old> <new>` | changes the name only; the GCP resources stay | `gh` dispatch |
 | `gapp ci deploy <name> [--ref <r>]` | deploys it through GitHub Actions | `gh` dispatch |
-| `gapp ci status <name>`, `gapp ci list [--repo <owner>/<repo>]` | where things stand | `gh` read |
+| `gapp ci status <name> [--live]`, `gapp ci list [--repo <owner>/<repo>]` | where things stand; `--live` asks the project (a runner start) | `gh` read; `--live` dispatch |
 
 `--repo` always means the deployed app's repo, never the fleet repo.
 
@@ -202,14 +202,15 @@ gapp deploy --project <project-id>
 *   `gapp manifest schema`: Print the live JSON Schema for `gapp.yaml`.
 
 ### **CI/CD (`gapp ci`)**
-*   `gapp ci init [<owner>/<repo>] [--create] [--owner <org>]`: Show, find, set or create your fleet repo; the only command that sets it. Setting an existing repo installs or updates gapp's two workflows and creates `gapp/deployments.yaml` (never overwritten); `--create` makes a new private, tagged fleet repo first.
+*   `gapp ci init [<owner>/<repo>] [--create] [--owner <org>]`: Show, find, set or create your fleet repo; the only command that sets it. Setting an existing repo installs or updates gapp's three workflows (deploy, register, status) and creates `gapp/deployments.yaml` (never overwritten); `--create` makes a new private, tagged fleet repo first.
 *   `gapp ci sources add|remove|list <owner>`: The GitHub owners whose repos may be deployed from your fleet (the fleet repo variable `GAPP_ALLOWED_SOURCES`).
 *   `gapp ci project setup <project>`: Make your fleet trusted to deploy to a GCP project (once per project, idempotent). The only `ci` command that touches GCP: creates or confirms the WIF pool, provider and `gapp-deploy` service account, binds the pool to the fleet repo, and records them as the fleet repo's GitHub Environment named after the project. Requires gcloud signed in as an Owner of the project and `gh` signed in as an admin of the fleet repo.
 *   `gapp ci setup [<name>] --repo <owner>/<repo> --project <project> [--domain <host>] [--config <file>] [--copy-of <existing>] [--no-watch]`: Add or update a deployment (the name defaults to the repo's name; the same name again updates its gapp.yaml keys). Never uses gcloud; needs only a `gh` that can dispatch workflows. A repo already deployed under another name is refused: update that one, or add another deployment of it with `--copy-of`.
 *   `gapp ci rename <old> <new>`: Rename a deployment; its id and GCP resources are unchanged.
 *   `gapp ci deploy <name> [--ref <ref>] [--no-watch]`: Deploy one deployment through the fleet's deploy workflow and stream the run.
-*   `gapp ci status <name>`: One deployment: repo, project, domain, last deploy, and the next step if a deploy cannot run.
+*   `gapp ci status <name> [--live]`: One deployment: repo, project, domain, last deploy, and the next step if a deploy cannot run (GitHub only). `--live` dispatches the fleet's read-only status workflow, which runs `gapp status` for the deployment on a runner with the project's deploy identity and returns the service state. Nothing is stored in the fleet repo.
 *   `gapp ci list [--repo <owner>/<repo>] [--verbose]`: The fleet's deployments, optionally one repo's; `--verbose` adds the fleet repo's files and variables.
+*   Every `gapp ci` command takes `--verbose` (fleet detail) and `--json` (the result dict only, as the MCP tool returns it; exit code unchanged).
 
 ---
 
