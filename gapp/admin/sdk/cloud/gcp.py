@@ -46,6 +46,15 @@ def _stage_terraform(staging_dir: Path) -> None:
     shutil.copytree(_BUNDLED_MODULES_DIR, staged_modules)
 
 
+_NOT_FOUND_PHRASES = ("could not be found", "not found", "cannot find", "not_found")
+
+
+def _says_not_found(stderr: str) -> bool:
+    """Whether a failed gcloud describe means the resource does not exist."""
+    text = stderr.lower()
+    return any(phrase in text for phrase in _NOT_FOUND_PHRASES)
+
+
 class GCPProvider(CloudProvider):
     """Concrete provider that executes commands via local gcloud and terraform binaries."""
 
@@ -230,7 +239,11 @@ class GCPProvider(CloudProvider):
         )
         if res.returncode != 0:
             stderr = (res.stderr or "").strip()
-            if "could not be found" in stderr.lower() or "not found" in stderr.lower():
+            # gcloud's wording for a missing service has changed over time
+            # ("could not be found", "not found", "Cannot find service [x]",
+            # the NOT_FOUND status), so the check is deliberately broad: a
+            # missing service is an ordinary first-run state, never an error.
+            if _says_not_found(stderr):
                 return None
             raise CloudAccessError(
                 f"Could not read Cloud Run service '{service_name}' on project '{project_id}' "
