@@ -3,7 +3,7 @@
 Notable changes to gapp. Versions are git tags (`vX.Y.Z`); the version
 source is `gapp/__init__.py`.
 
-## Unreleased
+## 4.0.0rc8 (pre-release of 4.0.0)
 
 Breaking changes:
 
@@ -63,6 +63,10 @@ Other changes:
   hand. Re-run `gapp ci init <fleet-repo>` to install it.
 - "'<name>' is not a deployment" from `gapp ci status` now puts "See the
   deployments: gapp ci list" on its own line.
+- The `gapp_ci_setup` MCP tool's result (and `gapp ci setup --json`) carries
+  `lines` and `lines_after`, the exact text the CLI prints, and its
+  `next_step` is "ci deploy" (`gapp ci deploy <name>`) after a successful
+  setup (it was empty). The CLI's output is unchanged.
 
 ## 4.0.0rc7 (pre-release of 4.0.0)
 
