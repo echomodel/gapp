@@ -881,23 +881,48 @@ def manage_sources(action: str, owner: str | None = None) -> dict:
     existed = _actions_item_present(fleet_repo, "variables", ALLOWED_SOURCES_VAR) is True
     result["owners"] = list(owners)
     if action == "list":
-        return result
+        return _with_sources_text(result)
 
     owner = owner.strip()
+    result["owner"] = owner
     present = any(o.lower() == owner.lower() for o in owners)
     if action == "add":
         if present:
-            return result
+            return _with_sources_text(result)
         new_owners = owners + [owner]
     else:
         if not present:
-            return result
+            return _with_sources_text(result)
         new_owners = [o for o in owners if o.lower() != owner.lower()]
     refusal = _sources_write(fleet_repo, new_owners, existed)
     if refusal:
         return {**result, **refusal}
     result["owners"] = new_owners
     result["changed"] = True
+    return _with_sources_text(result)
+
+
+def _with_sources_text(result: dict) -> dict:
+    """The lines `gapp ci sources` prints, and its next step.
+
+    After `add`, the next step is setting up one of that owner's apps;
+    `gapp ci setup` itself names `gapp ci project setup` when the project
+    is not yet trusted, so add never sends an existing fleet back to it.
+    """
+    owner, action = result.get("owner"), result["action"]
+    if action == "list":
+        owners = result.get("owners") or []
+        result["lines"] = [("Allowed owners: " + ", ".join(owners)) if owners else "No owners are allowed in your fleet yet."]
+        if not owners:
+            result["next_step"] = {"action": "ci sources add", "hint": "gapp ci sources add <owner>"}
+    elif action == "add":
+        result["lines"] = [f"Apps owned by {owner} are now allowed in your fleet." if result["changed"]
+                           else f"Apps owned by {owner} are already allowed in your fleet. Nothing changed."]
+        result["next_step"] = {"action": "ci setup",
+                               "hint": f"gapp ci setup <name> --repo {owner}/<repo> --project <project>"}
+    else:
+        result["lines"] = [f"Apps owned by {owner} are no longer allowed in your fleet." if result["changed"]
+                           else f"Apps owned by {owner} were not allowed in your fleet. Nothing changed."]
     return result
 
 
@@ -1199,9 +1224,9 @@ def _with_setup_text(result: dict, *, copy_of: str | None) -> dict:
         shown = rp or "the repo"
         action = (result.get("next_step") or {}).get("action")
         if action == "ci sources add":
-            lines.append(f"{shown} can't be set up yet: apps owned by {shown.split('/')[0]} aren't allowed in your fleet.")
+            lines.append(f"{shown} can't be set up yet.")
         elif action == "ci project setup":
-            lines.append(f"{shown} can't be set up yet: your fleet isn't trusted to deploy to {pj}.")
+            lines.append(f"{shown} can't be set up yet.")
         return {**result, "lines": lines, "lines_after": after}
     if result.get("action") == "unchanged":
         lines.append(f"{nm} is already set up to deploy {rp} to {pj}. Nothing changed.")
@@ -1359,12 +1384,14 @@ def rename_deployment(old: str, new: str, *, watch: bool = True) -> dict:
 # --- ci deploy ---
 
 
-def deploy_deployment(name: str, *, ref: str = "main", watch: bool = True) -> dict:
+def deploy_deployment(name: str, *, ref: str = "main", watch: bool = True, progress=None) -> dict:
     """Deploy one deployment through the fleet repo's deploy workflow (`gapp ci deploy <name>`).
 
     Dispatches `gapp-deploy.yml` with the name and the ref and, when
     `watch` is True, streams the run and reports its conclusion. Needs only
-    a `gh` that can dispatch workflows in the fleet repo.
+    a `gh` that can dispatch workflows in the fleet repo. `progress`, when
+    given, is called with "Deploying <name> (ref <ref>)." once the
+    deployment is found and just before the dispatch.
     """
     result = {"ok": True, "name": (name or "").strip(), "repo": None, "project": None, "fleet_repo": None,
               "workflow": DEPLOY_WORKFLOW, "ref": ref, "run_id": None, "run_url": None, "watched": False,
@@ -1392,6 +1419,8 @@ def deploy_deployment(name: str, *, ref: str = "main", watch: bool = True) -> di
     if deploy.unchecked:
         return {**result, **_outcome("check GitHub access", deploy.note)}
 
+    if progress:
+        progress(f"Deploying {result['name']} (ref {ref}).")
     dispatch = _dispatch(fleet_repo, DEPLOY_WORKFLOW, {"deployment": result["name"], "ref": ref})
     if dispatch.refused:
         said, err = dispatch.refused, dispatch.stderr
@@ -1462,7 +1491,7 @@ def status_deployment(name: str) -> dict:
     return result
 
 
-def status_live(name: str) -> dict:
+def status_live(name: str, *, progress=None) -> dict:
     """The live service state of one deployment (`gapp ci status <name> --live`).
 
     Dispatches the fleet repo's read-only status workflow, which runs
@@ -1470,7 +1499,8 @@ def status_live(name: str) -> dict:
     project's existing deploy identity, and returns that result (the same
     dict `gapp_status` returns) as `live`. Takes about as long as a runner
     start. Nothing is stored: live state is asked of the project, never
-    written to the fleet repo.
+    written to the fleet repo. `progress`, when given, is called with what
+    is being asked once the deployment is found and just before the dispatch.
     """
     result = {"ok": True, "name": (name or "").strip(), "fleet_repo": None, "id": None, "repo": None,
               "project": None, "workflow": STATUS_WORKFLOW, "dispatched": False, "run_id": None, "run_url": None,
@@ -1499,6 +1529,8 @@ def status_live(name: str) -> dict:
     if workflow.unchecked:
         return {**result, **_outcome("check GitHub access", workflow.note)}
 
+    if progress:
+        progress(f"Asking the project for the live state of {result['name']}; this takes about as long as a runner start.")
     dispatch = _dispatch(fleet_repo, STATUS_WORKFLOW, {"deployment": result["name"]})
     if dispatch.refused:
         said, err = dispatch.refused, dispatch.stderr

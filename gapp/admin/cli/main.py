@@ -494,12 +494,7 @@ def ci_sources_add_cmd(owner, verbose, json_out):
     result = manage_sources("add", owner)
     if json_out:
         _emit_json(result)
-    line = None
-    if result.get("ok") is not False:
-        line = (f"Apps owned by {owner} are now allowed in your fleet." if result.get("changed")
-                else f"Apps owned by {owner} are already allowed in your fleet. Nothing changed.")
-        result["next_step"] = {"action": "ci project setup", "hint": "gapp ci project setup <project>"}
-    _ci_finish(result, line, verbose=verbose, details=_fleet_details(result))
+    _ci_finish(result, *(result.get("lines") or []), verbose=verbose, details=_fleet_details(result))
 
 
 @ci_sources_group.command("remove")
@@ -511,11 +506,7 @@ def ci_sources_remove_cmd(owner, verbose, json_out):
     result = manage_sources("remove", owner)
     if json_out:
         _emit_json(result)
-    line = None
-    if result.get("ok") is not False:
-        line = (f"Apps owned by {owner} are no longer allowed in your fleet." if result.get("changed")
-                else f"Apps owned by {owner} were not allowed in your fleet. Nothing changed.")
-    _ci_finish(result, line, verbose=verbose, details=_fleet_details(result))
+    _ci_finish(result, *(result.get("lines") or []), verbose=verbose, details=_fleet_details(result))
 
 
 @ci_sources_group.command("list")
@@ -526,13 +517,7 @@ def ci_sources_list_cmd(verbose, json_out):
     result = manage_sources("list")
     if json_out:
         _emit_json(result)
-    line = None
-    if result.get("ok") is not False:
-        owners = result.get("owners") or []
-        line = ("Allowed owners: " + ", ".join(owners)) if owners else "No owners are allowed in your fleet yet."
-        if not owners:
-            result["next_step"] = {"action": "ci sources add", "hint": "gapp ci sources add <owner>"}
-    _ci_finish(result, line, verbose=verbose, details=_fleet_details(result))
+    _ci_finish(result, *(result.get("lines") or []), verbose=verbose, details=_fleet_details(result))
 
 
 @ci_group.command("setup")
@@ -618,9 +603,7 @@ def ci_deploy_cmd(name, ref, no_watch, verbose, json_out):
     repo; no gcloud or terraform on this machine.
     """
     from gapp.admin.sdk.ci import deploy_deployment
-    if not json_out:
-        click.echo(f"Deploying {name} (ref {ref}).")
-    result = deploy_deployment(name, ref=ref, watch=not no_watch)
+    result = deploy_deployment(name, ref=ref, watch=not no_watch, progress=None if json_out else click.echo)
     if json_out:
         _emit_json(result)
     _print_ci_deploy(result, verbose)
@@ -634,7 +617,7 @@ def ci_trigger_cmd(name, ref, no_watch):
     """Former name of `gapp ci deploy`."""
     from gapp.admin.sdk.ci import deploy_deployment
     click.echo("`gapp ci trigger` is now `gapp ci deploy`; running it. This alias goes away in the next release.")
-    _print_ci_deploy(deploy_deployment(name, ref=ref, watch=not no_watch), False)
+    _print_ci_deploy(deploy_deployment(name, ref=ref, watch=not no_watch, progress=click.echo), False)
 
 
 @ci_group.command("status")
@@ -653,9 +636,7 @@ def ci_status_cmd(name, live, verbose, json_out):
     """
     from gapp.admin.sdk.ci import status_deployment, status_live
     if live:
-        if not json_out:
-            click.echo(f"Asking the project for the live state of {name}; this takes about as long as a runner start.")
-        result = status_live(name)
+        result = status_live(name, progress=None if json_out else click.echo)
         if json_out:
             _emit_json(result)
         lines = []

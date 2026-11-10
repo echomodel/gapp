@@ -28,6 +28,24 @@ def test_add_creates_the_variable_then_appends(gh):
     assert res["owners"] == ["me", "other-org"] and gh.variables[VAR] == "me,other-org"
 
 
+def test_add_names_setting_up_one_of_the_owners_apps_next(gh):
+    res = ci_mod.manage_sources("add", "me")
+    assert res["lines"] == ["Apps owned by me are now allowed in your fleet."]
+    assert res["next_step"] == {"action": "ci setup", "hint": "gapp ci setup <name> --repo me/<repo> --project <project>"}
+    res = ci_mod.manage_sources("add", "me")
+    assert res["lines"] == ["Apps owned by me are already allowed in your fleet. Nothing changed."]
+    assert res["next_step"]["action"] == "ci setup"
+
+
+def test_list_and_remove_lines(gh):
+    assert ci_mod.manage_sources("list")["lines"] == ["No owners are allowed in your fleet yet."]
+    assert ci_mod.manage_sources("list")["next_step"]["hint"] == "gapp ci sources add <owner>"
+    gh.variables[VAR] = "me,other-org"
+    assert ci_mod.manage_sources("list")["lines"] == ["Allowed owners: me, other-org"]
+    assert ci_mod.manage_sources("remove", "other-org")["lines"] == ["Apps owned by other-org are no longer allowed in your fleet."]
+    assert ci_mod.manage_sources("remove", "nobody")["lines"] == ["Apps owned by nobody were not allowed in your fleet. Nothing changed."]
+
+
 def test_add_of_a_present_owner_and_remove_of_an_absent_one_change_nothing(gh):
     gh.variables[VAR] = "me, other-org"
     res = ci_mod.manage_sources("add", "ME")

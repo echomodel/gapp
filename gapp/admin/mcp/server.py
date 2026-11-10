@@ -309,8 +309,10 @@ def gapp_ci_sources(action: str, owner: str | None = None) -> dict:
         action: "add", "remove" or "list".
         owner: The GitHub owner (user or organization) for add and remove.
 
-    Returns ok, owners (the list after the change), changed, and next_step
-    when gh cannot read or write the variable.
+    Returns ok, owners (the list after the change), changed, `lines` (the
+    text the CLI prints), and next_step: after "add", setting up one of
+    that owner's apps (gapp_ci_setup); when gh cannot read or write the
+    variable, the fix.
     """
     from gapp.admin.sdk.ci import manage_sources
     return manage_sources(action, owner)
