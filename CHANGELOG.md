@@ -3,8 +3,14 @@
 Notable changes to gapp. Versions are git tags (`vX.Y.Z`); the version
 source is `gapp/__init__.py`.
 
-## Unreleased
+## 4.0.0rc9 (pre-release of 4.0.0)
 
+- `gapp setup` no longer fails for a solution that has never been deployed.
+  It read the Cloud Run service's labels to tell whether the solution was
+  already deployed, and did not recognize gcloud's current wording for a
+  missing service ("Cannot find service [name]"), so the first setup stopped
+  with an access error and a hint to sign in again. Every wording gcloud has
+  used now counts as "no service yet".
 - `gapp ci init <owner>/<repo>` on an existing fleet (an upgrade run) no
   longer says "gapp can now deploy your apps through GitHub Actions.", and
   its next step is `gapp ci list` when the fleet has deployments (still
