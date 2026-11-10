@@ -82,9 +82,9 @@ on:
         required: true
         type: string
       ref:
-        description: 'Git ref to deploy (commit, tag, or branch)'
+        description: 'Git ref to deploy (commit, tag, or branch); empty deploys the repo''s default branch'
         required: false
-        default: 'main'
+        default: ''
         type: string
       project-id:
         description: >-
@@ -305,6 +305,9 @@ jobs:
       - name: Setup and deploy
         working-directory: ${{ inputs.solution-name }}
         env:
+          # Empty ref: the checkout above took the repo's default branch, and
+          # gapp deploys what was checked out.
+          REF_FLAG: ${{ inputs.ref != '' && format('--ref {0}', inputs.ref) || '' }}
           # When `project-id` is provided, pass `--project <id>` to
           # gapp so it skips its project-discovery query (which needs
           # resourcemanager.projects.list on the runner's SA). When
@@ -319,4 +322,4 @@ jobs:
           # `./${solution-name}/` so the basename inference resolves to
           # the deployment name.
           gapp setup $PROJECT_FLAG
-          gapp deploy --ref ${{ inputs.ref }} $PROJECT_FLAG
+          gapp deploy $REF_FLAG $PROJECT_FLAG

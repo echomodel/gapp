@@ -3,6 +3,17 @@
 Notable changes to gapp. Versions are git tags (`vX.Y.Z`); the version
 source is `gapp/__init__.py`.
 
+## Unreleased
+
+- `gapp ci deploy <name>` without `--ref` deploys the app repo's default
+  branch, whatever it is named; it was always `main`, so an app on
+  `master` failed at the clone. Output says "(default branch)" and the
+  run is named `Deploy <name> (default branch) <id>`. The same default
+  applies to the `gapp_ci_deploy` MCP tool and to gapp's reusable deploy
+  workflow (its `ref` input now defaults to empty). Re-run
+  `gapp ci init <fleet-repo>` to install the updated deploy workflow; until
+  then the fleet's old workflow still defaults to `main`.
+
 ## 4.0.0rc9 (pre-release of 4.0.0)
 
 - `gapp setup` no longer fails for a solution that has never been deployed.

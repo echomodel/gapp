@@ -385,7 +385,7 @@ Dispatches the register run with `operation=rename`; the id and every GCP resour
 
 #### `gapp ci deploy <name>`
 
-Dispatches `gapp-deploy.yml` with `deployment` and `ref` and streams the run. An unknown name is an outcome naming `gapp ci setup` and `gapp ci list`; a refused dispatch, a missing deploy workflow and a failed run (with its link) are outcomes too. `gapp ci trigger` is a hidden alias for one release that prints the new name.
+Dispatches `gapp-deploy.yml` with `deployment` and, when `--ref` is given, `ref`, and streams the run. Without `--ref` the run deploys the app repo's default branch, whatever it is named (`main`, `master`, ...): the clone is given no ref, so it takes the default branch. Output: "Deploying <name> (default branch)." or "Deploying <name> (ref <ref>).", and the run is named `Deploy <name> (default branch) <id>` or `Deploy <name> (<ref>) <id>`. An unknown name is an outcome naming `gapp ci setup` and `gapp ci list`; a refused dispatch, a missing deploy workflow and a failed run (with its link) are outcomes too. `gapp ci trigger` is a hidden alias for one release that prints the new name.
 
 #### `gapp ci status <name>` and `gapp ci list`
 

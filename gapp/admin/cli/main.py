@@ -584,14 +584,15 @@ def _print_ci_deploy(result, verbose):
             lines.append(f"{result['name']} deployed ({result.get('conclusion')}): {result.get('run_url')}")
             result["next_step"] = {"action": "ci status", "hint": f"gapp ci status {result['name']}"}
         else:
-            lines.append(f"{result['name']} deploy started (ref {result.get('ref')}): {result.get('run_url')}")
+            from gapp.admin.sdk.ci import ref_label
+            lines.append(f"{result['name']} deploy started ({ref_label(result.get('ref'))}): {result.get('run_url')}")
             result["next_step"] = {"action": "ci status", "hint": f"gapp ci status {result['name']}"}
     _ci_finish(result, *lines, verbose=verbose, details=_fleet_details(result))
 
 
 @ci_group.command("deploy")
 @click.argument("name")
-@click.option("--ref", default="main", show_default=True, help="Git ref of the deployed repo to deploy.")
+@click.option("--ref", default=None, help="Git ref of the deployed repo to deploy (commit, tag or branch). Default: its default branch.")
 @click.option("--no-watch", is_flag=True, help="Return after dispatch instead of streaming the run.")
 @_ci_options
 def ci_deploy_cmd(name, ref, no_watch, verbose, json_out):
@@ -611,7 +612,7 @@ def ci_deploy_cmd(name, ref, no_watch, verbose, json_out):
 
 @ci_group.command("trigger", hidden=True)
 @click.argument("name")
-@click.option("--ref", default="main")
+@click.option("--ref", default=None)
 @click.option("--no-watch", is_flag=True)
 def ci_trigger_cmd(name, ref, no_watch):
     """Former name of `gapp ci deploy`."""
