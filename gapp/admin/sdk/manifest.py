@@ -96,21 +96,10 @@ def get_required_apis(manifest: dict) -> list:
     return manifest.get("prerequisites", {}).get("apis", [])
 
 
-def get_entrypoint(manifest: dict) -> str | None:
-    """Return the service entrypoint from the manifest."""
-    return manifest.get("service", {}).get("entrypoint")
-
-
-def get_cmd(manifest: dict) -> str | None:
-    """Return the service cmd from the manifest."""
-    return manifest.get("service", {}).get("cmd")
-
-
 def get_service_config(manifest: dict) -> dict:
     """Return service configuration with defaults."""
     service = manifest.get("service", {})
     return {
-        "entrypoint": service.get("entrypoint"),
         "port": 8080,
         "memory": service.get("memory", "512Mi"),
         "cpu": service.get("cpu", "1"),

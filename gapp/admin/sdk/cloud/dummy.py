@@ -129,10 +129,10 @@ class DummyCloudProvider(CloudProvider):
     def image_exists(self, project_id: str, region: str, solution_name: str, tag: str) -> bool:
         return False
 
-    def submit_build_sync(self, project_id: str, build_dir: Path, image: str, build_entrypoint: str, ref: str = "HEAD") -> None:
+    def submit_build_sync(self, project_id: str, build_dir: Path, image: str, ref: str = "HEAD") -> None:
         pass
 
-    def submit_build_async(self, project_id: str, build_dir: Path, image: str, build_entrypoint: str, ref: str = "HEAD") -> str:
+    def submit_build_async(self, project_id: str, build_dir: Path, image: str, ref: str = "HEAD") -> str:
         build_id = f"build-{len(self.builds)}"
         self.builds[build_id] = {"status": "queued", "image": image}
         return build_id

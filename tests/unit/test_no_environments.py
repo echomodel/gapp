@@ -30,6 +30,7 @@ def _repo(tmp_path, monkeypatch):
     repo.mkdir()
     (repo / ".git").mkdir()
     (repo / "gapp.yaml").write_text("name: my-app")
+    (repo / "Procfile").write_text("web: my-app serve\n")
     monkeypatch.chdir(repo)
 
 

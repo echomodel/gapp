@@ -8,7 +8,7 @@ noted.
 |---|---|---|---|
 | Live `gapp.yaml` JSON schema | `gapp manifest schema` | `gapp_schema` | single source of truth for fields |
 | View or set the account | `gapp config account <email>` | `gapp_user(account=)` | per-machine config |
-| Initialize or update `gapp.yaml` | `gapp init` | `gapp_init(entrypoint=, secrets=, domain=)` | idempotent; non-None params are written, others kept; `domain=""` removes a domain |
+| Initialize or update `gapp.yaml` | `gapp init` | `gapp_init(secrets=, domain=)` | idempotent; non-None params are written, others kept; `domain=""` removes a domain. Reports how the app starts (`start`: its Dockerfile, or its Procfile `web:` line); with neither, `next_step` says it isn't deployable yet. Takes no start command: that is the app's Procfile |
 | GCP foundation | `gapp setup --project <project-id>` | `gapp_setup(project_id=)` | first run on a project needs the id; marks the project `gapp=hosted` once (never from a CI run) |
 | Deploy | `gapp deploy [--project p] [--ref r] [--replace-domain]` | `gapp_deploy(project_id=, ref=, replace_domain=)` | build via Cloud Build, then terraform apply; blocking. Refuses before terraform to replace or remove a live domain mapping without `--replace-domain`, and to map a domain the deploying identity has not verified |
 | Status | `gapp status [<name>] [--project p]` | `gapp_status(name=, project=)` | the direct system only (never CI); includes `next_step` and `domain` (`pending_dns`, `pending_cert`, `active`, `error`, with the CNAME target). With no usable Google Cloud identity it returns `next_step: sign in` with the login command rather than failing |

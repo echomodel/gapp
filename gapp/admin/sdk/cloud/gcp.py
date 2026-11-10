@@ -333,7 +333,7 @@ class GCPProvider(CloudProvider):
         "TIMEOUT", "CANCELLED", "EXPIRED",
     })
 
-    def submit_build_sync(self, project_id: str, build_dir: Path, image: str, build_entrypoint: str, ref: str = "HEAD") -> None:
+    def submit_build_sync(self, project_id: str, build_dir: Path, image: str, ref: str = "HEAD") -> None:
         """Submit a Cloud Build job and block until terminal status.
 
         Internally uses async-submit + poll rather than gcloud's default
@@ -358,7 +358,7 @@ class GCPProvider(CloudProvider):
         See echomodel/gapp#43 for the original bug and rationale.
         """
         build_id = self.submit_build_async(
-            project_id, build_dir, image, build_entrypoint, ref=ref,
+            project_id, build_dir, image, ref=ref,
         )
         last_status: str | None = None
         info: Dict = {}
@@ -381,11 +381,11 @@ class GCPProvider(CloudProvider):
                 + (f" Logs: {log_url}" if log_url else "")
             )
 
-    def submit_build_async(self, project_id: str, build_dir: Path, image: str, build_entrypoint: str, ref: str = "HEAD") -> str:
+    def submit_build_async(self, project_id: str, build_dir: Path, image: str, ref: str = "HEAD") -> str:
         res = self._run_gcloud([
             "builds", "submit", "--async", "--format=json",
             "--config", f"{build_dir}/cloudbuild.yaml",
-            "--substitutions", f"_ENTRYPOINT={build_entrypoint},_IMAGE={image}",
+            "--substitutions", f"_IMAGE={image}",
             "--project", project_id, str(build_dir)
         ], capture_output=True, text=True, check=True)
         return json.loads(res.stdout)["id"]

@@ -59,19 +59,23 @@ def gapp_user(account: str | None = None) -> dict:
 
 @_tool()
 def gapp_init(
-    entrypoint: str | None = None,
     secrets: dict | None = None,
     domain: str | None = None,
 ) -> dict:
     """Initialize or configure a gapp solution in the current repo.
 
     Idempotent. Creates gapp.yaml on first call. Also used to update
-    gapp configuration settings later — e.g., change entrypoint,
-    add secrets, set custom domain. Only non-None parameters are
-    written; omitted parameters leave existing values unchanged.
+    gapp configuration settings later, e.g. add secrets or set a custom
+    domain. Only non-None parameters are written; omitted parameters leave
+    existing values unchanged.
+
+    How the app starts is not set here: it is the app's own Procfile (a
+    `web:` line that serves HTTP on $PORT) or Dockerfile. The result's
+    `start` says which one gapp found; with neither, `next_step` says the
+    app isn't deployable yet and how to add one. Write the Procfile only
+    after confirming its command with the user.
 
     Args:
-        entrypoint: ASGI entrypoint (module:app).
         secrets: Dict of secret name to description for prerequisites.
         domain: Custom domain to map to the service (e.g., mcp.example.com).
             Requires a CNAME record pointing to ghs.googlehosted.com.
@@ -79,7 +83,6 @@ def gapp_init(
     """
     from gapp.admin.sdk.init import init_solution
     return init_solution(
-        entrypoint=entrypoint,
         secrets=secrets,
         domain=domain,
     )

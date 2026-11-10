@@ -92,8 +92,9 @@ def config_profile(sdk: GappSDK, name, list_profiles):
 def init(sdk: GappSDK):
     """Write gapp.yaml for this repo and register the solution locally.
 
-    Needs no cloud login. Idempotent: re-run after editing gapp.yaml to
-    validate it. Next: `gapp setup --project <project-id>`.
+    Needs no cloud login. Idempotent: re-run it to check gapp.yaml and the
+    app's start method (a Procfile with a web: line, or a Dockerfile).
+    Next: gapp setup --project <project-id>.
     """
     from gapp.admin.sdk.init import init_solution
     try:
@@ -104,8 +105,18 @@ def init(sdk: GappSDK):
     click.echo()
     click.echo(f"  Initialized gapp app: {result['name']}")
     click.echo(f"    gapp.yaml {result['manifest_status']} ✓")
-    click.echo(f"    GitHub topic 'gapp-solution' {result['topic_status']} ✓")
+    topic = {"already_set": "already set"}.get(result["topic_status"], result["topic_status"])
+    click.echo(f"    GitHub topic 'gapp-solution' {topic} ✓")
+    from gapp.admin.sdk.start import describe
+    if result["start"]["method"]:
+        click.echo(f"    Starts with: {describe(result['start'])}")
     click.echo()
+    if result.get("next_step"):
+        first, _, rest = result["next_step"]["hint"].partition("\n")
+        click.echo(f"  Not deployable yet: {first}")
+        for line in rest.splitlines():
+            click.echo(f"  {line}")
+        return
     click.echo("  No GCP project attached yet.")
     click.echo("  Next: gapp setup --project <project-id>")
 
@@ -141,6 +152,12 @@ def setup_cmd(sdk: GappSDK, project):
     else:
         click.echo(f"    Project {result['project_id']} marked hosted (gapp=hosted) {result['label_status']} ✓")
     click.echo()
+    if result.get("start_problem"):
+        first, _, rest = result["start_problem"].partition("\n")
+        click.echo(f"  Next: {first}")
+        for line in rest.splitlines():
+            click.echo(f"  {line}")
+        click.echo()
 
 
 @main.command()
@@ -174,7 +191,10 @@ def deploy(sdk: GappSDK, ref, project, dry_run, rebuild, replace_domain):
             rebuild=rebuild, replace_domain=replace_domain,
         )
     except (RuntimeError, ValueError) as e:
-        click.echo(f"  Error: {e}", err=True)
+        first, _, rest = str(e).partition("\n")
+        click.echo(f"  Error: {first}", err=True)
+        for line in rest.splitlines():
+            click.echo(f"  {line}", err=True)
         raise SystemExit(1)
 
     if dry_run:
@@ -187,6 +207,11 @@ def deploy(sdk: GappSDK, ref, project, dry_run, rebuild, replace_domain):
         if result["bucket"]:
             click.echo(f"    GCS Bucket:  gs://{result['bucket']}/")
         click.echo(f"    Status:      {result['status'].upper()}")
+        if result.get("start_problem"):
+            first, _, rest = result["start_problem"].partition("\n")
+            click.echo(f"\n  Not deployable yet: {first}")
+            for line in rest.splitlines():
+                click.echo(f"  {line}")
         if result.get("services"):
             click.echo("\n  Services to deploy:")
             for svc in result["services"]:

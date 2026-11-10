@@ -5,25 +5,27 @@ from pathlib import Path
 
 from gapp.admin.sdk.util import get_git_root
 from gapp.admin.sdk.manifest import get_solution_name, load_manifest, save_manifest
+from gapp.admin.sdk.start import missing, start_method
 
 
 def init_solution(
     repo_path: Path | None = None,
     *,
-    entrypoint: str | None = None,
     secrets: dict | None = None,
     domain: str | None = None,
 ) -> dict:
     """Initialize a gapp solution in the current repo.
 
     Idempotent — safe to call repeatedly. Creates gapp.yaml on first
-    call, merges provided settings on every call. Only provided
-    (non-None) parameters are written; omitted parameters leave
-    existing values unchanged.
+    call, merges provided settings on every call, and checks the file and
+    the app's start method each time. Only provided (non-None) parameters
+    are written; omitted parameters leave existing values unchanged.
+
+    How the app starts is never written here: it is the app's own
+    Procfile (a web: line) or Dockerfile, which init only reports.
 
     Args:
         repo_path: Path to the repo. Defaults to cwd.
-        entrypoint: ASGI entrypoint (module:app).
         secrets: Dict of secret names to descriptions for prerequisites.
         domain: Custom domain to map to the service (e.g., mcp.example.com).
 
@@ -31,6 +33,10 @@ def init_solution(
         name: solution name
         manifest_status: "created" | "updated" | "unchanged"
         topic_status: "added" | "already_set" | "skipped"
+        start: how the app starts ({"method": "dockerfile" | "procfile" |
+            None, "web", "ignored", "reason"})
+        next_step: {"action", "hint"} when the app has no start method yet,
+            else None
     """
     if repo_path:
         git_root = get_git_root(repo_path)
@@ -48,20 +54,10 @@ def init_solution(
         result["manifest_status"] = "unchanged"
     else:
         manifest = {}
-        if entrypoint:
-            manifest["service"] = {"entrypoint": entrypoint}
         result["manifest_status"] = "created"
 
     # Merge provided settings
-    service = manifest.setdefault("service", {})
     changed = False
-
-    if entrypoint is not None and service.get("entrypoint") != entrypoint:
-        service["entrypoint"] = entrypoint
-        changed = True
-
-    if not service:
-        manifest.pop("service", None)
 
     if domain is not None and manifest.get("domain") != domain:
         if domain:
@@ -95,6 +91,11 @@ def init_solution(
     # Add GitHub topic
     result["topic_status"] = _add_github_topic(git_root)
 
+    result["start"] = start_method(git_root)
+    result["next_step"] = None if result["start"]["method"] else {
+        "action": "add a start method",
+        "hint": missing(solution_name, result["start"]),
+    }
     return result
 
 

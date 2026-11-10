@@ -144,12 +144,12 @@ class CloudProvider(ABC):
         pass
 
     @abstractmethod
-    def submit_build_sync(self, project_id: str, build_dir: Path, image: str, build_entrypoint: str, ref: str = "HEAD") -> None:
+    def submit_build_sync(self, project_id: str, build_dir: Path, image: str, ref: str = "HEAD") -> None:
         """Run a Cloud Build and wait for completion (streaming output)."""
         pass
 
     @abstractmethod
-    def submit_build_async(self, project_id: str, build_dir: Path, image: str, build_entrypoint: str, ref: str = "HEAD") -> str:
+    def submit_build_async(self, project_id: str, build_dir: Path, image: str, ref: str = "HEAD") -> str:
         """Submit a Cloud Build and return the build ID immediately."""
         pass
 

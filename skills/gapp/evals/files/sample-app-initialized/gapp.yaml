@@ -1,5 +1,3 @@
-service:
-  entrypoint: sample_app.server:app
 public: true
 env:
   - name: SAMPLE_API_KEY

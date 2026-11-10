@@ -4,6 +4,23 @@
 
 ---
 
+## Why gapp, and when plain gcloud is enough
+
+`gcloud run deploy --source .` builds and runs a container in one command, and for one service you deploy by hand it may be all you need. gapp adds what that command leaves to you:
+
+- **Declared state.** Each deployment's service, IAM, secrets wiring, volume and domain mapping are applied with Terraform from state kept in the deployment's own bucket, so a redeploy changes only what changed, and from any machine.
+- **Project foundation.** `gapp setup` enables the APIs and creates the bucket and labels once per project, idempotently.
+- **Secrets lifecycle.** Secrets are declared in gapp.yaml, generated or set with `gapp secrets`, scoped to the deployment and checked before deploy.
+- **A data volume.** Each deployment gets a bucket mounted at a fixed path, so state survives redeploys.
+- **Domain guardrails.** A deploy that would replace or remove a live custom domain stops before anything is built.
+- **The CI fleet.** `gapp ci` deploys from GitHub Actions with no gcloud on the machine that asks, including from a cloud agent session.
+- **Agent tools.** Every command is also an MCP tool returning the same result.
+- **Everything in one list.** `gapp list` shows every deployment on every project marked `gapp=hosted`.
+
+Plain gcloud is enough when there's one service, deployed by hand, with no secrets, data or custom domain to keep in step.
+
+---
+
 ## 🎯 The Problems We Solve
 
 ### **1. Eliminating "Infrastructure Sprawl"**
@@ -26,6 +43,17 @@ gapp init                          # Scaffold the local manifest (gapp.yaml)
 gapp setup --project <project-id>  # Prep the project and register it as home
 gapp deploy                        # Build and push your first version live
 ```
+
+**How gapp starts your app.** gapp starts your app from one of two files in its folder:
+
+- **A Procfile** with a `web:` line: the command that starts the app and serves HTTP on `$PORT`. gapp builds the image from its own template, installs the app's declared dependencies, and runs that command.
+  ```bash
+  echo 'web: my-app serve' > Procfile
+  echo 'web: uvicorn my_app.server:app --host 0.0.0.0 --port $PORT' > Procfile
+  ```
+- **A Dockerfile**, which gapp builds as is.
+
+With both, the Dockerfile wins and the Procfile is ignored. With neither, `gapp init`, `status` and `setup` say the app isn't deployable yet, and `gapp deploy` refuses before building. gapp.yaml doesn't say how the app starts.
 
 ### **2. Redeploying Later**
 Iterate on your code without ever mentioning the project ID again.

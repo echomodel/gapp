@@ -26,21 +26,47 @@ def test_init_creates_manifest(tmp_path, monkeypatch):
     assert manifest["name"] == "my-solution"
 
 
-def test_init_merges_entrypoint(tmp_path, monkeypatch):
-    """Verify init_solution can set/update the entrypoint."""
+def _repo(tmp_path, monkeypatch):
     repo = tmp_path / "app"
     repo.mkdir()
     (repo / ".git").mkdir()
     monkeypatch.chdir(repo)
-    
-    init_solution(repo, entrypoint="main:app")
-    manifest = load_manifest(repo)
-    assert manifest["service"]["entrypoint"] == "main:app"
-    
-    # Update it
-    init_solution(repo, entrypoint="api:app")
-    manifest = load_manifest(repo)
-    assert manifest["service"]["entrypoint"] == "api:app"
+    return repo
+
+
+def test_init_reports_the_procfile_web_command_and_writes_no_start_setting(tmp_path, monkeypatch):
+    repo = _repo(tmp_path, monkeypatch)
+    (repo / "Procfile").write_text("web: my-app serve\n")
+    res = init_solution(repo)
+    assert res["start"] == {"method": "procfile", "web": "my-app serve", "ignored": None, "reason": None}
+    assert res["next_step"] is None
+    assert "service" not in load_manifest(repo)
+    assert (repo / "Procfile").read_text() == "web: my-app serve\n"          # read, never written
+
+
+def test_init_reports_the_dockerfile_and_an_ignored_procfile(tmp_path, monkeypatch):
+    repo = _repo(tmp_path, monkeypatch)
+    (repo / "Dockerfile").write_text("FROM scratch\n")
+    (repo / "Procfile").write_text("web: my-app serve\n")
+    res = init_solution(repo)
+    assert res["start"]["method"] == "dockerfile" and res["start"]["ignored"] == "Procfile"
+    assert res["next_step"] is None
+
+
+def test_init_without_a_start_method_succeeds_and_says_not_deployable(tmp_path, monkeypatch):
+    from gapp.admin.sdk.start import START_METHOD_HELP
+    repo = _repo(tmp_path, monkeypatch)
+    res = init_solution(repo)
+    assert res["manifest_status"] == "created" and res["start"]["method"] is None
+    assert res["next_step"] == {"action": "add a start method",
+                                "hint": f"app has no start method.\n{START_METHOD_HELP}"}
+    assert not (repo / "Procfile").exists()                                  # nothing detected or written
+
+
+def test_init_takes_no_start_setting():
+    import inspect
+    assert "entrypoint" not in inspect.signature(init_solution).parameters
+    assert "cmd" not in inspect.signature(init_solution).parameters
 
 
 def test_init_adds_secrets(tmp_path, monkeypatch):

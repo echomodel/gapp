@@ -5,43 +5,67 @@ proposing gapp to a repo that has none.
 
 ## Is the repo a fit?
 
-Inspect the working directory first: `pyproject.toml` or
-`setup.py` means a Python package; look for uvicorn entrypoints,
-FastMCP, Starlette, or FastAPI; a `Dockerfile` means it may already
-be containerized.
+Inspect the working directory first. gapp deploys an app that serves
+HTTP and runs in a container. A repo with its own `Dockerfile` can be
+any language. Without one, gapp builds from its own template, which
+installs a Python project's declared dependencies (`pyproject.toml` or
+`setup.py`), so the app must be a Python package.
 
-Good candidates: a Python web server (FastAPI, Starlette, ASGI
-Flask), a Python MCP server over HTTP, a clear ASGI entrypoint
-(`module.path:app`), something that needs to be reachable on the
-internet.
-
-Not a fit: not Python, CLI-only with no web server, no ASGI or HTTP
-interface, or already deployed elsewhere and the user does not want
-to move. Say so and stop; do not force it.
+Not a fit: no HTTP interface (a CLI or a library only), or already
+deployed elsewhere and the user does not want to move. Say so and
+stop; do not force it.
 
 When it fits, present gapp briefly: your solution stays
-cloud-agnostic, you add a small `gapp.yaml`, gapp handles build,
-secrets, data volumes, domain mapping, and IAM, and it takes four
-idempotent steps (init, setup, secrets, deploy), each of which
-tells you what comes next. Then ask whether to set it up.
+cloud-agnostic, you add a small `gapp.yaml` and a one-line Procfile,
+gapp handles build, secrets, data volumes, domain mapping, and IAM,
+and it takes four idempotent steps (init, setup, secrets, deploy),
+each of which tells you what comes next. Then ask whether to set it
+up.
+
+## How the app starts
+
+gapp starts an app from a file in the app's folder, never from
+`gapp.yaml`:
+
+- **A Dockerfile.** gapp builds it as is.
+- **A Procfile** with one `web:` line: the command that starts the
+  app and serves HTTP on `$PORT`. gapp builds from its own template
+  and runs that command.
+
+With both, the Dockerfile wins and the Procfile is ignored. If the
+repo has a Dockerfile, that is the start method; you are done.
+Otherwise:
+
+1. Work out the command that starts the app and serves HTTP on
+   `$PORT`. Read the README, the code and `pyproject.toml`: a console
+   script that serves (`[project.scripts]`), or an ASGI app object
+   that a server such as uvicorn runs. Use only what the repo shows;
+   do not assume a framework.
+2. Propose it to the user as a Procfile line and say where it came
+   from, for example:
+
+   ```
+   web: my-app serve
+   web: uvicorn my_app.server:app --host 0.0.0.0 --port $PORT
+   ```
+
+   A server the command names (uvicorn above) must be one of the
+   app's own dependencies; gapp supplies none.
+3. Once the user confirms, write `Procfile` with that one line in the
+   app's folder (the repo root, or each `paths:` service folder), and
+   run `gapp init`. It reports `Starts with: web: ... (Procfile)` when
+   gapp sees it.
+
+Never put the start command in `gapp.yaml`: it has no start settings,
+and unknown keys are refused. When any gapp command reports "Not
+deployable yet" or "has no start method", relay its message to the
+user and ask; do not guess a command.
 
 ## Minimal configuration
 
 Put as little in `gapp.yaml` as possible. gapp derives what it can,
-and the solution's own files (Dockerfile, pyproject) take precedence,
-so every line you add is a line that can drift.
-
-What gapp needs to know, in priority order:
-
-**How to build and run the container.**
-1. A `Dockerfile` exists: gapp builds it as is; no `service` block.
-2. The app has its own serve command: `service.cmd`, and gapp
-   generates a Dockerfile with it as CMD.
-3. The app exposes an ASGI object at module level:
-   `service.entrypoint` such as `my_package.server:app`, and gapp
-   wraps it with uvicorn.
-4. None of the above: one of them has to be provided; find or create
-   the entrypoint with the user.
+and the solution's own files (Dockerfile, Procfile, pyproject) take
+precedence, so every line you add is a line that can drift.
 
 **Whether to allow public access.** `public: true` grants allUsers
 on Cloud Run. Default is locked down. Solutions that do their own
@@ -68,11 +92,7 @@ each item:
 `{{SOLUTION_NAME}}` resolves to the solution name.
 
 ```yaml
-# Required when there is no Dockerfile; pick one:
-service:
-  cmd: my-app-mcp serve              # the app's own serve command
-  # OR
-  entrypoint: my_package.server:app  # ASGI module:app for uvicorn
+# How the app starts is its Procfile or Dockerfile, not this file.
 
 # Optional, default false:
 public: true

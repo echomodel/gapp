@@ -5,13 +5,16 @@ CLI form; the matching MCP tool is in `references/tools.md`.
 
 ## Phase 1: Initialize
 
-`gapp init` both creates and updates `gapp.yaml`; call it again
-whenever the user changes entrypoint, secrets, or domain. When there
-is no `gapp.yaml`:
+`gapp init` both creates and updates `gapp.yaml`, and reports how
+the app starts; call it again whenever the user changes secrets or
+domain, or adds a Procfile. When there is no `gapp.yaml`:
 
-1. Identify the entrypoint with the user by reading the code
-   (`references/manifest.md` has the priority order).
+1. Make sure the app has a start method: a Dockerfile, or a Procfile
+   with a `web:` line, worked out from the repo and confirmed with the
+   user (`references/manifest.md`, "How the app starts").
 2. Run init to write `gapp.yaml` and register the solution locally.
+   It says `Starts with: ...`, or "Not deployable yet" with what to
+   add; relay that to the user rather than guessing.
 3. Declare any secrets the app needs under `env` with a `secret`
    entry, or under `prerequisites.secrets` for prerequisite-only
    declarations.
