@@ -113,7 +113,7 @@ cloud agent. No terraform or gcloud on the deploying machine.
    and `gh` signed in as an admin of the fleet repo, and it is the one
    human step to hand off when this machine lacks them.
 4. `gapp ci setup <name> --repo <owner>/<repo> --project <project-id>
-   [--domain app.example.com] [--config keys.yaml]` adds the
+   [--domain app.example.com]` adds the
    deployment (the name defaults to the repo's name): it dispatches
    the register run, which checks the project's Environment, the
    source allowlist and the repo's reachability, then writes the entry
@@ -123,24 +123,22 @@ cloud agent. No terraform or gcloud on the deploying machine.
    never looks a project up in GCP. When the project is not yet
    trusted, or the owner not yet allowed, the command stops with a
    verbatim one-time message naming step 3 or step 2 and repeating the
-   command to run again; relay it as is. The same name again updates
-   the entry's keys; a repo already deployed under another name is
+   command to run again; relay it as is. The same name again changes
+   the entry only with `--update`; without it, setup shows what would
+   change, so show the user and ask before re-running; a repo already deployed under another name is
    refused, with the two ways on (update that one, or `--copy-of`).
-   Deployment values go into the entry, never into the repo: `repo`
-   and `project` are the entry's own fields and every other key is a
-   gapp.yaml key merged over the repo's `gapp.yaml` at deploy time
-   (`domain`, `env`, `service`, ...), or the whole file when the repo
-   has none. `--domain` sets one key, a re-run without it keeps it,
-   `--domain ""` removes it.
+   `repo` and `project` are the entry's own fields, and it carries the
+   deployment's domain; every other setting comes from the app repo's
+   own `gapp.yaml`, which the repo must have. `--domain` sets the
+   domain, a re-run without it keeps it, `--domain ""` removes it.
 5. **Environments and second instances.** `gapp ci setup <new>
    --copy-of <existing> [--project <other-project>] [--domain <d>]`
-   makes another deployment of the same repo: same gapp.yaml keys, its
-   own id (so its own service, account, bucket and secrets), no domain,
-   no history, no secret values; the project defaults to the source's.
-   The output lists the env names copied ("check them for this
-   environment") and the secret names to set on the new project before
-   the first deploy; relay both. `gapp ci rename <old> <new>` changes a
-   name only.
+   makes another deployment of the same repo: its own id (so its own
+   service, account, bucket and secrets), no domain, no history, no
+   secret values; the project defaults to the source's. The output
+   reminds the user to set the secrets the app's gapp.yaml declares on
+   that project before the first deploy. `gapp ci rename <old> <new>`
+   changes a name only.
 6. **Private repo.** The runner's built-in token can read only the
    fleet repo, so a private repo is cloned with a one-hour token from a
    GitHub App the user installs on the repo's owner (a browser step,
@@ -254,7 +252,7 @@ when the deploy would map a different domain or none. If the change
 is intended, re-run with `--replace-domain` (`replace_domain=True`
 on the SDK and MCP tool), then update the CNAME. If it is not, fix
 `domain:` in `gapp.yaml` or re-run `gapp ci setup <name> ... --domain`
-with the right value. A redeploy that keeps the same domain is never blocked,
+with the right value and `--update`. A redeploy that keeps the same domain is never blocked,
 even by an identity that did not verify the domain.
 If the Terraform state cannot be read, the deploy refuses before building,
 even with `--replace-domain`: fix the identity's access to the state bucket.

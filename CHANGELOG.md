@@ -5,6 +5,51 @@ source is `gapp/__init__.py`.
 
 ## Unreleased
 
+Breaking changes:
+
+- `gapp ci setup` changes an existing deployment's entry only with
+  `--update` (the `gapp_ci_setup` MCP tool: `update=True`). Without it, a
+  change (a new or removed domain, or keys gapp.yaml does not have) is
+  shown as before → after and nothing is changed. The same request again
+  is still "Nothing changed."; a new deployment needs no `--update`.
+- `gapp ci setup` no longer takes `--config` (and the `gapp_ci_setup` MCP
+  tool no longer takes `config`). It merged a local file into the entry,
+  which could not be repeated or reviewed. An entry carries the
+  deployment's domain (set with `--domain`); every other setting comes
+  from the app repo's own `gapp.yaml`.
+
+Other changes:
+
+- `gapp list` counts in the singular when there is one: "Summary: 1 app
+  across 1 project (this build: v-4)."
+- `gapp setup`, `gapp deploy` and `gapp secrets` outside an app's folder
+  say: "Not inside an app's folder. Run this in the app's repo, or run gapp
+  init there first." (was "Not inside a gapp solution." for setup, "Could
+  not determine solution name." for deploy, and "Not inside a gapp
+  solution. Run 'gapp init' first, or cd into a solution repo." for
+  secrets).
+- Re-running `gapp ci setup <name> --repo <repo> --project <project>
+  --update` on an existing deployment drops any key in its entry that
+  gapp.yaml does not have, keeping the known keys and the domain.
+- `gapp ci setup <new> --copy-of <existing>` no longer copies keys gapp.yaml
+  does not have.
+- `gapp ci setup --copy-of` no longer lists "Env copied" and "Secrets …
+  needs set" (and its result drops `copied_env` and `secrets`): both came
+  from the entry alone and missed the app's own gapp.yaml. It ends with
+  "Set the secrets the app's gapp.yaml declares on <project> before the
+  first deploy: gapp secrets list shows them from the app's folder."
+- The header comment of `gapp/deployments.yaml` says an entry holds id,
+  repo, project and domain, and every other setting comes from the app
+  repo's own gapp.yaml. gapp rewrites it on the next register run.
+- README and CONTRIBUTING state what names a deployment in each system,
+  the rules behind it, and the known limits (among them: in CI, the app's
+  repo must have a gapp.yaml; deploying a repo without one isn't
+  supported yet).
+- `gapp deploy --dry-run` labels the name "Deployment:" (was "Solution:").
+- `gapp ci status <name>` no longer says "Deploy it" for an entry a deploy
+  would refuse because it has keys gapp.yaml does not have. It says:
+  "Next: rewrite the entry: gapp ci setup <name> --repo <repo> --project
+  <project> --update".
 - `gapp ci status <name>` no longer reports project trust: the "Project
   trust" line, its read of the project's GitHub Environment, and the
   `environment_record` field of its result (and of the `gapp_ci_status`

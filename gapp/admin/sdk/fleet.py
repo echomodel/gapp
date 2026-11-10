@@ -1,9 +1,9 @@
 """The fleet file: `gapp/deployments.yaml` in the fleet repo.
 
 One entry per deployment, keyed by the operator-chosen name. An entry's
-own fields are `id`, `repo` and `project`; every other key is a gapp.yaml
-key, deep-merged over the deployed repo's gapp.yaml by the deploy run
-(or written as the whole file when the repo has none):
+own fields are `id`, `repo` and `project`, and it carries the deployment's
+domain; every other setting comes from the deployed repo's gapp.yaml. The
+deploy run merges the entry's keys over the repo's gapp.yaml:
 
     my-app:
       id: my-app
@@ -47,8 +47,9 @@ DEPLOYMENTS_FILE_INITIAL = """\
 # an entry through the register workflow and `gapp ci deploy` reads it.
 # One entry per deployment, keyed by its name: id (what the GCP resources
 # are keyed by), repo (owner/name), project (the GCP project id; the GitHub
-# Environment of the same name holds the deploy identity), and any
-# gapp.yaml keys to supply or override for this deployment.
+# Environment of the same name holds the deploy identity) and domain (set
+# with `gapp ci setup --domain`). Every other setting comes from the app
+# repo's own gapp.yaml.
 {}
 """
 
@@ -106,17 +107,6 @@ def overlay_for(entry: dict) -> dict:
 
 def deployments_of_repo(doc: dict, repo: str) -> list[str]:
     return sorted(name for name, entry in doc.items() if (entry.get("repo") or "").lower() == repo.lower())
-
-
-def secrets_declared(manifest: dict) -> list[str]:
-    """Secret names a manifest (or an entry's gapp.yaml keys) declares."""
-    names = []
-    for item in manifest.get("env") or []:
-        if isinstance(item, dict) and isinstance(item.get("secret"), dict) and item["secret"].get("name"):
-            names.append(item["secret"]["name"])
-    for name in (manifest.get("prerequisites") or {}).get("secrets") or {}:
-        names.append(name)
-    return names
 
 
 # --- validation ---
@@ -201,6 +191,19 @@ def allocate_id(doc: dict, name: str, project: str, exclude: str | None = None) 
 # --- changes ---
 
 
+def without_unknown_keys(entry: dict) -> dict:
+    """The entry with every gapp.yaml key gapp does not know removed (paths as the validator reports them)."""
+    out = copy.deepcopy(entry)
+    for path in unknown_keys(manifest_keys(entry)):
+        *parents, last = path.split(".")
+        node = out
+        for part in parents:
+            node = node[int(part)] if isinstance(node, list) else node.get(part, {})
+        if isinstance(node, dict):
+            node.pop(last, None)
+    return out
+
+
 def _apply_changes(entry: dict, changes: dict) -> dict:
     out = dict(entry)
     for key, value in changes.items():
@@ -214,7 +217,9 @@ def _apply_changes(entry: dict, changes: dict) -> dict:
 def set_entry(doc: dict, name: str, *, repo: str, project: str, changes: dict | None = None) -> tuple[dict, str, dict]:
     """Add or update the deployment `name`. Returns (doc, "added"|"updated"|"unchanged", entry).
 
-    Same name and repo: an update of its gapp.yaml keys. Same name, another
+    Same name and repo: an update of its gapp.yaml keys, which also drops
+    any key gapp.yaml does not have (so re-running setup repairs an entry
+    a deploy would refuse). Same name, another
     repo or project: refused (a deployment binds to one repo and one
     project; pick another name, or rename). A repo already deployed under
     other names: refused for a new name, since another deployment of the
@@ -238,7 +243,7 @@ def set_entry(doc: dict, name: str, *, repo: str, project: str, changes: dict | 
                 f"A deployment stays on one project, because its id keys that project's resources. For another "
                 f"project, add a deployment: gapp ci setup <new-name> --copy-of {name} --project {project}"
             ))
-        updated = _apply_changes(existing, changes)
+        updated = _apply_changes(without_unknown_keys(existing), changes)
         if updated == existing:
             return doc, "unchanged", existing
         doc[name] = updated
@@ -259,8 +264,7 @@ def copy_entry(doc: dict, new: str, source: str, *, project: str | None = None,
                changes: dict | None = None) -> tuple[dict, dict, dict]:
     """A new deployment from an existing one: the same repo and gapp.yaml
     keys, never its id, domain, deploy history or secret values. Returns
-    (doc, entry, info) where info names the env vars copied and the
-    secrets the new deployment needs set on its project.
+    (doc, entry, info) where info says whether the project is the source's.
     """
     new = validate_name(new)
     changes = validate_changes(changes)
@@ -277,14 +281,12 @@ def copy_entry(doc: dict, new: str, source: str, *, project: str | None = None,
             f"Pick another name."
         ))
     project = validate_project(project) if project else src.get("project")
-    keys = manifest_keys(src)
+    keys = manifest_keys(without_unknown_keys(src))
     keys.pop("domain", None)
     entry = {"id": allocate_id(doc, new, project), "repo": src.get("repo"), "project": project, **keys}
     entry = _apply_changes(entry, changes)
     doc[new] = entry
     info = {
-        "copied_env": [e.get("name") for e in (keys.get("env") or []) if isinstance(e, dict) and e.get("name")],
-        "secrets": secrets_declared(entry),
         "project_from_source": not bool(project) or project == src.get("project"),
     }
     return doc, entry, info

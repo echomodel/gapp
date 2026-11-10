@@ -123,6 +123,23 @@ def test_status_with_no_deploys_yet_and_of_an_unknown_name(ci):
                                         "--repo <owner>/<repo> --project <project>.\nSee the deployments: gapp ci list")
 
 
+def test_status_of_an_entry_with_unknown_keys_points_at_setup_instead_of_deploy(ci):
+    """No new reads: the next step comes from the entry status already has."""
+    ci.deploy(FLEET, "one", "me/one", "my-proj", domain="one.example.com", colour="x", service={"memroy": "1Gi"})
+    calls = len(ci.calls)
+    res = ci_mod.status_deployment("one")
+    with_problem = len(ci.calls) - calls
+    assert res["next_step"] == {"action": "ci setup",
+                                "hint": "rewrite the entry: gapp ci setup one --repo me/one --project my-proj --update"}
+    assert with_problem == calls_per_status(ci, "my-app")              # the same reads as a clean entry
+
+
+def calls_per_status(ci, name):
+    before = len(ci.calls)
+    ci_mod.status_deployment(name)
+    return len(ci.calls) - before
+
+
 def test_status_reads_no_environment_and_reports_no_project_trust(ci):
     """Status says what is deployed, where, and the last deploy; the deploy run itself checks the Environment."""
     del ci.environments[(FLEET, "my-proj")]

@@ -180,7 +180,7 @@ def deploy(sdk: GappSDK, ref, project, dry_run, rebuild, replace_domain):
     if dry_run:
         click.echo()
         click.echo("  DRY RUN: Project Deployment Preview")
-        click.echo(f"    Solution:    {result['name']}")
+        click.echo(f"    Deployment:  {result['name']}")
         click.echo(f"    Labels:      {result['labels']}")
         if result["project_id"]:
             click.echo(f"    Project:     {result['project_id']}")
@@ -266,9 +266,10 @@ def list_cmd(sdk: GappSDK, project_limit):
             contract = "legacy" if app["is_legacy"] else f"v-{app['contract_major']}"
             click.echo(f"  {app['name']:<20} {app['project']:<20} {contract:<10}")
 
+    apps, projects = res['metadata']['apps']['count'], res['metadata']['projects']['count']
     click.echo(
-        f"\nSummary: {res['metadata']['apps']['count']} apps across "
-        f"{res['metadata']['projects']['count']} projects "
+        f"\nSummary: {apps} app{'s' if apps != 1 else ''} across "
+        f"{projects} project{'s' if projects != 1 else ''} "
         f"(this build: v-{res['metadata']['contract_major']})."
     )
     for warn in res["warnings"]:
@@ -310,6 +311,21 @@ def _ci_finish(result, *ok_lines, verbose=False, details=(), after=()):
     for line in after:
         if line:
             click.echo(line)
+
+
+def _ci_print(result, *, verbose=False, details=()):
+    """Print a result whose text the SDK built (`lines`, `lines_after`); exit 1 on an outcome."""
+    for line in result.get("lines") or []:
+        click.echo(line)
+    if result.get("ok") is False:
+        click.echo(result["next_step"]["hint"])
+        raise SystemExit(1)
+    if verbose:
+        for line in details:
+            if line:
+                click.echo(f"  {line}")
+    for line in result.get("lines_after") or []:
+        click.echo(line)
 
 
 def _fleet_details(result):
@@ -546,17 +562,17 @@ def ci_sources_list_cmd(verbose, json_out):
 @click.option("--repo", default=None, metavar="OWNER/REPO", help="The repo to deploy (never the fleet repo). The name defaults to its repo name.")
 @click.option("--project", default=None, metavar="PROJECT", help="GCP project id the deployment deploys to.")
 @click.option("--domain", default=None, help="Custom domain the deploy maps (a gapp.yaml key). Omit to keep the entry's; pass \"\" to remove it.")
-@click.option("--config", "config_path", default=None, type=click.Path(exists=True, dir_okay=False),
-              help="YAML file of gapp.yaml keys to set on the entry (merged over the repo's gapp.yaml at deploy time).")
 @click.option("--copy-of", default=None, metavar="EXISTING", help="Start NAME as a copy of an existing deployment (same repo and keys; its own id; no domain).")
+@click.option("--update", is_flag=True, help="Apply a change to an existing deployment's entry. Without it, setup shows the change and makes none.")
 @click.option("--no-watch", is_flag=True, help="Return after dispatching the register run instead of waiting for it.")
 @_ci_options
-def ci_setup_cmd(name, repo, project, domain, config_path, copy_of, no_watch, verbose, json_out):
+def ci_setup_cmd(name, repo, project, domain, copy_of, update, no_watch, verbose, json_out):
     """Add or update a deployment: NAME deploys --repo to --project. Mirrors `gapp setup` for the fleet.
 
     Never uses gcloud and never reads the working directory: the repo is
     named by --repo and the name defaults to the repo's name. Same name
-    again updates its gapp.yaml keys (--domain, --config). A repo already
+    again changes its entry only with --update; without it, setup shows
+    what would change. A repo already
     deployed under another name is refused: update that one, or add
     another deployment of it with --copy-of. Writes go through the fleet
     repo's register run, so this needs only a `gh` that can dispatch
@@ -568,52 +584,12 @@ def ci_setup_cmd(name, repo, project, domain, config_path, copy_of, no_watch, ve
       gapp ci setup my-app-staging --copy-of my-app --project my-staging-project
     """
     from gapp.admin.sdk.ci import setup_deployment
-    config = None
-    if config_path:
-        import yaml as _yaml
-        with open(config_path) as f:
-            config = _yaml.safe_load(f) or {}
-        if not isinstance(config, dict):
-            click.echo(f"{config_path} is not a mapping of gapp.yaml keys.")
-            raise SystemExit(1)
     command = "gapp " + " ".join(sys.argv[1:]) if sys.argv and sys.argv[0] else None
-    result = setup_deployment(name, repo=repo, project=project, domain=domain, config=config,
+    result = setup_deployment(name, repo=repo, project=project, domain=domain, update=update,
                               copy_of=copy_of, watch=not no_watch, command=command)
     if json_out:
         _emit_json(result)
-    if result.get("ok") is False:
-        action = result["next_step"]["action"]
-        repo_shown = result.get("repo") or repo or "the repo"
-        if action == "ci sources add":
-            click.echo(f"{repo_shown} can't be set up yet: apps owned by {repo_shown.split('/')[0]} aren't allowed in your fleet.")
-        elif action == "ci project setup":
-            click.echo(f"{repo_shown} can't be set up yet: your fleet isn't trusted to deploy to {result.get('project')}.")
-    lines = []
-    if result.get("ok") is not False:
-        nm, rp, pj = result.get("name"), result.get("repo"), result.get("project")
-        if result.get("action") == "unchanged":
-            lines.append(f"{nm} is already set up to deploy {rp} to {pj}. Nothing changed.")
-        elif result.get("dispatched") and result.get("action") is None:
-            lines.append(f"Setting up {nm} ({rp} to {pj}): {result.get('run_url')}")
-            result["next_step"] = {"action": "ci status", "hint": f"gapp ci status {nm}"}
-        elif copy_of:
-            lines.append(f"{nm} is set up as a copy of {copy_of}: {rp} deploys to {pj}"
-                         + (" (the same project as the source)." if result.get("project_from_source") else "."))
-            if result.get("copied_env"):
-                lines.append("Env copied (check them for this environment): " + ", ".join(result["copied_env"]))
-            if result.get("secrets"):
-                lines.append(f"Secrets {nm} needs set on {pj} before its first deploy: " + ", ".join(result["secrets"]))
-            lines.append("The repo's own gapp.yaml secrets, if any, must be set on that project too.")
-        else:
-            lines.append(f"{rp} is set up to deploy to {pj} as {nm}.")
-        if result.get("domain"):
-            lines.append(f"Domain: {result['domain']}")
-        if result.get("action") in ("added", "updated", "unchanged"):
-            result["next_step"] = {"action": "ci deploy", "hint": f"gapp ci deploy {nm}"}
-            if result.get("next_step") and result["next_step"]["action"] == "ci deploy":
-                lines.append(f"Deploy it: gapp ci deploy {nm}")
-                result["next_step"] = None
-    _ci_finish(result, *lines, verbose=verbose, details=_fleet_details(result))
+    _ci_print(result, verbose=verbose, details=_fleet_details(result))
 
 
 @ci_group.command("rename")

@@ -376,7 +376,7 @@ class GappSDK:
         """
         ctx = self.resolve_solution()
         if not ctx:
-            raise RuntimeError("Not inside a gapp solution.")
+            raise RuntimeError("Not inside an app's folder. Run this in the app's repo, or run gapp init there first.")
         solution_name = ctx["name"]
 
         # Resolve target project. allow_zero=True for first-time setup with --project.
@@ -461,7 +461,7 @@ class GappSDK:
         """
         ctx = self.resolve_solution()
         if not ctx:
-            raise RuntimeError("Could not determine solution name.")
+            raise RuntimeError("Not inside an app's folder. Run this in the app's repo, or run gapp init there first.")
         solution_name = ctx["name"]
         repo_path = Path(ctx["repo_path"]) if ctx.get("repo_path") else None
 
