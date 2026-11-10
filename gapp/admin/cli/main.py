@@ -313,6 +313,21 @@ def _ci_finish(result, *ok_lines, verbose=False, details=(), after=()):
             click.echo(line)
 
 
+def _ci_print(result, *, verbose=False, details=()):
+    """Print a result whose text the SDK built (`lines`, `lines_after`); exit 1 on an outcome."""
+    for line in result.get("lines") or []:
+        click.echo(line)
+    if result.get("ok") is False:
+        click.echo(result["next_step"]["hint"])
+        raise SystemExit(1)
+    if verbose:
+        for line in details:
+            if line:
+                click.echo(f"  {line}")
+    for line in result.get("lines_after") or []:
+        click.echo(line)
+
+
 def _fleet_details(result):
     """The fleet detail lines `--verbose` adds."""
     lines = [f"Fleet repo: {result.get('fleet_repo') or '(none)'}"]
@@ -574,39 +589,7 @@ def ci_setup_cmd(name, repo, project, domain, copy_of, update, no_watch, verbose
                               copy_of=copy_of, watch=not no_watch, command=command)
     if json_out:
         _emit_json(result)
-    if result.get("ok") is False:
-        action = result["next_step"]["action"]
-        repo_shown = result.get("repo") or repo or "the repo"
-        if action == "ci sources add":
-            click.echo(f"{repo_shown} can't be set up yet: apps owned by {repo_shown.split('/')[0]} aren't allowed in your fleet.")
-        elif action == "ci project setup":
-            click.echo(f"{repo_shown} can't be set up yet: your fleet isn't trusted to deploy to {result.get('project')}.")
-    lines = []
-    if result.get("ok") is not False:
-        nm, rp, pj = result.get("name"), result.get("repo"), result.get("project")
-        if result.get("action") == "unchanged":
-            lines.append(f"{nm} is already set up to deploy {rp} to {pj}. Nothing changed.")
-        elif result.get("dispatched") and result.get("action") is None:
-            lines.append(f"Setting up {nm} ({rp} to {pj}): {result.get('run_url')}")
-            result["next_step"] = {"action": "ci status", "hint": f"gapp ci status {nm}"}
-        elif copy_of:
-            lines.append(f"{nm} is set up as a copy of {copy_of}: {rp} deploys to {pj}"
-                         + (" (the same project as the source)." if result.get("project_from_source") else "."))
-            lines.append(f"Set the secrets the app's gapp.yaml declares on {pj} before the first deploy: "
-                         f"gapp secrets list shows them from the app's folder.")
-        elif result.get("action") == "updated" and result.get("changes_shown"):
-            lines.append(f"{nm} updated ({rp} to {pj}):")
-            lines += ["  " + c for c in result["changes_shown"]]
-        else:
-            lines.append(f"{rp} is set up to deploy to {pj} as {nm}.")
-        if result.get("domain"):
-            lines.append(f"Domain: {result['domain']}")
-        if result.get("action") in ("added", "updated", "unchanged"):
-            result["next_step"] = {"action": "ci deploy", "hint": f"gapp ci deploy {nm}"}
-            if result.get("next_step") and result["next_step"]["action"] == "ci deploy":
-                lines.append(f"Deploy it: gapp ci deploy {nm}")
-                result["next_step"] = None
-    _ci_finish(result, *lines, verbose=verbose, details=_fleet_details(result))
+    _ci_print(result, verbose=verbose, details=_fleet_details(result))
 
 
 @ci_group.command("rename")

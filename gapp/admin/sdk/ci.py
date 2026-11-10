@@ -1141,6 +1141,53 @@ def _applied(line: str) -> str:
 def setup_deployment(name: str | None = None, *, repo: str | None = None, project: str | None = None,
                      domain: str | None = None, copy_of: str | None = None,
                      watch: bool = True, command: str | None = None, update: bool = False) -> dict:
+    """`gapp ci setup`: the outcome (see `_setup_outcome`) plus the text that
+    describes it, built once here. `lines` is what a reader sees first,
+    `lines_after` what follows any detail lines; the CLI prints both as
+    given and MCP callers get the same words."""
+    result = _setup_outcome(name, repo=repo, project=project, domain=domain, copy_of=copy_of,
+                            watch=watch, command=command, update=update)
+    return _with_setup_text(result, copy_of=copy_of)
+
+
+def _with_setup_text(result: dict, *, copy_of: str | None) -> dict:
+    lines, after = [], []
+    nm, rp, pj = result.get("name"), result.get("repo"), result.get("project")
+    if result.get("ok") is False:
+        shown = rp or "the repo"
+        action = (result.get("next_step") or {}).get("action")
+        if action == "ci sources add":
+            lines.append(f"{shown} can't be set up yet: apps owned by {shown.split('/')[0]} aren't allowed in your fleet.")
+        elif action == "ci project setup":
+            lines.append(f"{shown} can't be set up yet: your fleet isn't trusted to deploy to {pj}.")
+        return {**result, "lines": lines, "lines_after": after}
+    if result.get("action") == "unchanged":
+        lines.append(f"{nm} is already set up to deploy {rp} to {pj}. Nothing changed.")
+    elif result.get("dispatched") and result.get("action") is None:
+        lines.append(f"Setting up {nm} ({rp} to {pj}): {result.get('run_url')}")
+        result["next_step"] = {"action": "ci status", "hint": f"gapp ci status {nm}"}
+        after.append(f"Next: gapp ci status {nm}")
+    elif copy_of:
+        lines.append(f"{nm} is set up as a copy of {copy_of}: {rp} deploys to {pj}"
+                     + (" (the same project as the source)." if result.get("project_from_source") else "."))
+        lines.append(f"Set the secrets the app's gapp.yaml declares on {pj} before the first deploy: "
+                     f"gapp secrets list shows them from the app's folder.")
+    elif result.get("action") == "updated" and result.get("changes_shown"):
+        lines.append(f"{nm} updated ({rp} to {pj}):")
+        lines += ["  " + c for c in result["changes_shown"]]
+    else:
+        lines.append(f"{rp} is set up to deploy to {pj} as {nm}.")
+    if result.get("domain"):
+        lines.append(f"Domain: {result['domain']}")
+    if result.get("action") in ("added", "updated", "unchanged"):
+        result["next_step"] = {"action": "ci deploy", "hint": f"gapp ci deploy {nm}"}
+        lines.append(f"Deploy it: gapp ci deploy {nm}")
+    return {**result, "lines": lines, "lines_after": after}
+
+
+def _setup_outcome(name: str | None = None, *, repo: str | None = None, project: str | None = None,
+                   domain: str | None = None, copy_of: str | None = None,
+                   watch: bool = True, command: str | None = None, update: bool = False) -> dict:
     """Add or update a deployment of the fleet (`gapp ci setup`). Never uses gcloud, never reads the cwd.
 
     The name defaults to the repo's name, derived only from `repo`. Same

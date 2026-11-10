@@ -354,6 +354,7 @@ def gapp_ci_setup(
         update: Apply a change to an existing entry. Without it, a change comes back as ok false with what would change (`changes_shown`).
         watch: Wait for the register run (default True); False returns after the dispatch.
 
+    `lines` and `lines_after` carry the same text the CLI prints.
     The result's action is added, updated or unchanged; dispatched, run_url,
     result_code and messages describe the run; next_step what to do when it
     did not succeed.

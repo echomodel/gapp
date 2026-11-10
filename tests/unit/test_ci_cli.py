@@ -98,7 +98,7 @@ def test_setup_output_leads_with_the_repo_project_and_name_then_the_deploy_comma
         calls.update(kw)
         return _setup_result()
 
-    monkeypatch.setattr(ci_mod, "setup_deployment", fake)
+    monkeypatch.setattr(ci_mod, "_setup_outcome", fake)
     monkeypatch.setattr("sys.argv", ["gapp", "ci", "setup", "--repo", "me/my-app", "--project", "my-proj"])
     result = _run(["ci", "setup", "--repo", "me/my-app", "--project", "my-proj"])
     assert result.exit_code == 0, result.output
@@ -108,14 +108,14 @@ def test_setup_output_leads_with_the_repo_project_and_name_then_the_deploy_comma
 
 
 def test_setup_id_shows_only_with_verbose(monkeypatch):
-    monkeypatch.setattr(ci_mod, "setup_deployment", lambda name=None, **kw: _setup_result(id="my-app-2"))
+    monkeypatch.setattr(ci_mod, "_setup_outcome", lambda name=None, **kw: _setup_result(id="my-app-2"))
     assert "my-app-2" not in _run(["ci", "setup", "--repo", "me/my-app", "--project", "my-proj"]).output
     assert "Id: my-app-2" in _run(["ci", "setup", "--repo", "me/my-app", "--project", "my-proj", "--verbose"]).output
 
 
 def test_setup_blocked_by_the_owner_leads_with_the_repo_then_the_verbatim_message(monkeypatch):
     message = ci_mod.SOURCE_NOT_ALLOWED_MESSAGE.format(owner="me", fleet_repo=FLEET, command="gapp ci setup --repo me/my-app --project my-proj")
-    monkeypatch.setattr(ci_mod, "setup_deployment", lambda name=None, **kw: _setup_result(
+    monkeypatch.setattr(ci_mod, "_setup_outcome", lambda name=None, **kw: _setup_result(
         dispatched=True, conclusion="failure", result_code="source-owner-not-allowed", action=None,
     ) | ci_mod._outcome("ci sources add", message))
     result = _run(["ci", "setup", "--repo", "me/my-app", "--project", "my-proj"])
@@ -126,7 +126,7 @@ def test_setup_blocked_by_the_owner_leads_with_the_repo_then_the_verbatim_messag
 
 def test_setup_blocked_by_trust_leads_with_the_repo_then_the_verbatim_message(monkeypatch):
     message = ci_mod.PROJECT_NOT_TRUSTED_MESSAGE.format(fleet_repo=FLEET, project="my-proj", command="gapp ci setup --repo me/my-app --project my-proj")
-    monkeypatch.setattr(ci_mod, "setup_deployment", lambda name=None, **kw: _setup_result(
+    monkeypatch.setattr(ci_mod, "_setup_outcome", lambda name=None, **kw: _setup_result(
         dispatched=False, run_id=None, run_url=None, conclusion=None, result_code=None, action=None,
     ) | ci_mod._outcome("ci project setup", message))
     result = _run(["ci", "setup", "--repo", "me/my-app", "--project", "my-proj"])
@@ -137,14 +137,14 @@ def test_setup_blocked_by_trust_leads_with_the_repo_then_the_verbatim_message(mo
 def test_setup_refusals_print_their_sentence(monkeypatch):
     hint = ("me/my-app can't be set up as my-app-staging: me/my-app is already deployed as my-app. "
             "Update it: gapp ci setup my-app --repo me/my-app --project my-proj ... Add another: gapp ci setup my-app-staging --copy-of my-app ...")
-    monkeypatch.setattr(ci_mod, "setup_deployment", lambda name=None, **kw: _setup_result(dispatched=False) | ci_mod._outcome("update or copy", hint))
+    monkeypatch.setattr(ci_mod, "_setup_outcome", lambda name=None, **kw: _setup_result(dispatched=False) | ci_mod._outcome("update or copy", hint))
     result = _run(["ci", "setup", "my-app-staging", "--repo", "me/my-app", "--project", "my-proj"])
     assert result.exit_code == 1 and result.output.strip() == hint
 
 
 def test_setup_copy_of_reports_no_env_or_secret_lists(monkeypatch):
     """Lists built from the entry alone would miss the app's own gapp.yaml, so a copy reports none."""
-    monkeypatch.setattr(ci_mod, "setup_deployment", lambda name=None, **kw: _setup_result(
+    monkeypatch.setattr(ci_mod, "_setup_outcome", lambda name=None, **kw: _setup_result(
         name="my-app-staging", project="staging-proj", copy_of="my-app"))
     out = _run(["ci", "setup", "my-app-staging", "--copy-of", "my-app", "--project", "staging-proj"]).output.splitlines()
     assert out[0] == "my-app-staging is set up as a copy of my-app: me/my-app deploys to staging-proj."
@@ -155,22 +155,22 @@ def test_setup_copy_of_reports_no_env_or_secret_lists(monkeypatch):
 
 
 def test_setup_copy_to_the_same_project_states_it(monkeypatch):
-    monkeypatch.setattr(ci_mod, "setup_deployment", lambda name=None, **kw: _setup_result(
+    monkeypatch.setattr(ci_mod, "_setup_outcome", lambda name=None, **kw: _setup_result(
         name="my-app-2", copy_of="my-app", project_from_source=True))
     assert "deploys to my-proj (the same project as the source)." in _run(["ci", "setup", "my-app-2", "--copy-of", "my-app"]).output
 
 
 def test_setup_unchanged_and_no_watch(monkeypatch):
-    monkeypatch.setattr(ci_mod, "setup_deployment", lambda name=None, **kw: _setup_result(action="unchanged", dispatched=False))
+    monkeypatch.setattr(ci_mod, "_setup_outcome", lambda name=None, **kw: _setup_result(action="unchanged", dispatched=False))
     out = _run(["ci", "setup", "--repo", "me/my-app", "--project", "my-proj"]).output.splitlines()
     assert out == ["my-app is already set up to deploy me/my-app to my-proj. Nothing changed.", "Deploy it: gapp ci deploy my-app"]
-    monkeypatch.setattr(ci_mod, "setup_deployment", lambda name=None, **kw: _setup_result(action=None, conclusion=None, result_code=None))
+    monkeypatch.setattr(ci_mod, "_setup_outcome", lambda name=None, **kw: _setup_result(action=None, conclusion=None, result_code=None))
     out = _run(["ci", "setup", "--repo", "me/my-app", "--project", "my-proj", "--no-watch"]).output.splitlines()
     assert out == [f"Setting up my-app (me/my-app to my-proj): https://github.com/{FLEET}/actions/runs/42", "Next: gapp ci status my-app"]
 
 
 def test_setup_without_repo_prints_the_outcome(monkeypatch):
-    monkeypatch.setattr(ci_mod, "setup_deployment", lambda name=None, **kw: _setup_result(dispatched=False) | ci_mod._outcome(
+    monkeypatch.setattr(ci_mod, "_setup_outcome", lambda name=None, **kw: _setup_result(dispatched=False) | ci_mod._outcome(
         "pass --repo", "Name the repo to deploy: `gapp ci setup [<name>] --repo <owner>/<repo> --project <project>`."))
     result = _run(["ci", "setup", "my-app"])
     assert result.exit_code == 1 and result.output.startswith("Name the repo to deploy")
@@ -348,7 +348,7 @@ def test_setup_update_flag_and_its_output(monkeypatch):
         calls.update(kw)
         return _setup_result(action="updated", result_code="updated", domain="new.example.com",
                              changes_shown=["domain: old.example.com → new.example.com", "dropped: colour"])
-    monkeypatch.setattr(ci_mod, "setup_deployment", fake)
+    monkeypatch.setattr(ci_mod, "_setup_outcome", fake)
     out = _run(["ci", "setup", "my-app", "--repo", "me/my-app", "--project", "my-proj",
                 "--domain", "new.example.com", "--update"]).output.splitlines()
     assert calls["update"] is True
@@ -366,6 +366,6 @@ def test_setup_without_update_prints_the_change_and_exits_1(monkeypatch):
             "  domain: old.example.com → new.example.com\n"
             "Run it again with --update to apply: gapp ci setup my-app --repo me/my-app --project my-proj "
             "--domain new.example.com --update")
-    monkeypatch.setattr(ci_mod, "setup_deployment", lambda name=None, **kw: _setup_result(dispatched=False) | ci_mod._outcome("pass --update", hint))
+    monkeypatch.setattr(ci_mod, "_setup_outcome", lambda name=None, **kw: _setup_result(dispatched=False) | ci_mod._outcome("pass --update", hint))
     result = _run(["ci", "setup", "my-app", "--repo", "me/my-app", "--project", "my-proj", "--domain", "new.example.com"])
     assert result.exit_code == 1 and result.output.strip() == hint

@@ -71,7 +71,11 @@ def test_setup_adds_a_deployment_through_the_run_without_gcloud_or_api_writes(wi
         "operation": "set", "name": "my-app", "repo": "me/my-app", "project": "my-proj",
         "changes": '{"domain": "mcp.example.com"}', "source": "",
     })]
-    assert res["run_url"].endswith("/actions/runs/100") and res["next_step"] is None
+    assert res["run_url"].endswith("/actions/runs/100")
+    assert res["next_step"] == {"action": "ci deploy", "hint": "gapp ci deploy my-app"}
+    assert res["lines"] == ["me/my-app is set up to deploy to my-proj as my-app.", "Domain: mcp.example.com",
+                            "Deploy it: gapp ci deploy my-app"]
+    assert res["lines_after"] == []
     assert wired.deployments(FLEET) == {"my-app": {"id": "my-app", "repo": "me/my-app", "project": "my-proj",
                                                    "domain": "mcp.example.com"}}
 
@@ -406,3 +410,27 @@ def test_a_register_change_with_a_key_gapp_yaml_does_not_have_is_still_refused()
         fleet.set_entry(doc, "my-app", repo="me/my-app", project="my-proj", changes={"memroy": "1Gi"})
     with pytest.raises(fleet.FleetRefusal, match="'service.memroy' is not a gapp.yaml key"):
         fleet.set_entry(doc, "my-app", repo="me/my-app", project="my-proj", changes={"service": {"memroy": "1Gi"}})
+
+
+def test_setup_text_is_built_in_the_sdk_for_every_outcome(wired):
+    """The CLI prints `lines` and `lines_after` as given; MCP callers get the same words."""
+    res = ci_mod.setup_deployment(None, repo="me/my-app", project="my-proj", watch=False)
+    assert res["lines"] == ["Setting up my-app (me/my-app to my-proj): " + res["run_url"]]
+    assert res["lines_after"] == ["Next: gapp ci status my-app"]
+    assert res["next_step"] == {"action": "ci status", "hint": "gapp ci status my-app"}
+    wired.deploy(FLEET, "my-app", "me/my-app", "my-proj", domain="old.example.com")
+    res = _setup(domain="old.example.com")
+    assert res["lines"] == ["my-app is already set up to deploy me/my-app to my-proj. Nothing changed.",
+                            "Domain: old.example.com", "Deploy it: gapp ci deploy my-app"]
+    res = _setup(domain="new.example.com", update=True)
+    assert res["lines"] == ["my-app updated (me/my-app to my-proj):", "  domain: old.example.com → new.example.com",
+                            "Domain: new.example.com", "Deploy it: gapp ci deploy my-app"]
+    wired.variables[(FLEET, "GAPP_ALLOWED_SOURCES")] = "someone-else"
+    res = _setup(name="other", repo="me/other")
+    assert res["ok"] is False
+    assert res["lines"] == ["me/other can't be set up yet: apps owned by me aren't allowed in your fleet."]
+    del wired.environments[(FLEET, "my-proj")]
+    wired.variables[(FLEET, "GAPP_ALLOWED_SOURCES")] = "me"
+    res = _setup(name="other", repo="me/other")
+    assert res["ok"] is False
+    assert res["lines"] == ["me/other can't be set up yet: your fleet isn't trusted to deploy to my-proj."]
