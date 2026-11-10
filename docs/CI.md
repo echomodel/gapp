@@ -63,7 +63,7 @@ No fleet repo is set on this machine. Start here: gapp ci init (It finds your ex
 A cloud agent session typically has no gcloud identity and a GitHub proxy that refuses API writes but allows reads and dispatch. In that session the whole CI system is `gapp ci setup` (the register run writes the entry with its own token), `gapp ci deploy`, `gapp ci status` and `gapp ci list`. When one of the two one-time steps is missing, `ci setup` says so verbatim, after a first line naming the repo:
 
 ```
-<owner>/<repo> can't be set up yet: your fleet isn't trusted to deploy to <project>.
+<owner>/<repo> can't be set up yet.
 Fleet repo <fleet-owner>/<fleet-repo> is not yet trusted to deploy to GCP project <project>. One-time setup:
 
 1. Run `gapp ci project setup <project>`
@@ -73,7 +73,7 @@ Fleet repo <fleet-owner>/<fleet-repo> is not yet trusted to deploy to GCP projec
 ```
 
 ```
-<owner>/<repo> can't be set up yet: apps owned by <owner> aren't allowed in your fleet.
+<owner>/<repo> can't be set up yet.
 Apps owned by <owner> aren't allowed in your fleet yet (fleet repo <fleet-owner>/<fleet-repo>). One-time setup:
 
 1. Run `gapp ci sources add <owner>`
@@ -371,7 +371,7 @@ Once per project, idempotent, and the only `gapp ci` command that touches GCP: c
 
 #### `gapp ci sources add|remove|list <owner>`
 
-Manages the fleet repo's repository variable `GAPP_ALLOWED_SOURCES`. Output: "Apps owned by <owner> are now allowed in your fleet.", then `Next: gapp ci project setup <project>`.
+Manages the fleet repo's repository variable `GAPP_ALLOWED_SOURCES`. Output: "Apps owned by <owner> are now allowed in your fleet.", then `Next: gapp ci setup <name> --repo <owner>/<repo> --project <project>` (setup names `gapp ci project setup <project>` itself when the project isn't trusted yet).
 
 #### `gapp ci setup`
 

@@ -38,6 +38,22 @@ def test_deploy_dispatches_the_generic_workflow_with_the_deployment_name(ci):
     assert res["repo"] == "me/my-app" and res["project"] == "my-proj"
 
 
+def test_deploy_announces_itself_only_once_the_deployment_is_found(ci):
+    said = []
+    ci_mod.deploy_deployment("nope", ref="v1.0.0", watch=False, progress=said.append)
+    assert said == [] and ci.dispatched == []
+    ci_mod.deploy_deployment("my-app", ref="v1.0.0", watch=False, progress=said.append)
+    assert said == ["Deploying my-app (ref v1.0.0)."] and len(ci.dispatched) == 1
+
+
+def test_status_live_announces_itself_only_once_the_deployment_is_found(ci):
+    said = []
+    ci_mod.status_live("nope", progress=said.append)
+    assert said == [] and ci.dispatched == []
+    ci_mod.status_live("my-app", progress=said.append)
+    assert said == ["Asking the project for the live state of my-app; this takes about as long as a runner start."]
+
+
 def test_deploy_of_an_unknown_name_is_an_outcome_naming_setup_and_list(ci):
     res = ci_mod.deploy_deployment("nope", watch=False)
     assert res["ok"] is False and res["next_step"]["action"] == "ci setup"

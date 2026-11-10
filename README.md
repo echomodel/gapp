@@ -118,7 +118,7 @@ Each step's output names the next. `gapp ci status my-app` is one deployment (pr
 **From a cloud session** (no gcloud, no GitHub API write, just a `gh` that can dispatch): `gapp ci setup`, `gapp ci deploy`, `gapp ci status` and `gapp ci list` are the whole story. `ci setup` dispatches the register run, which validates and writes the entry with its own token; `ci deploy` dispatches the deploy workflow with the deployment's name. The two one-time steps that need more are told to you verbatim when they are missing:
 
 ```
-<owner>/<repo> can't be set up yet: your fleet isn't trusted to deploy to <project>.
+<owner>/<repo> can't be set up yet.
 Fleet repo <fleet-owner>/<fleet-repo> is not yet trusted to deploy to GCP project <project>. One-time setup:
 
 1. Run `gapp ci project setup <project>`
@@ -128,7 +128,7 @@ Fleet repo <fleet-owner>/<fleet-repo> is not yet trusted to deploy to GCP projec
 ```
 
 ```
-<owner>/<repo> can't be set up yet: apps owned by <owner> aren't allowed in your fleet.
+<owner>/<repo> can't be set up yet.
 Apps owned by <owner> aren't allowed in your fleet yet (fleet repo <fleet-owner>/<fleet-repo>). One-time setup:
 
 1. Run `gapp ci sources add <owner>`

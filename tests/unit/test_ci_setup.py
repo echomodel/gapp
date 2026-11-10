@@ -428,9 +428,11 @@ def test_setup_text_is_built_in_the_sdk_for_every_outcome(wired):
     wired.variables[(FLEET, "GAPP_ALLOWED_SOURCES")] = "someone-else"
     res = _setup(name="other", repo="me/other")
     assert res["ok"] is False
-    assert res["lines"] == ["me/other can't be set up yet: apps owned by me aren't allowed in your fleet."]
+    assert res["lines"] == ["me/other can't be set up yet."]
+    assert res["next_step"]["hint"].startswith("Apps owned by me aren't allowed in your fleet yet")
     del wired.environments[(FLEET, "my-proj")]
     wired.variables[(FLEET, "GAPP_ALLOWED_SOURCES")] = "me"
     res = _setup(name="other", repo="me/other")
     assert res["ok"] is False
-    assert res["lines"] == ["me/other can't be set up yet: your fleet isn't trusted to deploy to my-proj."]
+    assert res["lines"] == ["me/other can't be set up yet."]
+    assert "is not yet trusted to deploy to GCP project my-proj" in res["next_step"]["hint"]

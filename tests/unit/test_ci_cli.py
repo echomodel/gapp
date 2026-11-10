@@ -137,7 +137,7 @@ def test_setup_blocked_by_the_owner_leads_with_the_repo_then_the_verbatim_messag
     ) | ci_mod._outcome("ci sources add", message))
     result = _run(["ci", "setup", "--repo", "me/my-app", "--project", "my-proj"])
     assert result.exit_code == 1
-    assert result.output.startswith("me/my-app can't be set up yet: apps owned by me aren't allowed in your fleet.\n" + message)
+    assert result.output.startswith("me/my-app can't be set up yet.\n" + message)
     assert "<current-list>" in result.output
 
 
@@ -148,7 +148,7 @@ def test_setup_blocked_by_trust_leads_with_the_repo_then_the_verbatim_message(mo
     ) | ci_mod._outcome("ci project setup", message))
     result = _run(["ci", "setup", "--repo", "me/my-app", "--project", "my-proj"])
     assert result.exit_code == 1
-    assert result.output.startswith("me/my-app can't be set up yet: your fleet isn't trusted to deploy to my-proj.\n" + message)
+    assert result.output.startswith("me/my-app can't be set up yet.\n" + message)
 
 
 def test_setup_refusals_print_their_sentence(monkeypatch):
@@ -231,11 +231,11 @@ def test_project_setup_output(monkeypatch):
 
 
 def test_sources_output(monkeypatch):
-    monkeypatch.setattr(ci_mod, "manage_sources", lambda action, owner=None: {
+    monkeypatch.setattr(ci_mod, "manage_sources", lambda action, owner=None: ci_mod._with_sources_text({
         "ok": True, "action": action, "fleet_repo": FLEET, "owner": owner, "owners": ["me", "other-org"],
-        "changed": action != "list", "next_step": None})
+        "changed": action != "list", "next_step": None}))
     assert _run(["ci", "sources", "add", "me"]).output.splitlines() == [
-        "Apps owned by me are now allowed in your fleet.", "Next: gapp ci project setup <project>"]
+        "Apps owned by me are now allowed in your fleet.", "Next: gapp ci setup <name> --repo me/<repo> --project <project>"]
     assert _run(["ci", "sources", "list"]).output.strip() == "Allowed owners: me, other-org"
     assert _run(["ci", "sources", "remove", "other-org"]).output.strip() == "Apps owned by other-org are no longer allowed in your fleet."
     monkeypatch.setattr(ci_mod, "manage_sources", lambda action, owner=None: {
@@ -246,7 +246,8 @@ def test_sources_output(monkeypatch):
 
 
 def test_deploy_output(monkeypatch):
-    def fake(name, ref="main", watch=True):
+    def fake(name, ref="main", watch=True, progress=None):
+        progress(f"Deploying {name} (ref {ref}).")
         return {"ok": True, "name": name, "repo": "me/my-app", "project": "my-proj", "fleet_repo": FLEET,
                 "workflow": "gapp-deploy.yml", "ref": ref, "run_id": "42", "run_url": f"https://github.com/{FLEET}/actions/runs/42",
                 "watched": watch, "conclusion": "success" if watch else None, "next_step": None}
@@ -256,10 +257,11 @@ def test_deploy_output(monkeypatch):
                    "Next: gapp ci status my-app"]
     out = _run(["ci", "deploy", "my-app"]).output.splitlines()
     assert out[1] == f"my-app deployed (success): https://github.com/{FLEET}/actions/runs/42"
-    monkeypatch.setattr(ci_mod, "deploy_deployment", lambda name, ref="main", watch=True: {
+    monkeypatch.setattr(ci_mod, "deploy_deployment", lambda name, ref="main", watch=True, progress=None: {
         "ok": False, "name": name, "fleet_repo": FLEET, "next_step": {"action": "ci setup", "hint": "'x' is not a deployment in acme/fleet, so there is nothing to deploy. Set it up: gapp ci setup x --repo <owner>/<repo> --project <project>. See the deployments: gapp ci list"}})
     result = _run(["ci", "deploy", "x"])
     assert result.exit_code == 1 and "'x' is not a deployment in acme/fleet" in result.output
+    assert "Deploying" not in result.output
 
 
 def test_status_output(monkeypatch):
@@ -292,18 +294,22 @@ def test_status_live_prints_the_root_status_lines_from_the_run(monkeypatch):
                            "services": [{"name": "my-app", "url": "https://my-app-abc-uc.a.run.app", "healthy": True}]},
             "domain": {"name": "mcp.example.com", "status": "active", "cname_target": "ghs.googlehosted.com", "detail": None},
             "next_step": None}
-    monkeypatch.setattr(ci_mod, "status_live", lambda name: {
+    def live_fake(name, progress=None):
+        progress(f"Asking the project for the live state of {name}; this takes about as long as a runner start.")
+        return {
         "ok": True, "name": name, "fleet_repo": FLEET, "id": "my-app", "repo": "me/my-app", "project": "my-proj",
         "workflow": "gapp-status.yml", "dispatched": True, "run_id": "7", "run_url": f"https://github.com/{FLEET}/actions/runs/7",
-        "conclusion": "success", "live": live, "messages": [], "next_step": None})
+        "conclusion": "success", "live": live, "messages": [], "next_step": None}
+    monkeypatch.setattr(ci_mod, "status_live", live_fake)
     out = _run(["ci", "status", "my-app", "--live"]).output.splitlines()
     assert out[0] == "Asking the project for the live state of my-app; this takes about as long as a runner start."
     assert out[1] == f"my-app: live state from my-proj (https://github.com/{FLEET}/actions/runs/7)"
     assert "Status:   READY" in out and "  URL:     https://my-app-abc-uc.a.run.app" in out and "Domain:   mcp.example.com (active)" in out
-    monkeypatch.setattr(ci_mod, "status_live", lambda name: {"ok": False, "name": name, "fleet_repo": FLEET, "live": None,
+    monkeypatch.setattr(ci_mod, "status_live", lambda name, progress=None: {"ok": False, "name": name, "fleet_repo": FLEET, "live": None,
         "next_step": {"action": "read the run log", "hint": "The status run for 'my-app' did not report the live state: x (url)."}})
     result = _run(["ci", "status", "my-app", "--live"])
-    assert result.exit_code == 1 and result.output.splitlines()[-1].startswith("The status run for 'my-app'")
+    assert result.exit_code == 1 and result.output.splitlines() == [
+        "The status run for 'my-app' did not report the live state: x (url)."]
 
 
 def test_json_prints_the_sdk_result_exactly_for_every_ci_command(monkeypatch):

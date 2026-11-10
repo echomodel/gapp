@@ -17,6 +17,16 @@ source is `gapp/__init__.py`.
   `gapp ci sources add <owner>` until the allowlist exists, and
   `gapp ci project setup <project>` for a fleet with none). The
   `gapp_ci_init` MCP tool's result carries `lines`, the text the CLI prints.
+- `gapp ci sources add <owner>` names `gapp ci setup <name> --repo
+  <owner>/<repo> --project <project>` next (was `gapp ci project setup
+  <project>`; `ci setup` itself names project setup when the project isn't
+  trusted yet). The `gapp_ci_sources` MCP tool's result carries `lines`.
+- `gapp ci deploy` and `gapp ci status --live` print "Deploying …" and
+  "Asking the project …" only once the deployment is found, so a name that
+  isn't a deployment prints just the refusal.
+- `gapp ci setup` refused for an owner that isn't allowed, or a project the
+  fleet isn't trusted on, leads with "<owner>/<repo> can't be set up yet."
+  and no longer repeats the reason the message under it gives.
 
 ## 4.0.0rc8 (pre-release of 4.0.0)
 
