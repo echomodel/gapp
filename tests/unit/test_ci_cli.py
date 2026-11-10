@@ -25,6 +25,8 @@ def _init_result(**over):
             "variables_note": None, "topic": "set",
             "next_step": {"action": "ci sources add", "hint": "gapp ci sources add <owner>"}}
     base.update(over)
+    if "lines" not in over and base.get("files"):
+        base["lines"] = ci_mod._init_lines(base)
     return base
 
 
@@ -41,19 +43,34 @@ def test_init_leads_with_what_gapp_can_do_then_next_then_the_fleet_in_brackets(m
     assert "✓" not in result.output and "created" not in result.output.replace("Installed", "")
 
 
-def test_init_rerun_with_nothing_to_do_says_so(monkeypatch):
+def test_init_rerun_on_an_existing_fleet_with_nothing_to_do_says_so(monkeypatch):
     monkeypatch.setattr(ci_mod, "init_fleet", lambda repo=None, owner=None, create=False: _init_result(
         files={k: "unchanged" for k in _init_result()["files"]},
         variables={"GAPP_ALLOWED_SOURCES": True, "HOSTING_GITHUB_APP_ID": False, "HOSTING_GITHUB_APP_PRIVATE_KEY": False},
-        next_step={"action": "ci project setup", "hint": "gapp ci project setup <project>"}))
-    out = _run(["ci", "init", FLEET]).output.splitlines()
-    assert out[:2] == ["gapp can now deploy your apps through GitHub Actions.", "Nothing changed."]
-    assert out[-1] == "Next: gapp ci project setup <project>"
+        next_step={"action": "ci list", "hint": "gapp ci list"}))
+    assert _run(["ci", "init", FLEET]).output.splitlines() == [
+        "Nothing changed.",
+        f"(Your fleet is kept in {FLEET}.)",
+        "Next: gapp ci list",
+    ]
+
+
+def test_init_upgrade_prints_what_changed_and_ci_list_next(monkeypatch):
+    files = {k: "updated" for k in _init_result()["files"]}
+    files["gapp/deployments.yaml"] = "unchanged"
+    monkeypatch.setattr(ci_mod, "init_fleet", lambda repo=None, owner=None, create=False: _init_result(
+        files=files, next_step={"action": "ci list", "hint": "gapp ci list"}))
+    assert _run(["ci", "init", FLEET]).output.splitlines() == [
+        f"Updated gapp's workflows in {FLEET} to this release.",
+        f"(Your fleet is kept in {FLEET}.)",
+        "Next: gapp ci list",
+    ]
 
 
 def test_init_without_args_shows_the_saved_repo_and_how_it_was_set(monkeypatch):
     monkeypatch.setattr(ci_mod, "init_fleet", lambda repo=None, owner=None, create=False: _init_result(
-        files=None, variables=None, topic=None, next_step=None))
+        files=None, variables=None, topic=None, next_step=None,
+        lines=[f"Your fleet is kept in {FLEET} (set by: gapp ci init acme/fleet)."]))
     out = _run(["ci", "init"]).output
     assert out.strip() == f"Your fleet is kept in {FLEET} (set by: gapp ci init acme/fleet)."
 

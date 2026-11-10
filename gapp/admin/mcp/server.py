@@ -256,7 +256,8 @@ def gapp_ci_init(repo: str | None = None, owner: str | None = None, create: bool
     it private, tagged and populated first. A repo that does not exist, or
     exists when `create` is asked, comes back as ok false with the exact
     command. Removes an empty gapp/solutions.yaml left by gapp 3.9 and
-    reports a non-empty one (`legacy_solutions`).
+    reports a non-empty one (`legacy_solutions`). `lines` carries the same
+    text the CLI prints.
 
     Every gapp_ci_* tool returns ok and, when false, next_step {action,
     hint}: a plain sentence with the exact fix. Anything that could not be

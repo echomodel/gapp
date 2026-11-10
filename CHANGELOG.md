@@ -3,6 +3,15 @@
 Notable changes to gapp. Versions are git tags (`vX.Y.Z`); the version
 source is `gapp/__init__.py`.
 
+## Unreleased
+
+- `gapp ci init <owner>/<repo>` on an existing fleet (an upgrade run) no
+  longer says "gapp can now deploy your apps through GitHub Actions.", and
+  its next step is `gapp ci list` when the fleet has deployments (still
+  `gapp ci sources add <owner>` until the allowlist exists, and
+  `gapp ci project setup <project>` for a fleet with none). The
+  `gapp_ci_init` MCP tool's result carries `lines`, the text the CLI prints.
+
 ## 4.0.0rc8 (pre-release of 4.0.0)
 
 Breaking changes:

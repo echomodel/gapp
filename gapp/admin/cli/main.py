@@ -422,29 +422,7 @@ def ci_init_cmd(repo, owner, create, verbose, json_out):
     result = init_fleet(repo, owner=owner, create=create)
     if json_out:
         _emit_json(result)
-    lines = []
-    if result.get("ok") is not False:
-        files = result.get("files") or {}
-        changed = any(s in ("created", "updated") for s in files.values())
-        if result.get("created"):
-            lines.append(f"Created your private fleet repo {result['fleet_repo']} with gapp's workflows and an empty gapp/deployments.yaml.")
-            lines.append("gapp can now deploy your apps through GitHub Actions.")
-        elif repo:
-            lines.append("gapp can now deploy your apps through GitHub Actions.")
-            if not changed:
-                lines.append("Nothing changed.")
-            elif files.get("gapp/deployments.yaml") == "created":
-                lines.append(f"Installed gapp's workflows and gapp/deployments.yaml in {result['fleet_repo']}.")
-            else:
-                lines.append(f"Updated gapp's workflows in {result['fleet_repo']} to this release.")
-            legacy = result.get("legacy_solutions") or {}
-            if legacy and not legacy.get("kept"):
-                lines.append("Removed the empty gapp/solutions.yaml left by gapp 3.9.")
-        else:
-            lines.append(f"Your fleet is kept in {result['fleet_repo']} (set by: {result.get('set_by') or 'unknown'}).")
-        if repo or result.get("created"):
-            lines.append(f"(Your fleet is kept in {result['fleet_repo']}.)")
-    _ci_finish(result, *lines, verbose=verbose, details=_fleet_details(result))
+    _ci_finish(result, *(result.get("lines") or []), verbose=verbose, details=_fleet_details(result))
 
 
 @ci_group.group("project")

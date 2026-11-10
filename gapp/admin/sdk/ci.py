@@ -423,14 +423,16 @@ def _operator_files(gapp_repo: str, gapp_ref: str) -> dict[str, str]:
     return {f"{WORKFLOWS_DIR}/{name}": _render_template(name, gapp_repo, gapp_ref) for name in GAPP_WORKFLOWS}
 
 
-def _install_operator_files(fleet_repo: str) -> dict[str, str]:
+def _install_operator_files(fleet_repo: str) -> tuple[dict[str, str], int | None]:
     """Install or update gapp's workflows and create the deployments file.
 
     The workflows are written whenever the rendered content differs from
     what the repo holds (a new gapp release pins a new reusable-workflow
     ref). The deployments file is created when missing and never
     overwritten: the register workflow owns its content from then on.
-    Returns path -> "created" | "updated" | "unchanged".
+    Returns (path -> "created" | "updated" | "unchanged", the number of
+    deployments the file already held: 0 when it was just created, None
+    when it could not be parsed).
     """
     gapp_repo = _get_gapp_repo()
     gapp_ref = _resolve_gapp_ref(gapp_repo)
@@ -443,9 +445,13 @@ def _install_operator_files(fleet_repo: str) -> dict[str, str]:
     if existing.absent:
         statuses[DEPLOYMENTS_FILE] = _write_file(fleet_repo, DEPLOYMENTS_FILE, fleet.DEPLOYMENTS_FILE_INITIAL,
                                                  "Add the gapp deployments file")
-    else:
-        statuses[DEPLOYMENTS_FILE] = "unchanged"
-    return statuses
+        return statuses, 0
+    statuses[DEPLOYMENTS_FILE] = "unchanged"
+    try:
+        count = len(fleet.parse(existing.content))
+    except fleet.FleetRefusal:
+        count = None
+    return statuses, count
 
 
 def _files_report(fleet_repo: str) -> dict:
@@ -555,6 +561,7 @@ def init_fleet(repo: str | None = None, *, owner: str | None = None, create: boo
         if saved and not owner:
             result.update(fleet_repo=saved, set_by=set_by)
             result["next_step"] = None
+            result["lines"] = [f"Your fleet is kept in {saved} (set by: {set_by or 'unknown'})."]
             return result
         found, note = _search_fleet_repos(owner)
         if found is None:
@@ -573,6 +580,7 @@ def init_fleet(repo: str | None = None, *, owner: str | None = None, create: boo
             ))}
         set_fleet_repo(found[0], f"found by its {FLEET_TOPIC} topic under {where}")
         result.update(fleet_repo=found[0], set_by=f"found by its {FLEET_TOPIC} topic under {where}")
+        result["lines"] = [f"Your fleet is kept in {found[0]} (set by: {result['set_by']})."]
         return result
 
     repo = repo.strip()
@@ -612,7 +620,7 @@ def init_fleet(repo: str | None = None, *, owner: str | None = None, create: boo
     result["topic"] = _add_topic(repo)
 
     try:
-        result["files"] = _install_operator_files(repo)
+        result["files"], deployments = _install_operator_files(repo)
     except RuntimeError as e:
         result["files"] = None
         result.update(_outcome("install gapp's files", (
@@ -632,11 +640,45 @@ def init_fleet(repo: str | None = None, *, owner: str | None = None, create: boo
             f"{repo} still has {LEGACY_SOLUTIONS_FILE} from gapp 3.9 with {n} solution(s). Set each up again "
             f"with `gapp ci setup <name> --repo <owner>/<repo> --project <project>`, then delete that file."
         )}
-    elif report["variables"][ALLOWED_SOURCES_VAR] is True:
-        result["next_step"] = {"action": "ci project setup", "hint": "gapp ci project setup <project>"}
-    else:
+    elif report["variables"][ALLOWED_SOURCES_VAR] is not True:
         result["next_step"] = {"action": "ci sources add", "hint": "gapp ci sources add <owner>"}
+    elif deployments != 0:
+        # An existing fleet (an upgrade run): its deployments are what to look at next.
+        result["next_step"] = {"action": "ci list", "hint": "gapp ci list"}
+    else:
+        result["next_step"] = {"action": "ci project setup", "hint": "gapp ci project setup <project>"}
+    result["lines"] = _init_lines(result)
     return result
+
+
+def _init_lines(result: dict) -> list[str]:
+    """What `gapp ci init <owner>/<repo>` did, as the lines the CLI prints.
+
+    "gapp can now deploy your apps through GitHub Actions." only when this
+    run made the fleet (a new repo, or a deployments file it just created);
+    on an existing fleet, an upgrade run says what changed and nothing more.
+    """
+    repo = result["fleet_repo"]
+    files = result.get("files") or {}
+    changed = any(s in ("created", "updated") for s in files.values())
+    first_time = result.get("created") or files.get(DEPLOYMENTS_FILE) == "created"
+    lines = []
+    if result.get("created"):
+        lines.append(f"Created your private fleet repo {repo} with gapp's workflows and an empty {DEPLOYMENTS_FILE}.")
+    if first_time:
+        lines.append("gapp can now deploy your apps through GitHub Actions.")
+    if not result.get("created"):
+        if not changed:
+            lines.append("Nothing changed.")
+        elif files.get(DEPLOYMENTS_FILE) == "created":
+            lines.append(f"Installed gapp's workflows and {DEPLOYMENTS_FILE} in {repo}.")
+        else:
+            lines.append(f"Updated gapp's workflows in {repo} to this release.")
+    legacy = result.get("legacy_solutions") or {}
+    if legacy and not legacy.get("kept"):
+        lines.append("Removed the empty gapp/solutions.yaml left by gapp 3.9.")
+    lines.append(f"(Your fleet is kept in {repo}.)")
+    return lines
 
 
 def _add_topic(repo: str) -> str:
