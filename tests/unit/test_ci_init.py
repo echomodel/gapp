@@ -91,10 +91,65 @@ def test_init_is_idempotent_updates_outdated_workflows_and_never_touches_the_dep
     assert res["files"][ci_mod.STATUS_WORKFLOW_PATH] == "updated"
     assert res["files"][fleet.DEPLOYMENTS_FILE] == "unchanged"
     assert "my-app" in machine.files[(FLEET, fleet.DEPLOYMENTS_FILE)]
-    assert res["next_step"] == {"action": "ci project setup", "hint": "gapp ci project setup <project>"}
+    assert res["next_step"] == {"action": "ci list", "hint": "gapp ci list"}
     writes = len(machine.puts)
     res = ci_mod.init_fleet(FLEET)
     assert all(s == "unchanged" for s in res["files"].values()) and len(machine.puts) == writes
+
+
+def test_init_on_a_new_fleet_says_gapp_can_now_deploy(machine):
+    machine.private[FLEET] = True
+    res = ci_mod.init_fleet(FLEET)
+    assert res["lines"] == [
+        "gapp can now deploy your apps through GitHub Actions.",
+        f"Installed gapp's workflows and gapp/deployments.yaml in {FLEET}.",
+        f"(Your fleet is kept in {FLEET}.)",
+    ]
+
+
+def test_init_on_an_existing_fleet_with_deployments_reads_as_an_upgrade(machine):
+    machine.install(FLEET, gapp_ref="v3.9.0")
+    machine.deploy(FLEET, "my-app", "me/my-app", "my-proj")
+    machine.variables[(FLEET, "GAPP_ALLOWED_SOURCES")] = "me"
+    res = ci_mod.init_fleet(FLEET)
+    assert res["lines"] == [
+        f"Updated gapp's workflows in {FLEET} to this release.",
+        f"(Your fleet is kept in {FLEET}.)",
+    ]
+    assert res["next_step"] == {"action": "ci list", "hint": "gapp ci list"}
+    res = ci_mod.init_fleet(FLEET)
+    assert res["lines"] == ["Nothing changed.", f"(Your fleet is kept in {FLEET}.)"]
+    assert res["next_step"] == {"action": "ci list", "hint": "gapp ci list"}
+
+
+def test_init_on_an_existing_fleet_with_no_deployments_keeps_project_setup_next(machine):
+    machine.install(FLEET, gapp_ref="v3.9.0")
+    machine.variables[(FLEET, "GAPP_ALLOWED_SOURCES")] = "me"
+    res = ci_mod.init_fleet(FLEET)
+    assert "gapp can now deploy your apps through GitHub Actions." not in res["lines"]
+    assert res["lines"][0] == f"Updated gapp's workflows in {FLEET} to this release."
+    assert res["next_step"] == {"action": "ci project setup", "hint": "gapp ci project setup <project>"}
+
+
+def test_init_with_deployments_but_no_allowed_sources_still_names_sources_add(machine):
+    machine.install(FLEET, gapp_ref="v3.9.0")
+    machine.deploy(FLEET, "my-app", "me/my-app", "my-proj")
+    res = ci_mod.init_fleet(FLEET)
+    assert res["next_step"] == {"action": "ci sources add", "hint": "gapp ci sources add <owner>"}
+
+
+def test_init_create_lines(machine):
+    res = ci_mod.init_fleet(FLEET, create=True)
+    assert res["lines"] == [
+        f"Created your private fleet repo {FLEET} with gapp's workflows and an empty gapp/deployments.yaml.",
+        "gapp can now deploy your apps through GitHub Actions.",
+        f"(Your fleet is kept in {FLEET}.)",
+    ]
+
+
+def test_init_without_args_says_where_the_fleet_is_kept(machine):
+    config_mod.set_fleet_repo(FLEET, "gapp ci init acme/fleet")
+    assert ci_mod.init_fleet()["lines"] == [f"Your fleet is kept in {FLEET} (set by: gapp ci init acme/fleet)."]
 
 
 def test_init_with_a_missing_repo_stops_with_the_create_message(machine):

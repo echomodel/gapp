@@ -363,7 +363,7 @@ The only command that sets the fleet repo, stored in gapp's local config (the ac
 - `gapp ci init <owner>/<repo>`: the repo must exist (otherwise the `--create` message). Sets it, adds the `gapp-ci` topic (so other machines find it), installs or updates the three workflows (pinned to the installed gapp's release tag) and creates `gapp/deployments.yaml` when missing, never overwriting it. Removes an empty `gapp/solutions.yaml` left by gapp 3.9 and reports a non-empty one with the plain next step. Reports the three variables with `--verbose`.
 - `gapp ci init <owner>/<repo> --create`: the repo must not exist (otherwise the plain `init` message). Creates it private, then as above.
 
-Default output: "gapp can now deploy your apps through GitHub Actions.", what changed (or "Nothing changed."), "(Your fleet is kept in <fleet-repo>.)", then `Next: gapp ci sources add <owner>` (or `gapp ci project setup <project>` once the allowlist exists).
+Default output: what changed (or "Nothing changed."), then "(Your fleet is kept in <fleet-repo>.)", then the next step. A run that makes the fleet (`--create`, or a repo given its deployments file now) first says "gapp can now deploy your apps through GitHub Actions."; a run on an existing fleet (an upgrade) does not. The next step is `gapp ci sources add <owner>` until the allowlist exists, then `gapp ci list` when the fleet has deployments, or `gapp ci project setup <project>` when it has none.
 
 #### `gapp ci project setup <project>`
 
