@@ -38,6 +38,14 @@ def test_deploy_dispatches_the_generic_workflow_with_the_deployment_name(ci):
     assert res["repo"] == "me/my-app" and res["project"] == "my-proj"
 
 
+def test_deploy_without_a_ref_leaves_it_to_the_run_to_take_the_default_branch(ci):
+    said = []
+    res = ci_mod.deploy_deployment("my-app", watch=False, progress=said.append)
+    assert ci.dispatched == [(FLEET, "gapp-deploy.yml", {"deployment": "my-app"})]        # no ref input sent
+    assert res["ref"] is None and said == ["Deploying my-app (default branch)."]
+    assert ci_mod.ref_label(None) == "default branch" and ci_mod.ref_label("v1") == "ref v1"
+
+
 def test_deploy_announces_itself_only_once_the_deployment_is_found(ci):
     said = []
     ci_mod.deploy_deployment("nope", ref="v1.0.0", watch=False, progress=said.append)

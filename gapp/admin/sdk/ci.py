@@ -1384,14 +1384,21 @@ def rename_deployment(old: str, new: str, *, watch: bool = True) -> dict:
 # --- ci deploy ---
 
 
-def deploy_deployment(name: str, *, ref: str = "main", watch: bool = True, progress=None) -> dict:
+def ref_label(ref: str | None) -> str:
+    """How a deploy's ref is shown: "ref <ref>", or "default branch" when none was given."""
+    return f"ref {ref}" if ref else "default branch"
+
+
+def deploy_deployment(name: str, *, ref: str | None = None, watch: bool = True, progress=None) -> dict:
     """Deploy one deployment through the fleet repo's deploy workflow (`gapp ci deploy <name>`).
 
     Dispatches `gapp-deploy.yml` with the name and the ref and, when
     `watch` is True, streams the run and reports its conclusion. Needs only
-    a `gh` that can dispatch workflows in the fleet repo. `progress`, when
-    given, is called with "Deploying <name> (ref <ref>)." once the
-    deployment is found and just before the dispatch.
+    a `gh` that can dispatch workflows in the fleet repo. Without `ref`, the
+    run deploys the app repo's default branch, whatever it is named.
+    `progress`, when given, is called with "Deploying <name> (ref <ref>)."
+    (or "(default branch).") once the deployment is found and just before
+    the dispatch.
     """
     result = {"ok": True, "name": (name or "").strip(), "repo": None, "project": None, "fleet_repo": None,
               "workflow": DEPLOY_WORKFLOW, "ref": ref, "run_id": None, "run_url": None, "watched": False,
@@ -1420,8 +1427,11 @@ def deploy_deployment(name: str, *, ref: str = "main", watch: bool = True, progr
         return {**result, **_outcome("check GitHub access", deploy.note)}
 
     if progress:
-        progress(f"Deploying {result['name']} (ref {ref}).")
-    dispatch = _dispatch(fleet_repo, DEPLOY_WORKFLOW, {"deployment": result["name"], "ref": ref})
+        progress(f"Deploying {result['name']} ({ref_label(ref)}).")
+    inputs = {"deployment": result["name"]}
+    if ref:
+        inputs["ref"] = ref
+    dispatch = _dispatch(fleet_repo, DEPLOY_WORKFLOW, inputs)
     if dispatch.refused:
         said, err = dispatch.refused, dispatch.stderr
         return {**result, **_outcome("dispatch the deploy workflow", (

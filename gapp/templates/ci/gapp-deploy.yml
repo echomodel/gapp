@@ -11,7 +11,7 @@
 # variable and HOSTING_GITHUB_APP_PRIVATE_KEY secret.
 
 name: Deploy a gapp deployment
-run-name: Deploy ${{ inputs.deployment }} (${{ inputs.ref }}) ${{ inputs.request_id }}
+run-name: Deploy ${{ inputs.deployment }} (${{ inputs.ref || 'default branch' }}) ${{ inputs.request_id }}
 
 on:
   workflow_dispatch:
@@ -26,9 +26,9 @@ on:
         required: true
         type: string
       ref:
-        description: Git ref of the deployed repo to deploy (commit, tag, or branch)
+        description: Git ref of the deployed repo to deploy (commit, tag, or branch); empty deploys its default branch
         required: false
-        default: main
+        default: ''
         type: string
 
 permissions: {}

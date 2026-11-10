@@ -187,7 +187,7 @@ class FakeGitHub:
             name = f"Status {inputs.get('deployment')} {request_id}"
         else:
             conclusion, log = "success", job_log(["gapp-deploy: dispatched"], script='echo "gapp-deploy: $DEPLOYMENT -> $repo"')
-            name = f"Deploy {inputs.get('deployment')} ({inputs.get('ref', 'main')}) {request_id}"
+            name = f"Deploy {inputs.get('deployment')} ({inputs.get('ref') or 'default branch'}) {request_id}"
         self.add_run(run_id, repo, workflow, name, conclusion, log, hidden_polls=self.run_appears_after)
         return _Result(0, "")
 

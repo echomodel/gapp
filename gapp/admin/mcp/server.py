@@ -381,7 +381,7 @@ def gapp_ci_rename(old: str, new: str, watch: bool = True) -> dict:
 
 
 @_tool()
-def gapp_ci_deploy(name: str, ref: str = "main", watch: bool = True) -> dict:
+def gapp_ci_deploy(name: str, ref: str | None = None, watch: bool = True) -> dict:
     """Deploy one deployment through the fleet repo's deploy workflow. Mirrors gapp_deploy for the fleet.
 
     Dispatches gapp-deploy.yml with the deployment's name; the run reads
@@ -393,7 +393,7 @@ def gapp_ci_deploy(name: str, ref: str = "main", watch: bool = True) -> dict:
 
     Args:
         name: The deployment.
-        ref: Git ref of the deployed repo (default: main).
+        ref: Git ref of the deployed repo (default: its default branch).
         watch: Stream the run to completion (default True).
     """
     from gapp.admin.sdk.ci import deploy_deployment
@@ -401,12 +401,12 @@ def gapp_ci_deploy(name: str, ref: str = "main", watch: bool = True) -> dict:
 
 
 @_tool()
-def gapp_ci_trigger(name: str, ref: str = "main", watch: bool = True) -> dict:
+def gapp_ci_trigger(name: str, ref: str | None = None, watch: bool = True) -> dict:
     """Former name of gapp_ci_deploy; use that. Kept for one release.
 
     Args:
         name: The deployment.
-        ref: Git ref to deploy (default: main).
+        ref: Git ref to deploy (default: its default branch).
         watch: Stream the run to completion (default True).
     """
     from gapp.admin.sdk.ci import deploy_deployment

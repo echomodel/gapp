@@ -246,8 +246,8 @@ def test_sources_output(monkeypatch):
 
 
 def test_deploy_output(monkeypatch):
-    def fake(name, ref="main", watch=True, progress=None):
-        progress(f"Deploying {name} (ref {ref}).")
+    def fake(name, ref=None, watch=True, progress=None):
+        progress(f"Deploying {name} ({ci_mod.ref_label(ref)}).")
         return {"ok": True, "name": name, "repo": "me/my-app", "project": "my-proj", "fleet_repo": FLEET,
                 "workflow": "gapp-deploy.yml", "ref": ref, "run_id": "42", "run_url": f"https://github.com/{FLEET}/actions/runs/42",
                 "watched": watch, "conclusion": "success" if watch else None, "next_step": None}
@@ -256,8 +256,11 @@ def test_deploy_output(monkeypatch):
     assert out == ["Deploying my-app (ref v1.2.3).", f"my-app deploy started (ref v1.2.3): https://github.com/{FLEET}/actions/runs/42",
                    "Next: gapp ci status my-app"]
     out = _run(["ci", "deploy", "my-app"]).output.splitlines()
+    assert out[0] == "Deploying my-app (default branch)."
     assert out[1] == f"my-app deployed (success): https://github.com/{FLEET}/actions/runs/42"
-    monkeypatch.setattr(ci_mod, "deploy_deployment", lambda name, ref="main", watch=True, progress=None: {
+    out = _run(["ci", "deploy", "my-app", "--no-watch"]).output.splitlines()
+    assert out[1] == f"my-app deploy started (default branch): https://github.com/{FLEET}/actions/runs/42"
+    monkeypatch.setattr(ci_mod, "deploy_deployment", lambda name, ref=None, watch=True, progress=None: {
         "ok": False, "name": name, "fleet_repo": FLEET, "next_step": {"action": "ci setup", "hint": "'x' is not a deployment in acme/fleet, so there is nothing to deploy. Set it up: gapp ci setup x --repo <owner>/<repo> --project <project>. See the deployments: gapp ci list"}})
     result = _run(["ci", "deploy", "x"])
     assert result.exit_code == 1 and "'x' is not a deployment in acme/fleet" in result.output

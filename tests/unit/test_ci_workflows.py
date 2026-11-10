@@ -34,10 +34,23 @@ def _rendered(name):
 # -- shape --
 
 
+def test_the_reusable_workflow_deploys_the_default_branch_when_no_ref_is_given():
+    import pathlib
+    doc = yaml.safe_load((pathlib.Path(__file__).resolve().parents[2] / ".github" / "workflows" / "deploy.yml").read_text())
+    assert doc[True]["workflow_call"]["inputs"]["ref"]["default"] == ""
+    steps = doc["jobs"]["deploy"]["steps"]
+    clone = next(s for s in steps if s.get("name") == "Clone solution repo")
+    assert clone["with"]["ref"] == "${{ inputs.ref }}"               # empty: actions/checkout takes the default branch
+    run = next(s for s in steps if s.get("name") == "Setup and deploy")
+    assert run["env"]["REF_FLAG"] == "${{ inputs.ref != '' && format('--ref {0}', inputs.ref) || '' }}"
+    assert "gapp deploy $REF_FLAG $PROJECT_FLAG" in run["run"]        # no bare --ref swallowing the next flag
+
+
 def test_deploy_workflow_resolves_the_entry_then_calls_the_reusable_workflow_in_the_project_environment():
     doc = yaml.safe_load(_rendered(ci_mod.DEPLOY_WORKFLOW))
     assert set(doc[True]["workflow_dispatch"]["inputs"]) == {"request_id", "deployment", "ref"}
-    assert doc["run-name"] == "Deploy ${{ inputs.deployment }} (${{ inputs.ref }}) ${{ inputs.request_id }}"
+    assert doc["run-name"] == "Deploy ${{ inputs.deployment }} (${{ inputs.ref || 'default branch' }}) ${{ inputs.request_id }}"
+    assert doc[True]["workflow_dispatch"]["inputs"]["ref"]["default"] == ""        # empty: the app repo's default branch
     resolve, deploy = doc["jobs"]["resolve"], doc["jobs"]["deploy"]
     assert set(resolve["outputs"]) == {"repo", "project", "id", "overlay", "app_id"}
     assert deploy["needs"] == "resolve"
