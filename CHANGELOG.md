@@ -3,7 +3,7 @@
 Notable changes to gapp. Versions are git tags (`vX.Y.Z`); the version
 source is `gapp/__init__.py`.
 
-## Unreleased
+## 4.0.0rc10 (pre-release of 4.0.0)
 
 - `gapp ci deploy <name>` without `--ref` deploys the app repo's default
   branch, whatever it is named; it was always `main`, so an app on
