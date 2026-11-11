@@ -3,6 +3,28 @@
 Notable changes to gapp. Versions are git tags (`vX.Y.Z`); the version
 source is `gapp/__init__.py`.
 
+## Unreleased
+
+Breaking changes:
+
+- An app starts from a Procfile `web:` line or a Dockerfile.
+  `service.entrypoint` and `service.cmd` are removed from gapp.yaml; a
+  gapp.yaml that still has them is refused as having unknown keys. An app
+  with neither file is refused before building (it used to fall back to a
+  build that could not start). gapp's build template runs the Procfile's
+  `web:` command and supplies no server of its own.
+- `gapp init` (and the `gapp_init` MCP tool and the SDK's `init_solution`)
+  no longer takes `entrypoint`.
+
+Other changes:
+
+- `gapp init` reports how the app starts ("Starts with: ..."), or says
+  it isn't deployable yet and how to add a Procfile or Dockerfile.
+  `gapp status`, `gapp setup` and `gapp deploy --dry-run` give the same
+  message when an app has no start method.
+- `gapp init` says "already set" for a repo that already has the
+  gapp-solution topic (was "already_set").
+
 ## 4.0.0rc10 (pre-release of 4.0.0)
 
 - `gapp ci deploy <name>` without `--ref` deploys the app repo's default

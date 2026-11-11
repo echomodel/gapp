@@ -38,7 +38,7 @@ from gapp.admin.sdk.cloud.base import CloudProvider, CloudAccessError, ci_identi
 from gapp.admin.sdk.config import load_config, save_config, get_active_config
 from gapp.admin.sdk.manifest import (
     get_solution_name, load_manifest, save_manifest, get_required_apis,
-    get_domain, get_entrypoint, get_name, get_paths,
+    get_domain, get_name, get_paths,
     get_prerequisite_secrets, get_service_config, resolve_env_vars, get_public, get_env_vars
 )
 from gapp.admin.sdk.models import StatusResult, DeploymentInfo, NextStep, ServiceStatus, DomainStatus
@@ -155,6 +155,23 @@ class GappSDK:
             for future in [pool.submit(ask, p) for p in projects]:
                 future.result()
         return results[:stop_at] if stop_at else results
+
+    def _start_problem(self, name: str, repo_path: Optional[Path], consequence: str,
+                       strict: bool = True) -> Optional[str]:
+        """The one no-start-method message for the first service without one, or None.
+
+        Each service starts from its own folder's Dockerfile or Procfile: the
+        repo root, or each `paths:` folder of a multi-service repo.
+        """
+        if not repo_path:
+            return None
+        from gapp.admin.sdk.start import start_method, missing
+        paths = get_paths(load_manifest(repo_path, strict=strict))
+        for p in (paths or ["."]):
+            start = start_method(repo_path / p)
+            if not start["method"]:
+                return missing(name, start, service=None if p == "." else p, consequence=consequence)
+        return None
 
     def _service_names(self, deployment: str, repo_path: Optional[Path], strict: bool = True) -> List[str]:
         """The Cloud Run service names a deployment's manifest produces."""
@@ -443,6 +460,7 @@ class GappSDK:
             "bucket_status": bucket_status,
             "label_status": label_status,
             "apis": apis_enabled,
+            "start_problem": self._start_problem(solution_name, repo_path, ", so it can't be deployed yet"),
         }
 
     def deploy(
@@ -465,6 +483,12 @@ class GappSDK:
         solution_name = ctx["name"]
         repo_path = Path(ctx["repo_path"]) if ctx.get("repo_path") else None
 
+        # How the app starts is checked first: nothing is looked up, built
+        # or applied for an app that cannot start.
+        problem = self._start_problem(solution_name, repo_path, ", so nothing was built or deployed")
+        if problem and not dry_run:
+            raise RuntimeError(problem)
+
         # Try to resolve a project. For dry-run we tolerate "no project yet."
         target_project = None
         try:
@@ -485,6 +509,7 @@ class GappSDK:
             "bucket": self.get_bucket_name(solution_name, target_project) if target_project else None,
             "repo_path": str(repo_path) if repo_path else None,
             "status": "ready" if target_project and repo_path else "pending_setup",
+            "start_problem": problem,
             "services": [],
         }
         if repo_path:
@@ -565,11 +590,13 @@ class GappSDK:
             deployment=DeploymentInfo(project=project_id, pending=True),
             warnings=warnings,
         )
+        problem = self._start_problem(solution_name, Path(repo_path) if repo_path else None,
+                                      ", so it can't be deployed", strict=False)
         if not project_id:
-            result.next_step = NextStep(
+            result.next_step = (NextStep(action="add a start method", hint=problem) if problem else NextStep(
                 action="setup",
                 hint=f"No GCP project attached for '{solution_name}'.",
-            )
+            ))
             return result
 
         services_to_check = []
@@ -601,6 +628,8 @@ class GappSDK:
             # The mapping Terraform last applied is the live one; report its state.
             if outputs and result.domain is None and (live := (outputs.get("custom_domain") or "").strip()):
                 result.domain = self._domain_status(project_id, live)
+        if problem:
+            result.next_step = NextStep(action="add a start method", hint=problem)
         return result
 
     def _identity_hint(self, project_id: Optional[str] = None) -> str:
@@ -713,15 +742,18 @@ class GappSDK:
         self._check_domain_safety(
             name, project_id, get_domain(manifest), bucket_name, state_prefix, replace_domain,
         )
-        service_root = repo_path / service_path
-        entrypoint, _ = _resolve_entrypoint(manifest, service_root, repo_path)
+        from gapp.admin.sdk.start import start_method
+        start = start_method(repo_path / service_path)
+        if not start["method"]:
+            raise RuntimeError(self._start_problem(parent_solution or name, repo_path,
+                                                   ", so nothing was built or deployed"))
         sha = self._resolve_ref(repo_path, ref)
         self.provider.ensure_artifact_registry(project_id, REGION)
         image = f"{REGION}-docker.pkg.dev/{project_id}/gapp/{name}:{sha}"
         if rebuild or not self.provider.image_exists(project_id, REGION, name, sha):
-            build_dir, build_ep = _prepare_build_dir(repo_path, image, entrypoint, ref=ref)
+            build_dir = _prepare_build_dir(repo_path, image, start, ref=ref)
             try:
-                self.provider.submit_build_sync(project_id, Path(build_dir), image, build_ep)
+                self.provider.submit_build_sync(project_id, Path(build_dir), image)
             finally:
                 shutil.rmtree(build_dir, ignore_errors=True)
         # Secret materialization runs unconditionally before tfvars are built.
@@ -811,15 +843,12 @@ def _domain_status_from_conditions(conditions: list) -> tuple[str, Optional[str]
     return "error", _detail("Ready") or "The mapping is not ready."
 
 
-def _resolve_entrypoint(manifest, root, repo):
-    ep, cmd = manifest.get("service", {}).get("entrypoint"), manifest.get("service", {}).get("cmd")
-    if ep: return ep, "explicit"
-    if cmd: return f"__cmd__:{cmd}", "cmd"
-    if (root / "Dockerfile").exists(): return "__dockerfile__", "dockerfile"
-    return "__mcp_app__", "mcp-app"
-
-
-def _prepare_build_dir(path, image, ep, ref="HEAD"):
+def _prepare_build_dir(path, image, start, ref="HEAD"):
+    """The build context: the repo at `ref`, plus gapp's Dockerfile template
+    when the app starts from a Procfile. The Procfile's web: command becomes
+    the image's CMD, run by the shell so `$PORT` expands when the container
+    starts. An app with its own Dockerfile is built from that file as is.
+    """
     d = tempfile.mkdtemp(prefix="gapp-build-")
     subprocess.run(
         ["tar", "xf", "-", "-C", d],
@@ -828,9 +857,10 @@ def _prepare_build_dir(path, image, ep, ref="HEAD"):
     )
     t = Path(__file__).resolve().parent.parent.parent / "templates"
     shutil.copy2(t / "cloudbuild.yaml", Path(d) / "cloudbuild.yaml")
-    if ep != "__dockerfile__":
-        shutil.copy2(t / "Dockerfile", Path(d) / "Dockerfile")
-    return d, ep
+    if start["method"] == "procfile":
+        dockerfile = (t / "Dockerfile").read_text().rstrip("\n")
+        (Path(d) / "Dockerfile").write_text(f"{dockerfile}\n\nCMD exec {start['web']}\n")
+    return d
 
 
 def _build_tfvars(name, pid, img, cfg, secrets, repo_path, public, domain,

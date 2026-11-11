@@ -16,9 +16,7 @@ RUN if [ -f pyproject.toml ] || [ -f setup.py ]; then \
         xargs -I {} uv pip install --system -e {}; \
     fi
 
-ARG ENTRYPOINT
-ENV ENTRYPOINT=${ENTRYPOINT}
-
 EXPOSE 8080
 
-CMD ["sh", "-c", "case \"$ENTRYPOINT\" in __mcp_app_serve__) mcp-app serve ;; __cmd__:*) eval \"${ENTRYPOINT#__cmd__:}\" ;; *) uvicorn ${ENTRYPOINT} --host 0.0.0.0 --port 8080 ;; esac"]
+# gapp appends the CMD: the app's Procfile web: command, run by the shell
+# so $PORT expands when the container starts.

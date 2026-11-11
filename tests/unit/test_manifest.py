@@ -5,7 +5,6 @@ from pathlib import Path
 import pytest
 
 from gapp.admin.sdk.manifest import (
-    get_entrypoint,
     get_prerequisite_secrets,
     get_required_apis,
     get_service_config,
@@ -88,19 +87,19 @@ def test_required_apis_empty():
     assert get_required_apis({}) == []
 
 
-def test_entrypoint():
-    manifest = {"service": {"entrypoint": "my_app.mcp.server:mcp_app"}}
-    assert get_entrypoint(manifest) == "my_app.mcp.server:mcp_app"
-
-
-def test_entrypoint_missing():
-    assert get_entrypoint({}) is None
+@pytest.mark.parametrize("key", ["entrypoint", "cmd"])
+def test_gapp_yaml_has_no_start_settings(tmp_path, key):
+    """How an app starts is its Procfile or Dockerfile; gapp.yaml start keys are unknown keys."""
+    (tmp_path / "gapp.yaml").write_text(f"service:\n  {key}: my-app serve\n")
+    with pytest.raises(ManifestValidationError) as exc:
+        load_manifest(tmp_path)
+    assert f"service.{key}" in str(exc.value)
 
 
 def test_service_config_defaults():
-    manifest = {"service": {"entrypoint": "app:main"}}
+    manifest = {"service": {"memory": "512Mi"}}
     config = get_service_config(manifest)
-    assert config["entrypoint"] == "app:main"
+    assert "entrypoint" not in config
     assert config["port"] == 8080
     assert config["memory"] == "512Mi"
     assert config["cpu"] == "1"
@@ -110,7 +109,6 @@ def test_service_config_defaults():
 
 def test_service_config_overrides():
     manifest = {"service": {
-        "entrypoint": "app:main",
         "memory": "1Gi",
         "env": {"FOO": "bar"},
     }}
@@ -204,7 +202,7 @@ env:
       name: app-key
       generate: true
 service:
-  entrypoint: app:main
+  memory: 1Gi
 prerequisites:
   apis:
     - run.googleapis.com

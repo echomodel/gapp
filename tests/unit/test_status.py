@@ -26,6 +26,7 @@ def test_status_pending_setup(tmp_path, monkeypatch, sdk):
     repo.mkdir()
     (repo / ".git").mkdir()
     (repo / "gapp.yaml").write_text("name: my-app")
+    (repo / "Procfile").write_text("web: my-app serve\n")
     monkeypatch.chdir(repo)
     
     res = sdk.status()
@@ -39,6 +40,7 @@ def test_status_ready(tmp_path, monkeypatch, sdk):
     repo.mkdir()
     (repo / ".git").mkdir()
     (repo / "gapp.yaml").write_text("name: my-app")
+    (repo / "Procfile").write_text("web: my-app serve\n")
     monkeypatch.chdir(repo)
 
     # Register project (env-blind label, optional gapp-env)
@@ -91,6 +93,7 @@ def test_status_tolerates_invalid_local_manifest(tmp_path, monkeypatch, sdk):
         "service:\n"
         "  bogus_field: 1\n"
     )
+    (repo / "Procfile").write_text("web: my-app serve\n")
     monkeypatch.chdir(repo)
 
     sdk.provider.host("proj-123", "stale-app")
@@ -165,6 +168,7 @@ def _deployed_with_domain(tmp_path, monkeypatch, sdk, domain="mcp.example.com"):
     repo.mkdir()
     (repo / ".git").mkdir()
     (repo / "gapp.yaml").write_text(f"name: my-app\ndomain: {domain}\n")
+    (repo / "Procfile").write_text("web: my-app serve\n")
     monkeypatch.chdir(repo)
     sdk.provider.host("proj-123", "my-app")
     sdk.provider.tf_outputs[("gapp-my-app-proj-123", "terraform/state")] = {
@@ -211,6 +215,7 @@ def test_status_without_domain_leaves_domain_unset(tmp_path, monkeypatch, sdk):
     repo.mkdir()
     (repo / ".git").mkdir()
     (repo / "gapp.yaml").write_text("name: my-app\n")
+    (repo / "Procfile").write_text("web: my-app serve\n")
     monkeypatch.chdir(repo)
     sdk.provider.host("proj-123", "my-app")
     sdk.provider.tf_outputs[("gapp-my-app-proj-123", "terraform/state")] = {
@@ -231,6 +236,7 @@ def test_status_without_a_usable_identity_is_an_outcome_not_a_crash(tmp_path, mo
     repo.mkdir()
     (repo / ".git").mkdir()
     (repo / "gapp.yaml").write_text("name: my-app")
+    (repo / "Procfile").write_text("web: my-app serve\n")
     monkeypatch.chdir(repo)
 
     def failing_list(*a, **kw):
@@ -307,6 +313,7 @@ def test_status_warns_about_unknown_gapp_yaml_fields_but_still_answers(tmp_path,
     repo.mkdir()
     (repo / ".git").mkdir()
     (repo / "gapp.yaml").write_text("name: my-app\nmemroy: 1Gi\npublik: true\n")
+    (repo / "Procfile").write_text("web: my-app serve\n")
     monkeypatch.chdir(repo)
     sdk.provider.host("proj-123", "my-app")
     res = sdk.status()
@@ -320,6 +327,7 @@ def test_status_has_no_warnings_for_a_valid_gapp_yaml(tmp_path, monkeypatch, sdk
     repo.mkdir()
     (repo / ".git").mkdir()
     (repo / "gapp.yaml").write_text("name: my-app\n")
+    (repo / "Procfile").write_text("web: my-app serve\n")
     monkeypatch.chdir(repo)
     assert sdk.status().warnings == []
     assert sdk.status(name="remote-app").warnings == []

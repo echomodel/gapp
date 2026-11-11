@@ -16,6 +16,7 @@ def _repo(tmp_path, monkeypatch, contents="name: my-app"):
     repo.mkdir()
     (repo / ".git").mkdir()
     (repo / "gapp.yaml").write_text(contents)
+    (repo / "Procfile").write_text("web: my-app serve\n")
     monkeypatch.chdir(repo)
     return repo
 
@@ -41,12 +42,15 @@ def test_deploy_dry_run_workspace(tmp_path, monkeypatch, sdk):
     repo.mkdir()
     (repo / ".git").mkdir()
     (repo / "gapp.yaml").write_text("paths: [services/api, services/worker]")
+    (repo / "Procfile").write_text("web: my-app serve\n")
     api_dir = repo / "services/api"
     api_dir.mkdir(parents=True)
     (api_dir / "gapp.yaml").write_text("name: my-api")
+    (api_dir / "Procfile").write_text("web: my-app serve\n")
     worker_dir = repo / "services/worker"
     worker_dir.mkdir(parents=True)
     (worker_dir / "gapp.yaml").write_text("name: my-worker")
+    (worker_dir / "Procfile").write_text("web: my-app serve\n")
     monkeypatch.chdir(repo)
 
     sdk.provider.host("proj-ws", "app")
@@ -81,9 +85,9 @@ def _setup_real_deploy(tmp_path, monkeypatch, sdk, ref_sha="abc123def456"):
         captured["resolved_ref"] = ref
         return ref_sha
 
-    def fake_prepare_build_dir(path, image, ep, ref="HEAD"):
+    def fake_prepare_build_dir(path, image, start, ref="HEAD"):
         captured["build_ref"] = ref
-        return str(tmp_path / "build"), ep
+        return str(tmp_path / "build")
 
     monkeypatch.setattr(GappSDK, "_resolve_ref", fake_resolve_ref)
     import gapp.admin.sdk.core as core_mod
@@ -193,6 +197,7 @@ def test_build_tfvars_emits_env_secret_declarations(tmp_path):
         "    secret:\n"
         "      name: api-token\n"
     )
+    (repo / "Procfile").write_text("web: my-app serve\n")
 
     cfg = {"memory": "512Mi", "cpu": "1", "max_instances": 5, "env": {}}
     tfvars = _build_tfvars(
@@ -219,6 +224,7 @@ def test_build_tfvars_merges_env_secrets_with_prerequisites_secrets(tmp_path):
         "  - name: APP_KEY\n"
         "    secret: {name: app-key, generate: true}\n"
     )
+    (repo / "Procfile").write_text("web: my-app serve\n")
 
     cfg = {"memory": "512Mi", "cpu": "1", "max_instances": 5, "env": {}}
     prerequisites = {"legacy-secret": {"description": "from old prerequisites block"}}
@@ -245,6 +251,7 @@ def test_build_tfvars_uses_solution_name_for_workspace_services(tmp_path):
         "  - name: APP_KEY\n"
         "    secret: {name: app-key, generate: true}\n"
     )
+    (repo / "Procfile").write_text("web: my-app serve\n")
 
     cfg = {"memory": "512Mi", "cpu": "1", "max_instances": 5, "env": {}}
     tfvars = _build_tfvars(
@@ -266,6 +273,7 @@ def test_build_tfvars_emits_data_bucket(tmp_path):
     repo = tmp_path / "app"
     repo.mkdir()
     (repo / "gapp.yaml").write_text("name: my-app\n")
+    (repo / "Procfile").write_text("web: my-app serve\n")
 
     cfg = {"memory": "512Mi", "cpu": "1", "max_instances": 1, "env": {}}
     tfvars = _build_tfvars(
@@ -289,6 +297,7 @@ def test_build_tfvars_data_bucket_matches_get_bucket_name_convention(tmp_path):
     repo = tmp_path / "app"
     repo.mkdir()
     (repo / "gapp.yaml").write_text("name: my-app\n")
+    (repo / "Procfile").write_text("web: my-app serve\n")
     cfg = {"memory": "512Mi", "cpu": "1", "max_instances": 1, "env": {}}
     tfvars = _build_tfvars(
         "my-app", "proj-123", "img:tag", cfg, {}, repo, False, "",
@@ -329,6 +338,7 @@ def test_build_tfvars_emits_every_required_key(tmp_path, key):
     repo = tmp_path / "app"
     repo.mkdir()
     (repo / "gapp.yaml").write_text("name: my-app\n")
+    (repo / "Procfile").write_text("web: my-app serve\n")
 
     cfg = {"memory": "512Mi", "cpu": "1", "max_instances": 1, "env": {}}
     tfvars = _build_tfvars(
@@ -353,7 +363,7 @@ def test_deploy_threads_data_bucket_into_apply_tfvars(tmp_path, monkeypatch, sdk
     import gapp.admin.sdk.core as core_mod
     monkeypatch.setattr(
         core_mod, "_prepare_build_dir",
-        lambda path, image, ep, ref="HEAD": (str(tmp_path / "build"), ep),
+        lambda path, image, start, ref="HEAD": str(tmp_path / "build"),
     )
     (tmp_path / "build").mkdir()
     sdk.provider.image_exists = lambda *a, **kw: True
@@ -372,9 +382,11 @@ def test_deploy_workspace_threads_parent_data_bucket_into_each_service(
     repo.mkdir()
     (repo / ".git").mkdir()
     (repo / "gapp.yaml").write_text("paths: [services/api]")
+    (repo / "Procfile").write_text("web: my-app serve\n")
     api_dir = repo / "services/api"
     api_dir.mkdir(parents=True)
     (api_dir / "gapp.yaml").write_text("name: my-api\n")
+    (api_dir / "Procfile").write_text("web: my-app serve\n")
     monkeypatch.chdir(repo)
 
     sdk.provider.host("proj-ws", "app", service=False)
@@ -383,7 +395,7 @@ def test_deploy_workspace_threads_parent_data_bucket_into_each_service(
     import gapp.admin.sdk.core as core_mod
     monkeypatch.setattr(
         core_mod, "_prepare_build_dir",
-        lambda path, image, ep, ref="HEAD": (str(tmp_path / "build"), ep),
+        lambda path, image, start, ref="HEAD": str(tmp_path / "build"),
     )
     (tmp_path / "build").mkdir()
     sdk.provider.image_exists = lambda *a, **kw: True
@@ -416,7 +428,7 @@ def test_deploy_materializes_generated_secrets(tmp_path, monkeypatch, sdk):
     import gapp.admin.sdk.core as core_mod
     monkeypatch.setattr(
         core_mod, "_prepare_build_dir",
-        lambda path, image, ep, ref="HEAD": (str(tmp_path / "build"), ep),
+        lambda path, image, start, ref="HEAD": str(tmp_path / "build"),
     )
     (tmp_path / "build").mkdir()
     sdk.provider.image_exists = lambda *a, **kw: True
@@ -448,7 +460,7 @@ def test_deploy_skips_existing_generated_secret(tmp_path, monkeypatch, sdk):
     import gapp.admin.sdk.core as core_mod
     monkeypatch.setattr(
         core_mod, "_prepare_build_dir",
-        lambda path, image, ep, ref="HEAD": (str(tmp_path / "build"), ep),
+        lambda path, image, start, ref="HEAD": str(tmp_path / "build"),
     )
     (tmp_path / "build").mkdir()
     sdk.provider.image_exists = lambda *a, **kw: True
@@ -479,7 +491,7 @@ def test_deploy_fails_fast_on_missing_non_generate_secret(tmp_path, monkeypatch,
     import gapp.admin.sdk.core as core_mod
     monkeypatch.setattr(
         core_mod, "_prepare_build_dir",
-        lambda path, image, ep, ref="HEAD": (str(tmp_path / "build"), ep),
+        lambda path, image, start, ref="HEAD": str(tmp_path / "build"),
     )
     (tmp_path / "build").mkdir()
     sdk.provider.image_exists = lambda *a, **kw: True
@@ -531,7 +543,7 @@ def _domain_deploy(tmp_path, monkeypatch, sdk, manifest, live_domain=None, verif
     import gapp.admin.sdk.core as core_mod
     monkeypatch.setattr(
         core_mod, "_prepare_build_dir",
-        lambda path, image, ep, ref="HEAD": (str(tmp_path / "build"), ep),
+        lambda path, image, start, ref="HEAD": str(tmp_path / "build"),
     )
     (tmp_path / "build").mkdir(exist_ok=True)
     _patch_secret_calls(monkeypatch, present_ids=())
@@ -656,7 +668,7 @@ def _plain_deploy(tmp_path, monkeypatch, sdk):
     monkeypatch.setattr(GappSDK, "_resolve_ref", lambda self, p, r: "abc123")
     import gapp.admin.sdk.core as core_mod
     monkeypatch.setattr(core_mod, "_prepare_build_dir",
-                        lambda path, image, ep, ref="HEAD": (str(tmp_path / "build"), ep))
+                        lambda path, image, start, ref="HEAD": str(tmp_path / "build"))
     (tmp_path / "build").mkdir(exist_ok=True)
     sdk.provider.image_exists = lambda *a, **kw: True
     _patch_secret_calls(monkeypatch, present_ids=())

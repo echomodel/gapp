@@ -109,9 +109,6 @@ Each phase completes cleanly and tells the user what comes next. No phase does d
 Each solution repo has a manifest at the root:
 
 ```yaml
-service:
-  entrypoint: myapp.mcp.server:mcp_app   # REQUIRED: uvicorn module:app
-
 prerequisites:
   secrets:
     api-token:
@@ -119,8 +116,8 @@ prerequisites:
 ```
 
 Key decisions:
-- **`service.entrypoint` is required** — passed as `--build-arg` to the static Dockerfile.
-- **Port 8080 is hardcoded** — not configurable. All Cloud Run services use 8080.
+- **gapp.yaml says nothing about how the app starts** — that is the app's own Procfile `web:` line or Dockerfile (see "How an app starts" below).
+- **Port 8080 is hardcoded** — not configurable. Cloud Run sets `$PORT` to 8080, and a Procfile command must serve on `$PORT`.
 - **No `prerequisites.apis`** — foundation APIs are hardcoded in `gapp setup`.
 - **Secrets require an explicit `name`** — the `name` field under `secret:` is the short name in Secret Manager. gapp prefixes it with the solution name: `name: app-key` on solution `my-app` → `my-app-app-key` in Secret Manager. No auto-derivation from the env var name.
 - **Every gapp-managed secret is stamped with `gapp-solution=<name>`** — the label is the machine-readable ownership signal. `gapp secrets list`, the pre-deploy validator, and any future tooling query Secret Manager by `labels.gapp-solution=<solution>` (one call) and diff against gapp.yaml declarations.
@@ -164,7 +161,6 @@ Optional overrides with defaults:
 
 ```yaml
 service:
-  entrypoint: app.mcp.server:mcp_app   # REQUIRED
   memory: "512Mi"                       # default
   cpu: "1"                              # default
   max_instances: 1                      # default
@@ -181,14 +177,15 @@ service:
 
 **`public` is an independent flag.** Public access (Cloud Run `allUsers` IAM) is set by the `public` field in gapp.yaml or the CLI/MCP arg, independent of anything else. Default is non-public (safe). Priority on each deploy: CLI/MCP arg → gapp.yaml `public:` → default false.
 
-**`service.entrypoint` and `service.cmd` are mutually exclusive.** `entrypoint` is an ASGI module:app path — gapp wraps it with uvicorn. `cmd` is a raw command — gapp passes it through as the Dockerfile CMD. Having both is ambiguous, so gapp rejects it.
+**How an app starts is a file the app owns, in a portable format.** An app starts from a Dockerfile, or from a Procfile with exactly one `web:` line: the command that starts the app and serves HTTP on `$PORT`. These are the same files other builders read. gapp knows no frameworks, never detects one, and never writes app files; it only checks that a start method exists. One SDK check (`gapp/admin/sdk/start.py`) and one message are shared by init, status, setup and deploy, and deploy refuses before building an app without one. With both files, the Dockerfile wins and the Procfile is reported as ignored.
 
-**How gapp determines what to run.** At deploy time, gapp resolves the container entrypoint in this order:
+**Why not gapp.yaml.** A start command in gapp.yaml would work only with gapp. A Procfile works with gapp's own build template and with standard builders such as buildpacks, unchanged, so builds can move to buildpacks without touching any app.
 
-1. `service.entrypoint` or `service.cmd` in gapp.yaml — explicit config, always takes priority. Use `entrypoint` for ASGI module:app paths (gapp wraps with uvicorn). Use `cmd` for raw commands (e.g., `mcp-app serve`). These are mutually exclusive.
-2. `Dockerfile` in the repo — solution controls its own build entirely. gapp builds it as-is, no generated CMD.
-3. `mcp-app.yaml` in the repo — gapp detects this file and generates `CMD ["mcp-app", "serve"]`. This is a minimal coupling: gapp knows the filename and the command string. If `mcp-app` renames its config file or changes its serve command, this detection breaks. The coupling is accepted because it eliminates an otherwise-mandatory `service.cmd` line from every mcp-app solution's gapp.yaml, and because mcp-app is a first-party framework in this ecosystem. Solutions that prefer no coupling can use `service.cmd: mcp-app serve` explicitly and skip detection.
-4. None of the above — error with guidance listing all options.
+**One way to declare how an app starts:** gapp.yaml has no start settings; anything unknown in it is refused.
+
+**Terraform and declared state.** Each deploy applies a fixed Terraform module from state kept in the deployment's own bucket, so a deployment is reproducible from its repo and its project, a redeploy changes only what changed, and drift is corrected on the next deploy.
+
+**Direct vs CI.** Root commands work against GCP with gcloud; `gapp ci` works against GitHub only. They never read each other's records (see "Deployment identity: deliberate rules").
 
 **Dockerfile tradeoffs.** The design preference is for solutions to NOT maintain a Dockerfile — gapp generates one, meaning less maintenance and consistent builds across solutions. But maintaining a Dockerfile gives full control over the build (custom system deps, non-Python components, multi-stage builds). Both are valid. gapp uses a solution's Dockerfile without question when present.
 
@@ -213,9 +210,9 @@ TF files are nearly identical boilerplate across solutions. Centralizing TF in g
 
 ## Container Build Pipeline
 
-### Static Dockerfile with Build Args
+### Static Dockerfile Template
 
-gapp generates a Dockerfile at build time from its template (`gapp/templates/Dockerfile`). The Dockerfile uses `ARG ENTRYPOINT` to parameterize the run command. Solutions can provide their own Dockerfile to take full control of the build.
+For an app that starts from a Procfile, gapp builds from its template (`gapp/templates/Dockerfile`), which installs the app's own declared dependencies, and appends `CMD exec <web command>`. The shell runs the command, so `$PORT` expands when the container starts. The template names no framework and supplies no server: a server the command names must be one of the app's dependencies. An app with its own Dockerfile is built from it as is.
 
 ### Source Integrity via `git archive`
 
