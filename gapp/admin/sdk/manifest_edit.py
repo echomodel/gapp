@@ -272,7 +272,7 @@ def env_set(name: str, value: str | None = None, *, secret: str | None = None, g
     return _write(root, before, after, new_deployment=False, change=f"{name} = {what}")
 
 
-def env_remove(name: str, *, repo_path: Path | None = None) -> dict:
+def env_unset(name: str, *, repo_path: Path | None = None) -> dict:
     """Remove one environment variable. The secret it named, if any, is left
     in Secret Manager."""
     root = _root(repo_path)

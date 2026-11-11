@@ -132,13 +132,13 @@ def gapp_manifest_env_set(
 
 
 @_tool()
-def gapp_manifest_env_remove(name: str) -> dict:
+def gapp_manifest_env_unset(name: str) -> dict:
     """Remove one environment variable from the current repo's gapp.yaml.
 
     A secret it read stays in Secret Manager.
     """
-    from gapp.admin.sdk.manifest_edit import env_remove
-    return _manifest_call(env_remove, name)
+    from gapp.admin.sdk.manifest_edit import env_unset
+    return _manifest_call(env_unset, name)
 
 
 @_tool()

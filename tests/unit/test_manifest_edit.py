@@ -190,11 +190,11 @@ def test_env_set_refuses_an_ambiguous_variable(tmp_path, monkeypatch, kwargs):
     assert _yaml(repo) == "name: demo-app\n"
 
 
-def test_env_remove(tmp_path, monkeypatch):
+def test_env_unset(tmp_path, monkeypatch):
     repo = _repo(tmp_path, monkeypatch, files={"gapp.yaml": "name: demo-app\nenv:\n  - name: LOG\n    value: INFO\n"})
     with pytest.raises(m.ManifestChangeRefused):
-        m.env_remove("NOPE")
-    m.env_remove("LOG")
+        m.env_unset("NOPE")
+    m.env_unset("LOG")
     assert yaml.safe_load(_yaml(repo)) == {"name": "demo-app"}
 
 
@@ -252,6 +252,7 @@ def test_cli_manifest_shows_and_changes_settings(tmp_path, monkeypatch):
     shown = runner.invoke(main, ["manifest", "show"])
     assert shown.exit_code == 0 and "the .run.app URL only" in shown.output
     assert "Change: gapp manifest set|unset KEY" in shown.output and "gapp manifest example" in shown.output
+    assert f"edit {repo / 'gapp.yaml'} for those" in shown.output.replace("\n  ", " ")      # hand-edited keys: where
     changed = runner.invoke(main, ["manifest", "env", "set", "SIGN", "--secret", "signing-key", "--generate"])
     assert changed.exit_code == 0 and "Changed: SIGN = secret 'signing-key', generated" in changed.output
     refused = runner.invoke(main, ["manifest", "set", "name", "other"])

@@ -1,6 +1,7 @@
 """gapp CLI — GCP App Deployer."""
 
 import json as json_mod
+from pathlib import Path
 import sys
 import click
 
@@ -897,7 +898,7 @@ def manifest_group():
     gapp manifest env set NAME VALUE       a plain environment variable
     gapp manifest env set NAME --secret S [--generate]   a variable read from a secret
     gapp manifest env set NAME --data-path [SUBFOLDER]   the data volume's path
-    gapp manifest env remove NAME
+    gapp manifest env unset NAME
     gapp manifest example                  every key gapp.yaml takes, annotated
     gapp manifest schema                   the JSON Schema, for tools
 
@@ -905,6 +906,12 @@ def manifest_group():
     file changes. How the app starts is not in gapp.yaml: it is a Procfile
     web: line or a Dockerfile. A file gapp can't read is never changed;
     `gapp init --fresh` starts over and keeps it as gapp.yaml.bak.
+
+    Two advanced keys have no command; edit gapp.yaml at the root of the
+    app's git repo (`gapp manifest show` prints its path) for them: `paths`,
+    for a repo with several services, and `prerequisites.apis`, for extra
+    GCP APIs. `gapp manifest example` shows their format, and every gapp
+    command checks the file.
     """
 
 
@@ -928,8 +935,9 @@ def manifest_show_cmd(json_out):
     _show_manifest(result)
     if result["exists"]:
         click.echo()
-        click.echo("  Change: gapp manifest set|unset KEY, gapp manifest env set|remove NAME")
-        click.echo("  Every key: gapp manifest example")
+        click.echo("  Change: gapp manifest set|unset KEY, gapp manifest env set|unset NAME")
+        click.echo("  Every key: gapp manifest example. paths and prerequisites.apis have no command:")
+        click.echo(f"  edit {Path(result['repo']) / 'gapp.yaml'} for those.")
 
 
 @manifest_group.command("set")
@@ -995,13 +1003,13 @@ def manifest_env_set_cmd(name, value, secret, generate, data_path, json_out):
     _manifest_write(env_set, json_out, name, value, secret=secret, generate=generate, data_path=data_path)
 
 
-@manifest_env_group.command("remove")
+@manifest_env_group.command("unset")
 @click.argument("name")
 @_json_option
-def manifest_env_remove_cmd(name, json_out):
+def manifest_env_unset_cmd(name, json_out):
     """Remove the variable NAME. A secret it read stays in Secret Manager."""
-    from gapp.admin.sdk.manifest_edit import env_remove
-    _manifest_write(env_remove, json_out, name)
+    from gapp.admin.sdk.manifest_edit import env_unset
+    _manifest_write(env_unset, json_out, name)
 
 
 @manifest_group.command("schema")

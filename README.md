@@ -66,12 +66,12 @@ gapp manifest env set LOG_LEVEL INFO                # a plain value
 gapp manifest env set API_KEY --secret api-key      # read from a secret; then gapp secrets set api-key
 gapp manifest env set SIGNING_KEY --secret signing-key --generate   # gapp generates the value
 gapp manifest env set APP_USERS_PATH --data-path users              # the data volume, kept across deploys
-gapp manifest env remove LOG_LEVEL
+gapp manifest env unset LOG_LEVEL
 gapp manifest example                               # the annotated file below
 gapp manifest schema                                # the JSON Schema, for tools
 ```
 
-Each change is checked against the schema and written only when the file changes. `gapp manifest` on its own lists these commands.
+Each change is checked against the schema and written only when the file changes. `gapp manifest` on its own lists these commands. Two advanced keys have no command and are edited in gapp.yaml at the root of the app's repo: `paths`, for a repo with several services, and `prerequisites.apis`, for extra GCP APIs. The example below shows their format, and every gapp command checks the file.
 
 **The name.** `gapp init` writes the deployment's name into gapp.yaml: the origin repo's name, else the folder's, unless gapp.yaml already has one. It prints the name and where it came from. Writing it keeps the name the same in any clone, including one with no origin remote. The name keys the Cloud Run service, the data bucket and the secrets, so a different name is a new, empty deployment while the old one keeps its URL and data. That's why `gapp manifest set name` refuses a different name unless you pass `--new-deployment`. CI deploys don't use this name: a fleet deployment's id names its resources.
 
@@ -283,7 +283,7 @@ gapp deploy --project <project-id>
 *   `gapp init [--fresh]`: Write gapp.yaml with the deployment's name and report how the app starts. `--fresh` starts over, keeping the current file as `gapp.yaml.bak`.
 *   `gapp manifest show [--json]`: This repo's gapp.yaml settings, set or not, each with what it means.
 *   `gapp manifest set <key> <value>` / `unset <key>`: Change `name`, `public`, `domain`, `memory`, `cpu` or `max-instances`. Changing the name needs `--new-deployment`.
-*   `gapp manifest env set <NAME> <value>` (or `--secret <secret> [--generate]`, or `--data-path [<subfolder>]`) / `env remove <NAME>`: The service's environment variables.
+*   `gapp manifest env set <NAME> <value>` (or `--secret <secret> [--generate]`, or `--data-path [<subfolder>]`) / `env unset <NAME>`: The service's environment variables.
 *   `gapp manifest example`: An annotated gapp.yaml with every key (valid YAML, nothing else).
 *   `gapp manifest schema`: The JSON Schema for `gapp.yaml` (nothing else on stdout).
 
