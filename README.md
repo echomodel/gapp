@@ -27,7 +27,7 @@ Plain gcloud is enough when there's one service, deployed by hand, with no secre
 As your footprint grows across dozens of GCP projects, remembering exactly where you deployed a specific app—and which service account, bucket, and state file it uses—becomes a nightmare. `gapp` solves this by moving the "Registry" into the Cloud itself. You never have to track where things live; `gapp` discovers them for you.
 
 ### **2. The "Zero-Fork" Public Repo**
-Traditional deployment tools often require you to hardcode project IDs, regions, or bucket names in your repository. `gapp` allows a repo to remain entirely **deployment-agnostic**. Anyone can clone a public, `gapp`-enabled repo and deploy it to their own isolated environment without modifying a single line of code or setting up complex local env vars.
+Your repo describes the app, not where it runs. A repo deployed with `gapp` says what the app needs: how it starts (a Procfile or Dockerfile) and its settings in `gapp.yaml` (public access, environment variables, which secrets it reads). It never says where it runs: no project id, region or bucket name, and no secret values. Those come from whoever deploys it, so anyone can deploy the same repo to their own Google Cloud project without changing it.
 
 ### **3. Stateful Portability**
 Because `gapp` calculates infrastructure locations deterministically, you can switch machines or users and `gapp` will automatically "re-attach" to the same buckets and data. You get durable, stateful deployments from nothing but a repo and a `gcloud` login.
@@ -176,6 +176,7 @@ Known limits:
 - A deploy doesn't record which repo or commit it came from, so gapp can't warn before replacing a deployment built from a different repo.
 - There's no plan-only step that previews infrastructure changes before a deploy applies them.
 - In CI, the app's repo must have a gapp.yaml; the fleet entry adds only the domain. Deploying a repo without a gapp.yaml isn't supported yet. A deploy run whose repo has a broken gapp.yaml fails with the message above; fix it in the app's repo.
+- Every deployment of a repo gets the same `gapp.yaml` settings. To give one deployment different settings (more memory, a different admission policy), the repo's `gapp.yaml` has to change.
 - gapp 4 doesn't see deployments made by gapp 3 until each is redeployed once with gapp 4.
 
 ### **5. Teams and Shared Organizations**
