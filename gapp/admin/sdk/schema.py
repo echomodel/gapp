@@ -63,7 +63,6 @@ class ServiceSpec(_StrictModel):
     memory: str | None = Field(default=None, description="Memory per instance (default 512Mi).")
     cpu: str | None = Field(default=None, description="CPUs per instance (default 1).")
     max_instances: int | None = Field(default=None, description="Most instances Cloud Run runs at once (default 1).")
-    port: int | None = Field(default=None, description="Not used: the service always listens on $PORT, which Cloud Run sets to 8080.")
     env: dict[str, str] | None = Field(
         default=None,
         description="Legacy dict form of env vars. Prefer the top-level 'env' list.",

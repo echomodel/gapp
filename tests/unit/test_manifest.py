@@ -100,7 +100,6 @@ def test_service_config_defaults():
     manifest = {"service": {"memory": "512Mi"}}
     config = get_service_config(manifest)
     assert "entrypoint" not in config
-    assert config["port"] == 8080
     assert config["memory"] == "512Mi"
     assert config["cpu"] == "1"
     assert config["max_instances"] == 1
@@ -113,7 +112,6 @@ def test_service_config_overrides():
         "env": {"FOO": "bar"},
     }}
     config = get_service_config(manifest)
-    assert config["port"] == 8080
     assert config["memory"] == "1Gi"
     assert config["env"] == {"FOO": "bar"}
 
@@ -403,3 +401,11 @@ def test_manifest_name_wins_over_origin(tmp_path):
     repo = tmp_path / "repo"
     _git_repo(repo, "https://github.com/acme/ignored.git")
     assert get_solution_name({"name": "explicit"}, repo) == "explicit"
+
+
+def test_gapp_yaml_has_no_port_setting(tmp_path):
+    """The service listens on $PORT, which Cloud Run sets; service.port is an unknown key."""
+    (tmp_path / "gapp.yaml").write_text("service:\n  port: 9000\n")
+    with pytest.raises(ManifestValidationError) as exc:
+        load_manifest(tmp_path)
+    assert "service.port" in str(exc.value)

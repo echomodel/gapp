@@ -115,7 +115,6 @@ def get_service_config(manifest: dict) -> dict:
     """Return service configuration with defaults."""
     service = manifest.get("service", {})
     return {
-        "port": 8080,
         "memory": service.get("memory", "512Mi"),
         "cpu": service.get("cpu", "1"),
         "max_instances": service.get("max_instances", 1),

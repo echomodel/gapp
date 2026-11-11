@@ -376,6 +376,5 @@ def example() -> str:
 # Keys the example leaves out, and why. A test checks every other schema key appears.
 EXAMPLE_OMITS = {
     "service.env": "older form of the env list",
-    "service.port": "not used: the service listens on $PORT",
     "prerequisites.secrets": "older way to declare secrets; env entries with secret replace it",
 }

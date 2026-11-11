@@ -15,6 +15,9 @@ Breaking changes:
   `web:` command and supplies no server of its own.
 - `gapp init` (and the `gapp_init` MCP tool and the SDK's `init_solution`)
   no longer takes `entrypoint`.
+- `service.port` is removed from gapp.yaml; it was accepted and ignored,
+  since the service listens on `$PORT`, which Cloud Run sets. A gapp.yaml
+  that still has it is refused as having an unknown key.
 
 Other changes:
 
@@ -43,7 +46,7 @@ Other changes:
   App a fleet needs for private repos. A fleet register run that cannot
   read a private repo now gives those steps itself.
 - The gapp.yaml schema descriptions say what each setting does and its
-  default. `service.port` is marked as not used.
+  default.
 
 ## 4.0.0rc10 (pre-release of 4.0.0)
 
