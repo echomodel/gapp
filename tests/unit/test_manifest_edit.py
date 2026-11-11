@@ -103,6 +103,7 @@ def test_set_writes_each_setting_where_gapp_reads_it(tmp_path, monkeypatch, key,
 @pytest.mark.parametrize("key,value", [
     ("public", "maybe"), ("max-instances", "0"), ("max-instances", "two"),
     ("domain", "https://app.example.com"), ("name", "Bad_Name"), ("memory", " "), ("colour", "red"),
+    ("paths", "x"),
 ])
 def test_set_refuses_a_bad_value_and_writes_nothing(tmp_path, monkeypatch, key, value):
     repo = _repo(tmp_path, monkeypatch, files={"gapp.yaml": "name: demo-app\n"})
@@ -143,21 +144,18 @@ def test_unsetting_a_name_that_differs_from_the_repo_is_guarded(tmp_path, monkey
         m.unset_value("name")
 
 
+def test_unset_takes_only_the_settings_set_takes(tmp_path, monkeypatch):
+    repo = _repo(tmp_path, monkeypatch, files={"gapp.yaml": "name: demo-app\nbogus: true\n"})
+    with pytest.raises(m.ManifestChangeRefused, match="Unknown setting"):
+        m.unset_value("bogus")
+    assert "bogus" in _yaml(repo)
+
+
 def test_unset_removes_a_service_key_and_an_empty_section(tmp_path, monkeypatch):
     repo = _repo(tmp_path, monkeypatch, files={"gapp.yaml": "name: demo-app\nservice:\n  memory: 1Gi\n"})
     m.unset_value("memory")
     assert yaml.safe_load(_yaml(repo)) == {"name": "demo-app"}
 
-
-def test_unset_removes_a_key_the_schema_refuses(tmp_path, monkeypatch):
-    repo = _repo(tmp_path, monkeypatch, files={"gapp.yaml": "name: demo-app\npublik: true\n"})
-    with pytest.raises(ManifestValidationError):
-        m.set_value("public", "true")                    # the result would still be invalid
-    m.unset_value("publik")
-    assert yaml.safe_load(_yaml(repo)) == {"name": "demo-app"}
-
-
-# -- env --
 
 def test_env_set_adds_each_kind_and_replaces_by_name(tmp_path, monkeypatch):
     repo = _repo(tmp_path, monkeypatch, files={"gapp.yaml": "name: demo-app\n"})
@@ -192,14 +190,6 @@ def test_env_set_refuses_an_ambiguous_variable(tmp_path, monkeypatch, kwargs):
     assert _yaml(repo) == "name: demo-app\n"
 
 
-def test_env_writes_move_a_legacy_service_env_mapping_into_the_list(tmp_path, monkeypatch):
-    repo = _repo(tmp_path, monkeypatch, files={"gapp.yaml": "name: demo-app\nservice:\n  env:\n    LOG: INFO\n"})
-    r = m.env_set("KEY", secret="api-key")
-    assert "moved service.env" in r["change"]
-    assert yaml.safe_load(_yaml(repo)) == {"name": "demo-app", "env": [
-        {"name": "LOG", "value": "INFO"}, {"name": "KEY", "secret": {"name": "api-key"}}]}
-
-
 def test_env_remove(tmp_path, monkeypatch):
     repo = _repo(tmp_path, monkeypatch, files={"gapp.yaml": "name: demo-app\nenv:\n  - name: LOG\n    value: INFO\n"})
     with pytest.raises(m.ManifestChangeRefused):
@@ -223,12 +213,10 @@ def _schema_paths(model, prefix=""):
     return out
 
 
-def test_the_example_is_valid_and_covers_every_key_it_does_not_omit_on_purpose():
+def test_the_example_is_valid_and_covers_every_key():
     text = m.example()
     validate_manifest(yaml.safe_load(text))
-    covered = [p for p in _schema_paths(Manifest)
-               if not any(p == o or p.startswith(o + ".") for o in m.EXAMPLE_OMITS)]
-    for path in covered:
+    for path in _schema_paths(Manifest):
         assert re.search(rf"(^|\s|#\s+){re.escape(path.rsplit('.', 1)[-1])}:", text, re.M), path
 
 

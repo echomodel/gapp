@@ -63,22 +63,10 @@ class ServiceSpec(_StrictModel):
     memory: str | None = Field(default=None, description="Memory per instance (default 512Mi).")
     cpu: str | None = Field(default=None, description="CPUs per instance (default 1).")
     max_instances: int | None = Field(default=None, description="Most instances Cloud Run runs at once (default 1).")
-    env: dict[str, str] | None = Field(
-        default=None,
-        description="Legacy dict form of env vars. Prefer the top-level 'env' list.",
-    )
-
-
-class PrerequisiteSecret(_StrictModel):
-    description: str | None = Field(default=None, description="Human-readable purpose of the secret.")
 
 
 class Prerequisites(_StrictModel):
     apis: list[str] = Field(default_factory=list, description="GCP APIs `gapp setup` enables besides the ones gapp needs.")
-    secrets: dict[str, PrerequisiteSecret] = Field(
-        default_factory=dict,
-        description="Named prerequisite secrets in Secret Manager.",
-    )
 
 
 class Manifest(_StrictModel):

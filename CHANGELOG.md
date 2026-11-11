@@ -15,6 +15,14 @@ Breaking changes:
   `web:` command and supplies no server of its own.
 - `gapp init` (and the `gapp_init` MCP tool and the SDK's `init_solution`)
   no longer takes `entrypoint`.
+- `gapp_init` (MCP) and the SDK's `init_solution` no longer take `secrets`
+  or `domain`; set them with `gapp manifest` (`gapp_manifest_set`,
+  `gapp_manifest_env_set`). The SDK's `add_secret` and `remove_secret`,
+  which wrote the older form, are removed.
+- The older `service.env` mapping and `prerequisites.secrets` are removed
+  from gapp.yaml. Environment variables are the `env` list, and a secret is
+  an `env` entry with `secret:`. A gapp.yaml that still has either is
+  refused with the key named.
 - `service.port` is removed from gapp.yaml; it was accepted and ignored,
   since the service listens on `$PORT`, which Cloud Run sets. A gapp.yaml
   that still has it is refused as having an unknown key.

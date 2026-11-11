@@ -39,7 +39,7 @@ from gapp.admin.sdk.config import load_config, save_config, get_active_config
 from gapp.admin.sdk.manifest import (
     get_solution_name, load_manifest, save_manifest, get_required_apis,
     get_domain, get_name, get_paths,
-    get_prerequisite_secrets, get_service_config, resolve_env_vars, get_public, get_env_vars
+    get_service_config, resolve_env_vars, get_public, get_env_vars
 )
 from gapp.admin.sdk.models import StatusResult, DeploymentInfo, NextStep, ServiceStatus, DomainStatus
 
@@ -769,7 +769,7 @@ class GappSDK:
 
         tfvars = _build_tfvars(
             name, project_id, image, get_service_config(manifest),
-            get_prerequisite_secrets(manifest), Path(repo_path) / service_path,
+            Path(repo_path) / service_path,
             get_public(manifest), get_domain(manifest),
             bucket_name,
             solution_name=parent_solution or name,
@@ -863,7 +863,7 @@ def _prepare_build_dir(path, image, start, ref="HEAD"):
     return d
 
 
-def _build_tfvars(name, pid, img, cfg, secrets, repo_path, public, domain,
+def _build_tfvars(name, pid, img, cfg, repo_path, public, domain,
                   bucket_name, solution_name=None, labels=None):
     # Every key returned here corresponds to a structurally-required tfvar in
     # modules/cloud-run-service/variables.tf. None of them have defaults, so
@@ -873,11 +873,11 @@ def _build_tfvars(name, pid, img, cfg, secrets, repo_path, public, domain,
     # silent volume strip. Don't reintroduce optional-empty tfvars for things
     # the module structurally needs.
     from gapp.admin.sdk.manifest import resolve_env_vars, get_env_vars, load_manifest
-    env = dict(cfg.get("env", {}))
+    env = {}
     manifest = load_manifest(repo_path)
     env_vars = get_env_vars(manifest)
     sol = solution_name or name
-    secrets_map = {n.upper().replace("-", "_"): n for n in (secrets or {})}
+    secrets_map = {}
     if env_vars:
         for e in resolve_env_vars(env_vars, {"SOLUTION_DATA_PATH": "/mnt/data", "SOLUTION_NAME": name}):
             if "value" in e:

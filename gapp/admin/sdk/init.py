@@ -10,26 +10,19 @@ from gapp.admin.sdk.start import missing, start_method
 from gapp.admin.sdk.manifest_edit import name_source
 
 
-def init_solution(
-    repo_path: Path | None = None,
-    *,
-    secrets: dict | None = None,
-    domain: str | None = None,
-) -> dict:
+def init_solution(repo_path: Path | None = None) -> dict:
     """Initialize a gapp solution in the current repo.
 
     Idempotent — safe to call repeatedly. Creates gapp.yaml on first
-    call, merges provided settings on every call, and checks the file and
-    the app's start method each time. Only provided (non-None) parameters
-    are written; omitted parameters leave existing values unchanged.
+    call, writes the deployment's name into it, and checks the file and
+    the app's start method each time. Every other setting is changed with
+    `gapp manifest` (`gapp.admin.sdk.manifest_edit`).
 
     How the app starts is never written here: it is the app's own
     Procfile (a web: line) or Dockerfile, which init only reports.
 
     Args:
         repo_path: Path to the repo. Defaults to cwd.
-        secrets: Dict of secret names to descriptions for prerequisites.
-        domain: Custom domain to map to the service (e.g., mcp.example.com).
 
     Returns a dict describing what was done:
         name: solution name
@@ -56,18 +49,6 @@ def init_solution(
     exists = (git_root / "gapp.yaml").exists()
     before = load_manifest(git_root) if exists else {}
     manifest = copy.deepcopy(before)
-
-    # Merge provided settings
-    if domain is not None:
-        if domain:
-            manifest["domain"] = domain
-        else:
-            manifest.pop("domain", None)
-
-    if secrets:
-        existing_secrets = manifest.setdefault("prerequisites", {}).setdefault("secrets", {})
-        for name, desc in secrets.items():
-            existing_secrets.setdefault(name, {"description": desc})
 
     solution_name = get_solution_name(manifest, git_root)
     result["name"] = solution_name

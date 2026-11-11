@@ -209,14 +209,13 @@ def set_value(key: str, value: str, *, new_deployment: bool = False, repo_path: 
 
 
 def unset_value(key: str, *, new_deployment: bool = False, repo_path: Path | None = None) -> dict:
-    """Remove one setting from gapp.yaml: a key of SETTINGS, or any other
-    top-level key the file has (so a key the schema refuses can be removed)."""
+    """Remove one setting (a key of SETTINGS) from gapp.yaml."""
     root = _root(repo_path)
     before = _load_for_write(root)
     after = copy.deepcopy(before)
-    path = SETTINGS.get(key) or (key,)
-    if key not in SETTINGS and key not in before:
+    if key not in SETTINGS:
         raise ManifestChangeRefused(f"Unknown setting '{key}'. Settings: {', '.join(SETTINGS)}.")
+    path = SETTINGS[key]
     if len(path) == 1:
         after.pop(path[0], None)
     else:
@@ -226,24 +225,6 @@ def unset_value(key: str, *, new_deployment: bool = False, repo_path: Path | Non
             if not section:
                 after.pop(path[0])
     return _write(root, before, after, new_deployment=new_deployment, change=f"{key} removed")
-
-
-def _env_list(manifest: dict) -> tuple[list, str | None]:
-    """The manifest's env list. A legacy `service.env` mapping is moved into
-    the list first (same variables, same values), since deploy reads the list
-    and ignores the mapping once the list has any entry."""
-    service = manifest.get("service")
-    legacy = service.get("env") if isinstance(service, dict) else None
-    note = None
-    if legacy:
-        env = manifest.setdefault("env", [])
-        have = {e.get("name") for e in env}
-        env.extend({"name": k, "value": str(v)} for k, v in legacy.items() if k not in have)
-        service.pop("env")
-        if not service:
-            manifest.pop("service")
-        note = "moved service.env into the env list"
-    return manifest.setdefault("env", []), note
 
 
 def env_set(name: str, value: str | None = None, *, secret: str | None = None, generate: bool = False,
@@ -281,15 +262,14 @@ def env_set(name: str, value: str | None = None, *, secret: str | None = None, g
     root = _root(repo_path)
     before = _load_for_write(root)
     after = copy.deepcopy(before)
-    env, note = _env_list(after)
+    env = after.setdefault("env", [])
     for i, existing in enumerate(env):
         if existing.get("name") == name:
             env[i] = entry
             break
     else:
         env.append(entry)
-    change = f"{name} = {what}" + (f" ({note})" if note else "")
-    return _write(root, before, after, new_deployment=False, change=change)
+    return _write(root, before, after, new_deployment=False, change=f"{name} = {what}")
 
 
 def env_remove(name: str, *, repo_path: Path | None = None) -> dict:
@@ -298,7 +278,7 @@ def env_remove(name: str, *, repo_path: Path | None = None) -> dict:
     root = _root(repo_path)
     before = _load_for_write(root)
     after = copy.deepcopy(before)
-    env, note = _env_list(after)
+    env = after.get("env") or []
     kept = [e for e in env if e.get("name") != name]
     if len(kept) == len(env):
         raise ManifestChangeRefused(f"gapp.yaml has no variable '{name}'.")
@@ -371,10 +351,3 @@ def example() -> str:
         "#   - services/worker",
     ]
     return "\n".join(lines) + "\n"
-
-
-# Keys the example leaves out, and why. A test checks every other schema key appears.
-EXAMPLE_OMITS = {
-    "service.env": "older form of the env list",
-    "prerequisites.secrets": "older way to declare secrets; env entries with secret replace it",
-}

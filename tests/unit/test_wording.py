@@ -36,8 +36,6 @@ def test_deploy_outside_an_app_folder(tmp_path, monkeypatch):
     lambda: sec_mod.list_secrets(),
     lambda: sec_mod.get_secret("k"),
     lambda: sec_mod.set_secret("k", "v"),
-    lambda: sec_mod.add_secret("k", "d"),
-    lambda: sec_mod.remove_secret("k"),
 ])
 def test_secrets_outside_an_app_folder(call, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)

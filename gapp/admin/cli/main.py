@@ -924,9 +924,9 @@ def manifest_set_cmd(key, value, new_deployment, json_out):
 def manifest_unset_cmd(key, new_deployment, json_out):
     """Remove KEY from gapp.yaml, so it takes its default.
 
-    KEY is a setting `gapp manifest set` takes, or any other top-level key
-    the file has. Unsetting name makes the name the repo's again, which
-    needs --new-deployment if that differs.
+    KEY is one of the settings `gapp manifest set` takes. Unsetting name
+    makes the name the repo's again, which needs --new-deployment if that
+    differs.
     """
     from gapp.admin.sdk.manifest_edit import unset_value
     _manifest_write(unset_value, json_out, key, new_deployment=new_deployment)

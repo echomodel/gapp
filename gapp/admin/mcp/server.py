@@ -90,8 +90,7 @@ def gapp_manifest_unset(key: str, new_deployment: bool = False) -> dict:
     """Remove one setting from the current repo's gapp.yaml, so it takes its default.
 
     Args:
-        key: A setting gapp_manifest_set takes, or any other top-level key the
-            file has.
+        key: name, public, domain, memory, cpu or max-instances.
         new_deployment: Needed when unsetting name changes the deployment's
             name (see gapp_manifest_set).
     """
@@ -153,34 +152,24 @@ def gapp_user(account: str | None = None) -> dict:
 
 
 @_tool()
-def gapp_init(
-    secrets: dict | None = None,
-    domain: str | None = None,
-) -> dict:
-    """Initialize or configure a gapp solution in the current repo.
+def gapp_init() -> dict:
+    """Initialize a gapp app in the current repo: write gapp.yaml with the deployment's name.
 
-    Idempotent. Creates gapp.yaml on first call. Also used to update
-    gapp configuration settings later, e.g. add secrets or set a custom
-    domain. Only non-None parameters are written; omitted parameters leave
-    existing values unchanged.
+    Idempotent. The name is gapp.yaml's if it has one, else the origin
+    repo's, else the folder's (`name_source` says which); init writes it so
+    it stays the same in any clone. The name keys the service, data bucket
+    and secrets. Every other setting (public, domain, environment variables,
+    secrets, sizing) is set with gapp_manifest_set and gapp_manifest_env_set;
+    gapp_manifest shows what is set now.
 
     How the app starts is not set here: it is the app's own Procfile (a
     `web:` line that serves HTTP on $PORT) or Dockerfile. The result's
     `start` says which one gapp found; with neither, `next_step` says the
     app isn't deployable yet and how to add one. Write the Procfile only
     after confirming its command with the user.
-
-    Args:
-        secrets: Dict of secret name to description for prerequisites.
-        domain: Custom domain to map to the service (e.g., mcp.example.com).
-            Requires a CNAME record pointing to ghs.googlehosted.com.
-            Pass empty string to remove an existing domain mapping.
     """
     from gapp.admin.sdk.init import init_solution
-    return init_solution(
-        secrets=secrets,
-        domain=domain,
-    )
+    return init_solution()
 
 
 @_tool()

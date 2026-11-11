@@ -101,11 +101,6 @@ def _origin_repo_name(repo_path: Path) -> str | None:
     return tail or None
 
 
-def get_prerequisite_secrets(manifest: dict) -> dict:
-    """Return prerequisite secrets from the manifest."""
-    return manifest.get("prerequisites", {}).get("secrets", {})
-
-
 def get_required_apis(manifest: dict) -> list:
     """Return required GCP APIs from the manifest."""
     return manifest.get("prerequisites", {}).get("apis", [])
@@ -118,43 +113,13 @@ def get_service_config(manifest: dict) -> dict:
         "memory": service.get("memory", "512Mi"),
         "cpu": service.get("cpu", "1"),
         "max_instances": service.get("max_instances", 1),
-        "env": service.get("env", {}),
     }
 
 
 def get_env_vars(manifest: dict) -> list[dict]:
-    """Return env var declarations from the manifest.
-
-    Supports both the new `env` section and the legacy `service.env` dict.
-    New format:
-        env:
-          - name: LOG_LEVEL
-            value: INFO
-          - name: API_TOKEN
-            secret:
-              name: api-token
-
-    Legacy format (service.env dict):
-        service:
-          env:
-            LOG_LEVEL: INFO
-
-    Returns a normalized list of dicts, each with:
-        name: str
-        value: str | None (for plain env vars)
-        secret: dict | bool | None (for secret-backed env vars)
-    """
-    # New format
-    env_list = manifest.get("env", [])
-    if env_list:
-        return env_list
-
-    # Legacy: service.env dict → normalize to list
-    legacy = manifest.get("service", {}).get("env", {})
-    if legacy and isinstance(legacy, dict):
-        return [{"name": k, "value": v} for k, v in legacy.items()]
-
-    return []
+    """Return the env var declarations from the manifest's `env` list:
+    dicts with `name` and either `value` or `secret` ({name, generate})."""
+    return manifest.get("env") or []
 
 
 def get_domain(manifest: dict) -> str | None:
