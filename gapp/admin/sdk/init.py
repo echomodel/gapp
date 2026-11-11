@@ -1,5 +1,6 @@
 """gapp init — local project setup."""
 
+import copy
 import subprocess
 from pathlib import Path
 
@@ -47,46 +48,37 @@ def init_solution(
 
     result = {"name": None, "manifest_status": None, "topic_status": None}
 
-    # Ensure gapp.yaml exists
-    manifest_path = git_root / "gapp.yaml"
-    if manifest_path.exists():
-        manifest = load_manifest(git_root)
-        result["manifest_status"] = "unchanged"
-    else:
-        manifest = {}
-        result["manifest_status"] = "created"
+    # gapp.yaml is written once, at the end, and only when its content
+    # changes: a run that changes nothing leaves the file as it is.
+    exists = (git_root / "gapp.yaml").exists()
+    before = load_manifest(git_root) if exists else {}
+    manifest = copy.deepcopy(before)
 
     # Merge provided settings
-    changed = False
-
-    if domain is not None and manifest.get("domain") != domain:
+    if domain is not None:
         if domain:
             manifest["domain"] = domain
         else:
             manifest.pop("domain", None)
-        changed = True
 
-    if secrets is not None:
-        prereqs = manifest.setdefault("prerequisites", {})
-        existing_secrets = prereqs.setdefault("secrets", {})
+    if secrets:
+        existing_secrets = manifest.setdefault("prerequisites", {}).setdefault("secrets", {})
         for name, desc in secrets.items():
-            if name not in existing_secrets:
-                existing_secrets[name] = {"description": desc}
-                changed = True
+            existing_secrets.setdefault(name, {"description": desc})
 
-    if changed or result["manifest_status"] == "created":
-        save_manifest(git_root, manifest)
-        if result["manifest_status"] != "created":
-            result["manifest_status"] = "updated"
-
-    manifest = load_manifest(git_root)
     solution_name = get_solution_name(manifest, git_root)
     result["name"] = solution_name
-
     if manifest.get("name") != solution_name:
-        manifest["name"] = solution_name
+        manifest = {"name": solution_name, **{k: v for k, v in manifest.items() if k != "name"}}
+
+    if not exists:
         save_manifest(git_root, manifest)
-        result["manifest_status"] = "updated" if result["manifest_status"] == "unchanged" else "created"
+        result["manifest_status"] = "created"
+    elif manifest != before:
+        save_manifest(git_root, manifest)
+        result["manifest_status"] = "updated"
+    else:
+        result["manifest_status"] = "unchanged"
 
     # Add GitHub topic
     result["topic_status"] = _add_github_topic(git_root)

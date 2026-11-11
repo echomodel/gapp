@@ -31,11 +31,26 @@ def load_manifest(repo_path: Path, strict: bool = True) -> dict:
     return data
 
 
+class _ManifestDumper(yaml.SafeDumper):
+    """gapp.yaml's written style: list items indented under their key, and
+    double quotes where a value needs quoting, as the docs show it."""
+
+    def increase_indent(self, flow=False, indentless=False):
+        return super().increase_indent(flow, False)
+
+    def choose_scalar_style(self):
+        style = super().choose_scalar_style()
+        return '"' if style == "'" else style
+
+
+def dump_manifest(manifest: dict) -> str:
+    """The text gapp writes for a manifest, keys in their given order."""
+    return yaml.dump(manifest, Dumper=_ManifestDumper, default_flow_style=False, sort_keys=False)
+
+
 def save_manifest(repo_path: Path, manifest: dict) -> None:
     """Write manifest dict back to gapp.yaml."""
-    manifest_path = repo_path / "gapp.yaml"
-    with open(manifest_path, "w") as f:
-        yaml.dump(manifest, f, default_flow_style=False, sort_keys=False)
+    (repo_path / "gapp.yaml").write_text(dump_manifest(manifest))
 
 
 def get_paths(manifest: dict) -> list[str]:
