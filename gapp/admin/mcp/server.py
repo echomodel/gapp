@@ -9,7 +9,7 @@ from functools import wraps
 
 from mcp.server.fastmcp import FastMCP
 
-from gapp.admin.sdk.schema import ManifestValidationError
+from gapp.admin.sdk.schema import ManifestUnreadable, ManifestValidationError
 
 mcp = FastMCP("gapp-admin")
 
@@ -19,7 +19,7 @@ def _catch_manifest_errors(fn):
     def wrapper(*args, **kwargs):
         try:
             return fn(*args, **kwargs)
-        except ManifestValidationError as e:
+        except (ManifestValidationError, ManifestUnreadable) as e:
             return e.to_dict()
     return wrapper
 
@@ -32,20 +32,24 @@ def _tool():
 
 
 @_tool()
-def gapp_schema(example: bool = False) -> dict:
+def gapp_schema() -> dict:
     """Return the live gapp.yaml JSON Schema (from the Pydantic model).
 
     Use this to see every valid field, its type, whether it's required,
     and its description. This is the single source of truth; all
-    validation and error responses derive from the same model. With
-    example=true, returns {"example": <annotated gapp.yaml text>} instead:
-    every key, each with a comment saying what it does.
+    validation and error responses derive from the same model. For a
+    commented gapp.yaml, use gapp_manifest_example.
     """
-    if example:
-        from gapp.admin.sdk.manifest_edit import example as example_text
-        return {"example": example_text()}
     from gapp.admin.sdk.schema import get_schema
     return get_schema()
+
+
+@_tool()
+def gapp_manifest_example() -> dict:
+    """Return {"example": <text>}: an annotated gapp.yaml with every key, each
+    commented with what it does and its default. Valid YAML."""
+    from gapp.admin.sdk.manifest_edit import example as example_text
+    return {"example": example_text()}
 
 
 def _manifest_call(fn, *args, **kwargs) -> dict:
@@ -57,7 +61,7 @@ def _manifest_call(fn, *args, **kwargs) -> dict:
 
 
 @_tool()
-def gapp_manifest() -> dict:
+def gapp_manifest_show() -> dict:
     """Show the current repo's gapp.yaml settings, each with what it means.
 
     Covers every setting, set or not: name (and where it comes from),
@@ -152,7 +156,7 @@ def gapp_user(account: str | None = None) -> dict:
 
 
 @_tool()
-def gapp_init() -> dict:
+def gapp_init(fresh: bool = False) -> dict:
     """Initialize a gapp app in the current repo: write gapp.yaml with the deployment's name.
 
     Idempotent. The name is gapp.yaml's if it has one, else the origin
@@ -160,16 +164,25 @@ def gapp_init() -> dict:
     it stays the same in any clone. The name keys the service, data bucket
     and secrets. Every other setting (public, domain, environment variables,
     secrets, sizing) is set with gapp_manifest_set and gapp_manifest_env_set;
-    gapp_manifest shows what is set now.
+    gapp_manifest_show shows what is set now.
 
     How the app starts is not set here: it is the app's own Procfile (a
     `web:` line that serves HTTP on $PORT) or Dockerfile. The result's
     `start` says which one gapp found; with neither, `next_step` says the
     app isn't deployable yet and how to add one. Write the Procfile only
     after confirming its command with the user.
+
+    A gapp.yaml gapp can't read, or with settings it doesn't accept, is
+    never changed; the error says what's wrong. fresh=true starts over:
+    the current file is kept as gapp.yaml.bak and a new one holds only the
+    name. Show the user the error and get their yes before passing fresh;
+    fixing the named lines keeps their other settings.
+
+    Args:
+        fresh: Replace gapp.yaml with a new one, keeping the old as a backup.
     """
     from gapp.admin.sdk.init import init_solution
-    return init_solution()
+    return init_solution(fresh=fresh)
 
 
 @_tool()

@@ -1761,8 +1761,9 @@ def runner_overlay(path: str, overlay_json: str | None, domain: str | None = Non
         overlay["domain"] = domain
     base = {}
     if os.path.exists(path):
+        from gapp.admin.sdk.manifest import parse_manifest_text
         with open(path) as f:
-            base = yaml.safe_load(f) or {}
+            base = parse_manifest_text(f.read())
     merged = fleet.merge_manifest(base, overlay)
     with open(path, "w") as f:
         yaml.safe_dump(merged, f, sort_keys=False, default_flow_style=False)

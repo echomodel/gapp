@@ -239,22 +239,144 @@ def test_cli_init_says_the_name_and_where_settings_live(tmp_path, monkeypatch):
     assert "makes a new deployment" in out and "gapp manifest" in out
 
 
+def test_cli_manifest_alone_lists_its_commands(tmp_path, monkeypatch):
+    _repo(tmp_path, monkeypatch, files={"gapp.yaml": "name: demo-app\n"})
+    out = CliRunner().invoke(main, ["manifest"]).output
+    for command in ("show", "set", "unset", "env", "example", "schema"):
+        assert re.search(rf"^  {command}\b", out, re.M), command
+
+
 def test_cli_manifest_shows_and_changes_settings(tmp_path, monkeypatch):
     repo = _repo(tmp_path, monkeypatch, files={"gapp.yaml": "name: demo-app\n"})
     runner = CliRunner()
-    shown = runner.invoke(main, ["manifest"])
+    shown = runner.invoke(main, ["manifest", "show"])
     assert shown.exit_code == 0 and "the .run.app URL only" in shown.output
+    assert "Change: gapp manifest set|unset KEY" in shown.output and "gapp manifest example" in shown.output
     changed = runner.invoke(main, ["manifest", "env", "set", "SIGN", "--secret", "signing-key", "--generate"])
     assert changed.exit_code == 0 and "Changed: SIGN = secret 'signing-key', generated" in changed.output
     refused = runner.invoke(main, ["manifest", "set", "name", "other"])
     assert refused.exit_code == 1 and "Not changed" in refused.output
     assert yaml.safe_load(_yaml(repo))["name"] == "demo-app"
-    as_json = runner.invoke(main, ["manifest", "--json"])
-    assert json.loads(as_json.output)["env"][0]["name"] == "SIGN"
+    as_json = runner.invoke(main, ["manifest", "show", "--json"])
+    assert json.loads(as_json.output)["env"][0]["name"] == "SIGN"      # nothing but the JSON
 
 
-def test_cli_schema_example_prints_the_example():
-    assert CliRunner().invoke(main, ["manifest", "schema", "--example"]).output == m.example()
+def test_cli_schema_and_example_print_only_their_content():
+    runner = CliRunner()
+    assert runner.invoke(main, ["manifest", "example"]).output == m.example()
+    assert json.loads(runner.invoke(main, ["manifest", "schema"]).output) == Manifest.model_json_schema()
+
+
+# -- a gapp.yaml gapp can't use --
+
+BAD_YAML = "name: demo-app\nenv:\n  - name: A\n   value: b\n"
+
+
+@pytest.mark.parametrize("args", [["init"], ["manifest", "show"], ["manifest", "set", "public", "true"],
+                                  ["secrets", "list"], ["deploy", "--dry-run"]])
+def test_unreadable_yaml_gives_one_plain_message_and_changes_nothing(tmp_path, monkeypatch, args):
+    repo = _repo(tmp_path, monkeypatch, files={"gapp.yaml": BAD_YAML})
+    result = _run_entry(args)
+    assert result["code"] == 1
+    assert "gapp.yaml can't be read as YAML: line 4, column 4" in result["err"]
+    assert "gapp init --fresh" in result["err"] and "Traceback" not in result["err"]
+    assert _yaml(repo) == BAD_YAML
+
+
+@pytest.mark.parametrize("args", [["init"], ["secrets", "list"], ["manifest", "set", "public", "true"]])
+def test_schema_problems_give_one_plain_message_and_change_nothing(tmp_path, monkeypatch, args):
+    repo = _repo(tmp_path, monkeypatch, files={"gapp.yaml": "name: demo-app\npublik: true\n"})
+    result = _run_entry(args)
+    assert result["code"] == 1
+    assert "publik: unknown field" in result["err"] and "gapp init --fresh" in result["err"]
+    assert not result["err"].lstrip().startswith("{")                 # not a JSON dump
+    assert _yaml(repo) == "name: demo-app\npublik: true\n"
+
+
+def test_show_names_schema_problems_and_the_way_out(tmp_path, monkeypatch):
+    _repo(tmp_path, monkeypatch, files={"gapp.yaml": "name: demo-app\npublik: true\n"})
+    out = CliRunner().invoke(main, ["manifest", "show"]).output
+    assert "publik: unknown field" in out and "gapp init --fresh" in out
+
+
+def _run_entry(args):
+    """Run the installed entry point's code path (cli_entry), capturing its exit and stderr."""
+    import contextlib
+    import io
+    import sys
+    from gapp.admin.cli.main import cli_entry
+    err, out = io.StringIO(), io.StringIO()
+    argv = sys.argv
+    sys.argv = ["gapp", *args]
+    code = 0
+    try:
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
+            cli_entry()
+    except SystemExit as e:
+        code = e.code if isinstance(e.code, int) else 1
+    finally:
+        sys.argv = argv
+    return {"code": code, "err": err.getvalue(), "out": out.getvalue()}
+
+
+def test_init_fresh_keeps_the_old_file_and_its_name(tmp_path, monkeypatch):
+    repo = _repo(tmp_path, monkeypatch, files={"gapp.yaml": "name: custom\npublik: true\n"})
+    res = init_solution(fresh=True)
+    assert res["fresh_result"] == {"backup": "gapp.yaml.bak", "old_name": "custom", "old_name_unknown": False}
+    assert res["manifest_status"] == "replaced" and res["name"] == "custom"
+    assert yaml.safe_load(_yaml(repo)) == {"name": "custom"}
+    assert (repo / "gapp.yaml.bak").read_text() == "name: custom\npublik: true\n"
+
+
+def test_init_fresh_reads_the_name_line_of_a_file_that_isnt_yaml(tmp_path, monkeypatch):
+    repo = _repo(tmp_path, monkeypatch, files={"gapp.yaml": "name: custom\n" + BAD_YAML.split("\n", 1)[1]})
+    res = init_solution(fresh=True)
+    assert res["name"] == "custom" and res["fresh_result"]["old_name_unknown"] is False
+    assert (repo / "gapp.yaml.bak").exists()
+
+
+def test_init_fresh_says_when_the_old_name_is_unknown(tmp_path, monkeypatch):
+    _repo(tmp_path, monkeypatch, files={"gapp.yaml": "env:\n  - name: A\n   value: b\n"})
+    out = CliRunner().invoke(main, ["init", "--fresh"]).output
+    assert "Kept the old file as gapp.yaml.bak." in out
+    assert "the old file's name couldn't be read" in out and "gapp manifest set name <name> --new-deployment" in out
+
+
+def test_init_fresh_numbers_backups_and_never_deletes(tmp_path, monkeypatch):
+    repo = _repo(tmp_path, monkeypatch, files={"gapp.yaml": "name: demo-app\n", "gapp.yaml.bak": "older\n"})
+    assert init_solution(fresh=True)["fresh_result"]["backup"] == "gapp.yaml.bak.1"
+    assert init_solution(fresh=True)["fresh_result"]["backup"] == "gapp.yaml.bak.2"
+    assert (repo / "gapp.yaml.bak").read_text() == "older\n"
+
+
+def test_init_fresh_without_a_file_is_a_plain_init(tmp_path, monkeypatch):
+    _repo(tmp_path, monkeypatch)
+    res = init_solution(fresh=True)
+    assert res["fresh_result"] is None and res["manifest_status"] == "created"
+
+
+def test_init_fresh_asks_nothing(tmp_path, monkeypatch):
+    _repo(tmp_path, monkeypatch, files={"gapp.yaml": BAD_YAML})
+    result = CliRunner().invoke(main, ["init", "--fresh"], input="")
+    assert result.exit_code == 0 and "[y/N]" not in result.output
+
+
+def test_mcp_tools_report_a_broken_file_as_data(tmp_path, monkeypatch):
+    from gapp.admin.mcp import server
+    repo = _repo(tmp_path, monkeypatch, files={"gapp.yaml": BAD_YAML})
+    assert server.gapp_manifest_show()["error"] == "manifest_unreadable"
+    assert server.gapp_init()["error"] == "manifest_unreadable"
+    assert server.gapp_init(fresh=True)["fresh_result"]["backup"] == "gapp.yaml.bak"
+    assert (repo / "gapp.yaml.bak").read_text() == BAD_YAML
+
+
+def test_the_ci_overlay_step_reports_a_broken_repo_file(tmp_path):
+    from gapp.admin.sdk.ci import runner_overlay
+    from gapp.admin.sdk.schema import ManifestUnreadable
+    path = tmp_path / "gapp.yaml"
+    path.write_text(BAD_YAML)
+    with pytest.raises(ManifestUnreadable, match="line 4, column 4"):
+        runner_overlay(str(path), "{}")
 
 
 def _cli_help(cmd, ctx=None):

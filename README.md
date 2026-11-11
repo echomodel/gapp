@@ -40,7 +40,7 @@ Because `gapp` calculates infrastructure locations deterministically, you can sw
 Get your app live in a few steps.
 ```bash
 gapp init                          # Scaffold the local manifest (gapp.yaml)
-gapp manifest                      # See and change its settings: public access, domain, env, secrets
+gapp manifest show                 # See its settings; gapp manifest set / env set change them
 gapp setup --project <project-id>  # Prep the project and register it as home
 gapp deploy                        # Build and push your first version live
 ```
@@ -59,7 +59,7 @@ With both, the Dockerfile wins and the Procfile is ignored. With neither, `gapp 
 **Configuring the deployment: gapp.yaml.** Everything else about the deployment is in the app's `gapp.yaml`, and the `gapp manifest` commands read and change it, so nothing needs editing by hand:
 
 ```bash
-gapp manifest                                       # this repo's settings, each with what it means
+gapp manifest show                                  # this repo's settings, each with what it means
 gapp manifest set public true                       # also: name, domain, memory, cpu, max-instances
 gapp manifest unset domain
 gapp manifest env set LOG_LEVEL INFO                # a plain value
@@ -67,10 +67,20 @@ gapp manifest env set API_KEY --secret api-key      # read from a secret; then g
 gapp manifest env set SIGNING_KEY --secret signing-key --generate   # gapp generates the value
 gapp manifest env set APP_USERS_PATH --data-path users              # the data volume, kept across deploys
 gapp manifest env remove LOG_LEVEL
-gapp manifest schema --example                      # the annotated file below
+gapp manifest example                               # the annotated file below
+gapp manifest schema                                # the JSON Schema, for tools
 ```
 
-Each change is checked against the schema and written only when the file changes. `gapp init` writes the deployment's name, the origin repo's name unless gapp.yaml already has one, so it stays the same wherever the repo is cloned. The name keys the service, data bucket and secrets, so `gapp manifest set name` refuses a different name unless you pass `--new-deployment`. Every key gapp.yaml takes, as `gapp manifest schema --example` prints it:
+Each change is checked against the schema and written only when the file changes. `gapp manifest` on its own lists these commands.
+
+**The name.** `gapp init` writes the deployment's name into gapp.yaml: the origin repo's name, else the folder's, unless gapp.yaml already has one. It prints the name and where it came from. Writing it keeps the name the same in any clone, including one with no origin remote. The name keys the Cloud Run service, the data bucket and the secrets, so a different name is a new, empty deployment while the old one keeps its URL and data. That's why `gapp manifest set name` refuses a different name unless you pass `--new-deployment`. CI deploys don't use this name: a fleet deployment's id names its resources.
+
+**When gapp.yaml is broken.** If gapp.yaml isn't valid YAML, or has a setting gapp doesn't accept, every command that reads it stops with the same message: the line and column, or each key and what's wrong with it. Nothing changes the file. There are two ways out:
+
+- Fix the lines it names.
+- Start over: `gapp init --fresh` moves the file to `gapp.yaml.bak` (or `.bak.1`, `.bak.2`, ...) and writes a new one holding only the name, then you set what you need with `gapp manifest`. It keeps the old file's name when it can read it, and says so when it can't. It asks nothing: the flag is the instruction, and nothing is deleted.
+
+Every key gapp.yaml takes, as `gapp manifest example` prints it:
 
 ```yaml
 # gapp.yaml: every key is optional.
@@ -165,7 +175,7 @@ When a name is on more than one project, `gapp deploy` and `gapp status` need `-
 Known limits:
 - A deploy doesn't record which repo or commit it came from, so gapp can't warn before replacing a deployment built from a different repo.
 - There's no plan-only step that previews infrastructure changes before a deploy applies them.
-- In CI, the app's repo must have a gapp.yaml; the fleet entry adds only the domain. Deploying a repo without a gapp.yaml isn't supported yet.
+- In CI, the app's repo must have a gapp.yaml; the fleet entry adds only the domain. Deploying a repo without a gapp.yaml isn't supported yet. A deploy run whose repo has a broken gapp.yaml fails with the message above; fix it in the app's repo.
 - gapp 4 doesn't see deployments made by gapp 3 until each is redeployed once with gapp 4.
 
 ### **5. Teams and Shared Organizations**
@@ -270,10 +280,12 @@ gapp deploy --project <project-id>
 *   `gapp secrets list [<name>]`: Show declared secrets, deploy-readiness, and remediation hints. See [Secrets, ownership, and recovery scenarios](docs/SECRETS.md) for the full label model and conflict-resolution guide.
 *   `gapp secrets get <secret-name>`: Fetch a secret value or its hash + length.
 *   `gapp secrets set <secret-name> [<value>]`: Store secrets in GCP Secret Manager.
-*   `gapp manifest`: Show this repo's gapp.yaml settings, set or not, each with what it means.
+*   `gapp init [--fresh]`: Write gapp.yaml with the deployment's name and report how the app starts. `--fresh` starts over, keeping the current file as `gapp.yaml.bak`.
+*   `gapp manifest show [--json]`: This repo's gapp.yaml settings, set or not, each with what it means.
 *   `gapp manifest set <key> <value>` / `unset <key>`: Change `name`, `public`, `domain`, `memory`, `cpu` or `max-instances`. Changing the name needs `--new-deployment`.
 *   `gapp manifest env set <NAME> <value>` (or `--secret <secret> [--generate]`, or `--data-path [<subfolder>]`) / `env remove <NAME>`: The service's environment variables.
-*   `gapp manifest schema [--example]`: The JSON Schema for `gapp.yaml`, or an annotated gapp.yaml with every key.
+*   `gapp manifest example`: An annotated gapp.yaml with every key (valid YAML, nothing else).
+*   `gapp manifest schema`: The JSON Schema for `gapp.yaml` (nothing else on stdout).
 
 ### **CI/CD (`gapp ci`)**
 *   `gapp ci init [<owner>/<repo>] [--create] [--owner <org>]`: Show, find, set or create your fleet repo; the only command that sets it. Setting an existing repo installs or updates gapp's three workflows (deploy, register, status) and creates `gapp/deployments.yaml` (never overwritten); `--create` makes a new private, tagged fleet repo first.

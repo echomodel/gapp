@@ -35,17 +35,22 @@ Other changes:
   message when an app has no start method.
 - `gapp init` says "already set" for a repo that already has the
   gapp-solution topic (was "already_set").
-- `gapp manifest` shows the repo's gapp.yaml settings, set or not, each
-  with what it means. `gapp manifest set|unset` changes `name`, `public`,
+- `gapp manifest show` shows the repo's gapp.yaml settings, set or not, each
+  with what it means; bare `gapp manifest` lists its commands. `gapp manifest set|unset` changes `name`, `public`,
   `domain`, `memory`, `cpu` and `max-instances`, and `gapp manifest env
   set|remove` the environment variables (a plain value, `--secret`
   with `--generate`, or `--data-path`). Each change is validated and
   written only when the file changes. A change to the deployment's name
-  needs `--new-deployment`. MCP: `gapp_manifest`, `gapp_manifest_set`,
+  needs `--new-deployment`. MCP: `gapp_manifest_show`, `gapp_manifest_set`,
   `gapp_manifest_unset`, `gapp_manifest_env_set`,
   `gapp_manifest_env_remove`.
-- `gapp manifest schema --example` (MCP `gapp_schema(example=True)`)
-  prints an annotated gapp.yaml with every key.
+- `gapp manifest example` (MCP `gapp_manifest_example`) prints an
+  annotated gapp.yaml with every key.
+- A gapp.yaml that isn't valid YAML, or has settings gapp doesn't accept,
+  now stops every command with one plain message naming the line or keys
+  and the two ways out (was a traceback, or a JSON dump of the whole
+  schema). `gapp init --fresh` (MCP `gapp_init(fresh=True)`) starts over:
+  the file is kept as gapp.yaml.bak and a new one holds only the name.
 - `gapp init` says what the deployment's name is, where it came from,
   and that changing it later makes a new deployment.
 - The help for `gapp`, `gapp status`, `gapp secrets` and `gapp ci init`

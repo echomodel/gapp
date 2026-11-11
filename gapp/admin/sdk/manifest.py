@@ -4,7 +4,7 @@ from pathlib import Path
 
 import yaml
 
-from gapp.admin.sdk.schema import ManifestValidationError, validate_manifest
+from gapp.admin.sdk.schema import ManifestUnreadable, ManifestValidationError, validate_manifest
 
 
 def load_manifest(repo_path: Path, strict: bool = True) -> dict:
@@ -24,10 +24,26 @@ def load_manifest(repo_path: Path, strict: bool = True) -> dict:
     manifest_path = repo_path / "gapp.yaml"
     if not manifest_path.exists():
         return {}
-    with open(manifest_path) as f:
-        data = yaml.safe_load(f) or {}
+    data = parse_manifest_text(manifest_path.read_text())
     if strict:
         validate_manifest(data)
+    return data
+
+
+def parse_manifest_text(text: str) -> dict:
+    """Parse gapp.yaml's text. Raises ManifestUnreadable (with line and
+    column) for text that isn't YAML or isn't a mapping of keys."""
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError as e:
+        mark = getattr(e, "problem_mark", None)
+        problem = getattr(e, "problem", None) or str(e).splitlines()[0]
+        raise ManifestUnreadable(problem, mark.line + 1 if mark else None,
+                                 mark.column + 1 if mark else None) from None
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        raise ManifestUnreadable("the file is not a list of key: value settings")
     return data
 
 

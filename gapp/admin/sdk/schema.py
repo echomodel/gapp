@@ -80,6 +80,26 @@ class Manifest(_StrictModel):
     prerequisites: Prerequisites | None = Field(default=None, description="Extra GCP APIs to enable at setup.")
 
 
+RECOVERY = (
+    "Fix it in gapp.yaml, or start over in the app's repo with `gapp init --fresh`\n"
+    "(it keeps the current file as gapp.yaml.bak). Every key gapp.yaml takes: `gapp manifest example`."
+)
+
+
+class ManifestUnreadable(ValueError):
+    """Raised when gapp.yaml is not valid YAML, with where and why."""
+
+    def __init__(self, problem: str, line: int | None = None, column: int | None = None):
+        self.problem, self.line, self.column = problem, line, column
+        where = f"line {line}, column {column}: " if line else ""
+        super().__init__(f"gapp.yaml can't be read as YAML: {where}{problem}.\n{RECOVERY}")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"error": "manifest_unreadable", "message": str(self),
+                "line": self.line, "column": self.column, "problem": self.problem,
+                "hint": RECOVERY}
+
+
 class ManifestValidationError(ValueError):
     """Raised when gapp.yaml fails schema validation.
 
@@ -96,20 +116,15 @@ class ManifestValidationError(ValueError):
             "error": "manifest_invalid",
             "message": "gapp.yaml failed schema validation.",
             "issues": self.issues,
-            "hint": (
-                "Fix each issue above. Run `gapp manifest schema` to see every valid field "
-                "with its type, description, and whether it's required. The `schema` "
-                "field below is the same content, embedded for convenience."
-            ),
+            "hint": RECOVERY + " The `schema` field below is the JSON Schema, embedded for convenience.",
             "schema": Manifest.model_json_schema(),
         }
 
     def _format_text(self) -> str:
-        lines = ["gapp.yaml is invalid:"]
+        lines = ["gapp.yaml has settings gapp doesn't accept:"]
         for issue in self.issues:
             lines.append(f"  {issue['path']}: {issue['message']}")
-        lines.append("")
-        lines.append("Run `gapp manifest schema` for the full list of valid fields.")
+        lines.append(RECOVERY)
         return "\n".join(lines)
 
 

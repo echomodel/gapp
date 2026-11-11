@@ -19,7 +19,7 @@ def main(ctx):
     \b
     Deploy from this machine, in the app's repo:
       gapp init                          write gapp.yaml; reports how the app starts
-      gapp manifest                      see and change its settings (public, domain, env, secrets)
+      gapp manifest show                 its settings; gapp manifest set/env set to change them
       gapp setup --project <project-id>  once per project: APIs, data bucket
       gapp secrets set <secret>          each secret the app declares without --generate
       gapp deploy                        build and deploy; prints the URL
@@ -101,8 +101,11 @@ def config_profile(sdk: GappSDK, name, list_profiles):
 # -- gapp init/setup/deploy --
 
 @main.command()
+@click.option("--fresh", is_flag=True,
+              help="Start over: keep the current gapp.yaml as gapp.yaml.bak and write a new one with only the name. "
+                   "Works on a file gapp can't read or that fails the schema.")
 @click.pass_obj
-def init(sdk: GappSDK):
+def init(sdk: GappSDK, fresh):
     """Write gapp.yaml for this repo and register the solution locally.
 
     Needs no cloud login. Idempotent: re-run it to check gapp.yaml and the
@@ -113,21 +116,34 @@ def init(sdk: GappSDK):
     stays the same wherever the repo is cloned. The name keys the service,
     data bucket and secrets, so a different name is a different deployment.
     Everything else (public access, domain, environment variables, secrets,
-    sizing) is set with `gapp manifest`, which also shows what is set now.
-    Next: gapp setup --project <project-id>.
+    sizing) is set with `gapp manifest set` and `gapp manifest env set`; `gapp manifest show` shows what is
+    set now.
+
+    A gapp.yaml gapp can't read, or one with settings it doesn't accept, is
+    never changed: init says what's wrong. To start over instead of fixing
+    it, `gapp init --fresh` moves it to gapp.yaml.bak and writes a new one
+    with the deployment's name (the old file's if it can be read). Nothing
+    is deleted. Next: gapp setup --project <project-id>.
     """
     from gapp.admin.sdk.init import init_solution
     try:
-        result = init_solution()
+        result = init_solution(fresh=fresh)
     except RuntimeError as e:
         click.echo(f"  Error: {e}", err=True)
         raise SystemExit(1)
     click.echo()
     click.echo(f"  Initialized gapp app: {result['name']}")
+    if fr := result.get("fresh_result"):
+        click.echo(f"    Kept the old file as {fr['backup']}.")
     click.echo(f"    gapp.yaml {result['manifest_status']} ✓")
-    source = {"gapp.yaml": "from gapp.yaml",
+    source = {"gapp.yaml": "from the old file" if fr else "from gapp.yaml",
               "repo": "the origin repo's name, now written to gapp.yaml",
               "folder": "the folder's name (no origin remote), now written to gapp.yaml"}[result["name_source"]]
+    if fr and fr["old_name_unknown"]:
+        source += (f"; the old file's name couldn't be read. If {fr['backup']} names the deployment "
+                   "differently, put that name back with: gapp manifest set name <name> --new-deployment "
+                   "(the flag is needed because this file's name changes; it points the file back at that "
+                   "existing deployment)")
     click.echo(f"    Name: {result['name']} ({source})")
     click.echo("      The name keys the service, data bucket and secrets; changing it later makes a new deployment.")
     topic = {"already_set": "already set"}.get(result["topic_status"], result["topic_status"])
@@ -135,7 +151,7 @@ def init(sdk: GappSDK):
     from gapp.admin.sdk.start import describe
     if result["start"]["method"]:
         click.echo(f"    Starts with: {describe(result['start'])}")
-    click.echo("    Settings (public access, domain, environment variables, secrets): gapp manifest")
+    click.echo("    Settings (public access, domain, environment variables, secrets): gapp manifest show")
     click.echo()
     if result.get("next_step"):
         first, _, rest = result["next_step"]["hint"].partition("\n")
@@ -824,24 +840,32 @@ def _show_manifest(r):
         click.echo(f"    {'starts':<15} {describe_start(r['start'])}")
     else:
         click.echo(f"    {'starts':<15} {missing(r['name'], r['start']).splitlines()[0]}")
-    for issue in r["issues"]:
-        click.echo(f"  Problem: {issue['path']}: {issue['message']}")
+    if r["issues"]:
+        click.echo("  gapp.yaml has settings gapp doesn't accept:")
+        for issue in r["issues"]:
+            click.echo(f"    {issue['path']}: {issue['message']}")
+        click.echo("  Fix those lines in gapp.yaml, or start over with `gapp init --fresh` (keeps it as gapp.yaml.bak).")
+
+
+def _echo_lines(text, err=True):
+    for line in str(text).splitlines():
+        click.echo(f"  {line}", err=err)
 
 
 def _manifest_write(fn, json_out, *args, **kwargs):
     from gapp.admin.sdk.manifest_edit import ManifestChangeRefused
-    from gapp.admin.sdk.schema import ManifestValidationError
+    from gapp.admin.sdk.schema import ManifestUnreadable, ManifestValidationError
     try:
         result = fn(*args, **kwargs)
     except (ManifestChangeRefused, RuntimeError) as e:
         if json_out:
             _emit_json({"ok": False, "error": str(e)})
-        click.echo(f"  Not changed: {e}", err=True)
+        _echo_lines(f"Not changed: {e}")
         raise SystemExit(1)
-    except ManifestValidationError as e:
+    except (ManifestValidationError, ManifestUnreadable) as e:
         if json_out:
-            _emit_json({"ok": False, "error": str(e), "issues": e.issues})
-        click.echo(f"  Not changed: {e}", err=True)
+            _emit_json({"ok": False, **e.to_dict()})
+        _echo_lines(f"Not changed: {e}")
         raise SystemExit(1)
     if json_out:
         _emit_json(result)
@@ -862,29 +886,37 @@ _new_deployment_option = click.option(
          "so the new name is a new, empty deployment.")
 
 
-@main.group("manifest", invoke_without_command=True)
-@_json_option
-@click.pass_context
-def manifest_group(ctx, json_out):
+@main.group("manifest")
+def manifest_group():
     """Show or change this app's gapp.yaml.
 
     \b
-    gapp manifest                          this repo's settings, each with what it means
+    gapp manifest show                     this repo's settings, each with what it means
     gapp manifest set KEY VALUE            name, public, domain, memory, cpu, max-instances
-    gapp manifest unset KEY                remove a setting (back to its default)
+    gapp manifest unset KEY                remove one of those (back to its default)
     gapp manifest env set NAME VALUE       a plain environment variable
     gapp manifest env set NAME --secret S [--generate]   a variable read from a secret
     gapp manifest env set NAME --data-path [SUBFOLDER]   the data volume's path
     gapp manifest env remove NAME
-    gapp manifest schema --example         every key gapp.yaml takes, annotated
+    gapp manifest example                  every key gapp.yaml takes, annotated
     gapp manifest schema                   the JSON Schema, for tools
 
     Each change is checked against the schema and written only when the
     file changes. How the app starts is not in gapp.yaml: it is a Procfile
-    web: line or a Dockerfile.
+    web: line or a Dockerfile. A file gapp can't read is never changed;
+    `gapp init --fresh` starts over and keeps it as gapp.yaml.bak.
     """
-    if ctx.invoked_subcommand:
-        return
+
+
+@manifest_group.command("show")
+@_json_option
+def manifest_show_cmd(json_out):
+    """This repo's gapp.yaml settings as configured now, each with what it means.
+
+    Every setting is listed, set or not (an unset one shows its default),
+    with each environment variable by kind and how the app starts. --json
+    prints the result dict and nothing else.
+    """
     from gapp.admin.sdk.manifest_edit import describe
     try:
         result = describe()
@@ -894,6 +926,10 @@ def manifest_group(ctx, json_out):
     if json_out:
         _emit_json(result)
     _show_manifest(result)
+    if result["exists"]:
+        click.echo()
+        click.echo("  Change: gapp manifest set|unset KEY, gapp manifest env set|remove NAME")
+        click.echo("  Every key: gapp manifest example")
 
 
 @manifest_group.command("set")
@@ -969,19 +1005,25 @@ def manifest_env_remove_cmd(name, json_out):
 
 
 @manifest_group.command("schema")
-@click.option("--example", is_flag=True, help="Print an annotated gapp.yaml with every key instead.")
-def manifest_schema_cmd(example):
-    """Print the JSON Schema for gapp.yaml, or with --example an annotated gapp.yaml.
+def manifest_schema_cmd():
+    """Print the JSON Schema for gapp.yaml, and nothing else.
 
-    Both come from the model gapp validates against, so they always match
-    this version of gapp.
+    It comes from the model gapp validates against, so it always matches
+    this version of gapp. For a commented gapp.yaml: gapp manifest example.
     """
-    if example:
-        from gapp.admin.sdk.manifest_edit import example as example_text
-        click.echo(example_text(), nl=False)
-        return
     from gapp.admin.sdk.schema import get_schema
     click.echo(json_mod.dumps(get_schema(), indent=2))
+
+
+@manifest_group.command("example")
+def manifest_example_cmd():
+    """Print an annotated gapp.yaml with every key, and nothing else.
+
+    Each key's comment is its schema description, so the example always
+    matches this version of gapp. The output is valid YAML.
+    """
+    from gapp.admin.sdk.manifest_edit import example as example_text
+    click.echo(example_text(), nl=False)
 
 
 @main.group("secrets")
@@ -1087,11 +1129,12 @@ def secrets_set_cmd(name, value, from_stdin):
 
 def cli_entry():
     from gapp.admin.sdk.config import ConfigError
-    from gapp.admin.sdk.schema import ManifestValidationError
+    from gapp.admin.sdk.schema import ManifestUnreadable, ManifestValidationError
     try:
         main(standalone_mode=True)
-    except ManifestValidationError as e:
-        click.echo(json_mod.dumps(e.to_dict(), indent=2), err=True)
+    except (ManifestUnreadable, ManifestValidationError) as e:
+        for line in str(e).splitlines():
+            click.echo(f"  {line}", err=True)
         sys.exit(1)
     except ConfigError as e:
         click.echo(f"  Error: {e}", err=True)
