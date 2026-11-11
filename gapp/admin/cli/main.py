@@ -471,6 +471,12 @@ def ci_group():
     <name>` say where things stand; `gapp ci status <name> --live` asks the
     project for the live service state; `--verbose` adds the fleet detail;
     `--json` prints the result dict and nothing else.
+
+    A deployment's settings come from the app repo's gapp.yaml with the
+    fleet's manifest for it merged over: `gapp ci manifest <name>` prints
+    it, `gapp ci setup <name> ... --manifest FILE --update` replaces it.
+    That is how a repo you can't change (even one with no gapp.yaml or
+    Procfile; set `start` in the manifest) deploys without a fork.
     """
 
 
@@ -611,10 +617,13 @@ def ci_sources_list_cmd(verbose, json_out):
 @click.option("--project", default=None, metavar="PROJECT", help="GCP project id the deployment deploys to.")
 @click.option("--domain", default=None, help="Custom domain the deploy maps (a gapp.yaml key). Omit to keep the entry's; pass \"\" to remove it.")
 @click.option("--copy-of", default=None, metavar="EXISTING", help="Start NAME as a copy of an existing deployment (same repo and keys; its own id; no domain).")
+@click.option("--manifest", "manifest_path", default=None, metavar="FILE",
+              help="The deployment's whole fleet-side manifest, a gapp.yaml-shaped file. It replaces the entry's "
+                   "settings (a key the file lacks is removed) and is merged over the app repo's gapp.yaml at deploy.")
 @click.option("--update", is_flag=True, help="Apply a change to an existing deployment's entry. Without it, setup shows the change and makes none.")
 @click.option("--no-watch", is_flag=True, help="Return after dispatching the register run instead of waiting for it.")
 @_ci_options
-def ci_setup_cmd(name, repo, project, domain, copy_of, update, no_watch, verbose, json_out):
+def ci_setup_cmd(name, repo, project, domain, copy_of, manifest_path, update, no_watch, verbose, json_out):
     """Add or update a deployment: NAME deploys --repo to --project. Mirrors `gapp setup` for the fleet.
 
     Never uses gcloud and never reads the working directory: the repo is
@@ -627,17 +636,67 @@ def ci_setup_cmd(name, repo, project, domain, copy_of, update, no_watch, verbose
     workflows; a project your fleet is not yet trusted for, or an owner
     not yet allowed, stops with the one-time step.
 
+    A deployment's settings come from the app repo's gapp.yaml, with the
+    fleet's manifest for the deployment merged over it at deploy (keys
+    replaced, env variables by name). --manifest FILE sets that fleet-side
+    manifest, so a repo you can't change, even one with no gapp.yaml, can
+    be deployed, and one repo's deployments can differ. Get the current one
+    with `gapp ci manifest NAME`, edit it with `gapp manifest --file FILE
+    set ...`, and upload it with --manifest FILE --update. For a repo with
+    no Dockerfile or Procfile, set `start` in it.
+
     \b
       gapp ci setup --repo me/my-app --project my-project
       gapp ci setup my-app-staging --copy-of my-app --project my-staging-project
+      gapp ci setup my-app --repo me/my-app --project my-project --manifest my-app.yaml --update
     """
     from gapp.admin.sdk.ci import setup_deployment
+    manifest = None
+    if manifest_path is not None:
+        from gapp.admin.sdk.manifest import parse_manifest_text
+        from gapp.admin.sdk.schema import ManifestUnreadable
+        try:
+            manifest = parse_manifest_text(Path(manifest_path).read_text())
+        except OSError as e:
+            click.echo(f"  Error: can't read {manifest_path}: {e.strerror}.", err=True)
+            raise SystemExit(1)
+        except ManifestUnreadable as e:
+            click.echo(f"  Error: {manifest_path}: {str(e).splitlines()[0]}", err=True)
+            raise SystemExit(1)
     command = "gapp " + " ".join(sys.argv[1:]) if sys.argv and sys.argv[0] else None
     result = setup_deployment(name, repo=repo, project=project, domain=domain, update=update,
-                              copy_of=copy_of, watch=not no_watch, command=command)
+                              copy_of=copy_of, manifest=manifest, watch=not no_watch, command=command)
     if json_out:
         _emit_json(result)
     _ci_print(result, verbose=verbose, details=_fleet_details(result))
+
+
+@ci_group.command("manifest")
+@click.argument("name")
+@click.option("--json", "json_out", is_flag=True,
+              help="Print the command's result as JSON (the same dict the MCP tool returns) and nothing else.")
+def ci_manifest_cmd(name, json_out):
+    """Print NAME's fleet-side manifest as YAML, and nothing else.
+
+    These are the gapp.yaml keys the fleet sets for the deployment; the
+    deploy run merges them over the app repo's gapp.yaml. Save it, edit it
+    with `gapp manifest --file FILE ...`, and upload it with `gapp ci setup
+    NAME ... --manifest FILE --update`. One read of the fleet repo; the app
+    repo is never read.
+
+    \b
+      gapp ci manifest my-app > my-app.yaml
+    """
+    from gapp.admin.sdk.ci import deployment_manifest
+    from gapp.admin.sdk.manifest import dump_manifest
+    result = deployment_manifest(name)
+    if json_out:
+        _emit_json(result)
+    if result.get("ok") is False:
+        click.echo(result["next_step"]["hint"], err=True)
+        raise SystemExit(1)
+    click.echo(f"# Fleet-side manifest for {result['name']}, merged over {result['repo']}'s gapp.yaml at deploy.")
+    click.echo(dump_manifest(result["manifest"] or {}), nl=False)
 
 
 @ci_group.command("rename")
@@ -817,10 +876,13 @@ def ci_runner_overlay_cmd(path):
 # -- gapp manifest --
 
 def _show_manifest(r):
-    if not r["exists"]:
+    if r.get("file"):
+        click.echo(f"  {r['file']}" + ("" if r["exists"] else " (not created yet: set something to create it)"))
+    elif not r["exists"]:
         click.echo("  No gapp.yaml in this repo. Run `gapp init` to write one.")
         return
-    click.echo(f"  gapp.yaml in {r['repo']}")
+    else:
+        click.echo(f"  gapp.yaml in {r['repo']}")
     for row in r["settings"]:
         value = row["value"]
         if isinstance(value, bool):
@@ -837,7 +899,9 @@ def _show_manifest(r):
     else:
         click.echo(f"    {'env':<15} {'none':<24} add one: gapp manifest env set NAME VALUE")
     from gapp.admin.sdk.start import describe as describe_start, missing
-    if r["start"]["method"]:
+    if r["start"] is None:
+        pass
+    elif r["start"]["method"]:
         click.echo(f"    {'starts':<15} {describe_start(r['start'])}")
     else:
         click.echo(f"    {'starts':<15} {missing(r['name'], r['start']).splitlines()[0]}")
@@ -853,7 +917,12 @@ def _echo_lines(text, err=True):
         click.echo(f"  {line}", err=err)
 
 
+def _manifest_file():
+    return click.get_current_context().meta.get("manifest_file")
+
+
 def _manifest_write(fn, json_out, *args, **kwargs):
+    kwargs["file"] = _manifest_file()
     from gapp.admin.sdk.manifest_edit import ManifestChangeRefused
     from gapp.admin.sdk.schema import ManifestUnreadable, ManifestValidationError
     try:
@@ -888,12 +957,16 @@ _new_deployment_option = click.option(
 
 
 @main.group("manifest")
-def manifest_group():
+@click.option("--file", "manifest_file", default=None, metavar="FILE",
+              help="Show or change FILE, a gapp.yaml-shaped file such as a deployment's fleet-side manifest "
+                   "(from `gapp ci manifest`), instead of the repo's gapp.yaml. Created on the first change.")
+@click.pass_context
+def manifest_group(ctx, manifest_file):
     """Show or change this app's gapp.yaml.
 
     \b
     gapp manifest show                     this repo's settings, each with what it means
-    gapp manifest set KEY VALUE            name, public, domain, memory, cpu, max-instances
+    gapp manifest set KEY VALUE            name, public, domain, start, memory, cpu, max-instances
     gapp manifest unset KEY                remove one of those (back to its default)
     gapp manifest env set NAME VALUE       a plain environment variable
     gapp manifest env set NAME --secret S [--generate]   a variable read from a secret
@@ -907,12 +980,19 @@ def manifest_group():
     web: line or a Dockerfile. A file gapp can't read is never changed;
     `gapp init --fresh` starts over and keeps it as gapp.yaml.bak.
 
+    --file FILE points every command at another gapp.yaml-shaped file, such
+    as a deployment's fleet-side manifest: `gapp ci manifest NAME > FILE`,
+    `gapp manifest --file FILE set memory 1Gi`, then `gapp ci setup NAME ...
+    --manifest FILE --update`. Such a file has no name.
+
     Two advanced keys have no command; edit gapp.yaml at the root of the
     app's git repo (`gapp manifest show` prints its path) for them: `paths`,
     for a repo with several services, and `prerequisites.apis`, for extra
     GCP APIs. `gapp manifest example` shows their format, and every gapp
     command checks the file.
     """
+    ctx.meta["manifest_file"] = manifest_file
+
 
 
 @manifest_group.command("show")
@@ -926,14 +1006,18 @@ def manifest_show_cmd(json_out):
     """
     from gapp.admin.sdk.manifest_edit import describe
     try:
-        result = describe()
+        result = describe(file=_manifest_file())
     except RuntimeError as e:
         click.echo(f"  Error: {e}", err=True)
         raise SystemExit(1)
     if json_out:
         _emit_json(result)
     _show_manifest(result)
-    if result["exists"]:
+    if result.get("file"):
+        click.echo()
+        click.echo(f"  Change: gapp manifest --file {result['file']} set|unset KEY, ... env set|unset NAME")
+        click.echo(f"  Upload: gapp ci setup NAME --repo OWNER/REPO --project PROJECT --manifest {result['file']} --update")
+    elif result["exists"]:
         click.echo()
         click.echo("  Change: gapp manifest set|unset KEY, gapp manifest env set|unset NAME")
         click.echo("  Every key: gapp manifest example. paths and prerequisites.apis have no command:")
@@ -953,6 +1037,7 @@ def manifest_set_cmd(key, value, new_deployment, json_out):
       name           the deployment's name (needs --new-deployment to change it)
       public         true: anyone can call the URL; false: invoker access only
       domain         custom subdomain, e.g. app.example.com
+      start          the start command, only for a repo with no Dockerfile or Procfile
       memory         memory per instance, e.g. 1Gi (default 512Mi)
       cpu            CPUs per instance, e.g. 2 (default 1)
       max-instances  most instances at once (default 1)

@@ -24,16 +24,19 @@ up.
 
 ## How the app starts
 
-gapp starts an app from a file in the app's folder, never from
-`gapp.yaml`:
+gapp starts an app from a file in the app's folder, else from
+`gapp.yaml`'s `start`:
 
 - **A Dockerfile.** gapp builds it as is.
 - **A Procfile** with one `web:` line: the command that starts the
   app and serves HTTP on `$PORT`. gapp builds from its own template
   and runs that command.
 
-With both, the Dockerfile wins and the Procfile is ignored. If the
-repo has a Dockerfile, that is the start method; you are done.
+- **`start` in gapp.yaml**, only when there is neither file: a
+  fallback for a repo you can't change (see below).
+
+The Dockerfile wins over the Procfile, and the Procfile over `start`.
+If the repo has a Dockerfile, that is the start method; you are done.
 Otherwise:
 
 1. Work out the command that starts the app and serves HTTP on
@@ -56,10 +59,29 @@ Otherwise:
    run `gapp init`. It reports `Starts with: web: ... (Procfile)` when
    gapp sees it.
 
-Never put the start command in `gapp.yaml`: it has no start settings,
-and unknown keys are refused. When any gapp command reports "Not
-deployable yet" or "has no start method", relay its message to the
-user and ask; do not guess a command.
+For a repo the user owns, write the Procfile; don't use `start`.
+`start` is for a repo they can't change, deployed through CI: set it
+in the deployment's fleet-side manifest (`gapp manifest --file FILE
+set start '...'`, then `gapp ci setup NAME ... --manifest FILE`), with
+the user's confirmation of the command, as for a Procfile. When any
+gapp command reports "Not deployable yet" or "has no start method",
+relay its message to the user and ask; do not guess a command.
+
+## A CI deployment's fleet-side manifest
+
+Through CI, a deployment's settings are the app repo's `gapp.yaml`
+with the fleet's manifest for that deployment merged over it (keys
+replaced, env variables by name), or the manifest alone when the repo
+has no `gapp.yaml`. Use it for a repo the user can't change, or to give
+one repo's deployments different settings.
+
+1. `gapp ci manifest NAME > FILE` (`gapp_ci_manifest`): the current one.
+   An upload replaces it whole, so always start from it.
+2. Edit with `gapp manifest --file FILE set|unset|env set|env unset ...`
+   (the MCP manifest tools take `file=`). It has no `name`.
+3. `gapp ci setup NAME --repo OWNER/REPO --project PROJECT --manifest
+   FILE` shows what would change; show the user, then re-run with
+   `--update` (`gapp_ci_setup(manifest=..., update=True)`).
 
 ## Minimal configuration
 

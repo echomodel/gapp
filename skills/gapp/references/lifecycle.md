@@ -129,10 +129,15 @@ cloud agent. No terraform or gcloud on the deploying machine.
    the entry only with `--update`; without it, setup shows what would
    change, so show the user and ask before re-running; a repo already deployed under another name is
    refused, with the two ways on (update that one, or `--copy-of`).
-   `repo` and `project` are the entry's own fields, and it carries the
-   deployment's domain; every other setting comes from the app repo's
-   own `gapp.yaml`, which the repo must have. `--domain` sets the
-   domain, a re-run without it keeps it, `--domain ""` removes it.
+   `repo` and `project` are the entry's own fields, and it can carry a
+   manifest for the deployment: gapp.yaml keys merged over the app
+   repo's `gapp.yaml` at deploy, or the whole file when the repo has
+   none. `--domain` sets the domain alone (a re-run without it keeps
+   it, `--domain ""` removes it). `--manifest FILE` replaces the whole
+   manifest: read the current one with `gapp ci manifest <name>`, edit
+   it with `gapp manifest --file FILE ...`, upload with `--update`. For
+   a repo with no Dockerfile or Procfile, set `start` in it. Show the
+   user what would change before passing `--update`.
 5. **Environments and second instances.** `gapp ci setup <new>
    --copy-of <existing> [--project <other-project>] [--domain <d>]`
    makes another deployment of the same repo: its own id (so its own

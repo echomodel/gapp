@@ -857,7 +857,7 @@ def _prepare_build_dir(path, image, start, ref="HEAD"):
     )
     t = Path(__file__).resolve().parent.parent.parent / "templates"
     shutil.copy2(t / "cloudbuild.yaml", Path(d) / "cloudbuild.yaml")
-    if start["method"] == "procfile":
+    if start["method"] in ("procfile", "start"):
         dockerfile = (t / "Dockerfile").read_text().rstrip("\n")
         (Path(d) / "Dockerfile").write_text(f"{dockerfile}\n\nCMD exec {start['web']}\n")
     return d

@@ -203,7 +203,8 @@ def test_overlay_for_an_entry_is_its_gapp_keys_with_name_set_to_the_id():
     assert fleet.merge_manifest({}, fleet.overlay_for(entry))["name"] == "my-app-2"   # a repo with no gapp.yaml
 
 
-def test_the_fleet_file_header_says_the_entry_carries_the_domain_and_gapp_yaml_the_rest():
+def test_the_fleet_file_header_says_other_keys_are_the_manifest_merged_over_gapp_yaml():
     header = fleet.DEPLOYMENTS_FILE_INITIAL
-    assert "domain (set\n# with `gapp ci setup --domain`). Every other setting comes from the app\n# repo's own gapp.yaml." in header
+    assert ("Any other keys\n# are the deployment's manifest (gapp.yaml keys, set with `gapp ci setup\n"
+            "# --manifest` or --domain), merged over the app repo's own gapp.yaml.") in header
     assert "supply or override" not in header

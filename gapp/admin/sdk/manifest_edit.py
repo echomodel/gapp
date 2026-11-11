@@ -18,11 +18,11 @@ from pathlib import Path
 
 from gapp.admin.sdk.fleet import NAME_RE
 from gapp.admin.sdk.manifest import (
-    _origin_repo_name, get_env_vars, get_service_config, get_solution_name,
-    load_manifest, save_manifest,
+    _origin_repo_name, dump_manifest, get_env_vars, get_service_config, get_solution_name,
+    load_manifest, parse_manifest_text, save_manifest,
 )
 from gapp.admin.sdk.schema import (
-    EnvEntry, Manifest, ManifestValidationError, Prerequisites, SecretSpec, ServiceSpec,
+    EnvEntry, Manifest, ManifestUnreadable, ManifestValidationError, Prerequisites, SecretSpec, ServiceSpec,
     validate_manifest,
 )
 from gapp.admin.sdk.start import describe as describe_start, start_method
@@ -36,6 +36,7 @@ SETTINGS = {
     "name": ("name",),
     "public": ("public",),
     "domain": ("domain",),
+    "start": ("start",),
     "memory": ("service", "memory"),
     "cpu": ("service", "cpu"),
     "max-instances": ("service", "max_instances"),
@@ -85,31 +86,67 @@ def _env_row(entry: dict) -> dict:
     return {"name": name, "kind": "value", "value": value, "meaning": "plain value"}
 
 
-def describe(repo_path: Path | None = None) -> dict:
+def _file_problem(file: Path, e: Exception) -> ManifestChangeRefused:
+    """A --file target's parse or schema problem, worded for that file (not the repo's gapp.yaml)."""
+    if isinstance(e, ManifestUnreadable):
+        where = f"line {e.line}, column {e.column}: " if e.line else ""
+        return ManifestChangeRefused(f"{file} can't be read as YAML: {where}{e.problem}. Fix it in the file.")
+    issues = "; ".join(f"{i['path']}: {i['message']}" for i in e.issues)
+    return ManifestChangeRefused(f"{file} has settings gapp doesn't accept: {issues}. Fix it in the file.")
+
+
+def _read_file(file: Path) -> dict:
+    if not file.exists():
+        return {}
+    try:
+        return parse_manifest_text(file.read_text())
+    except ManifestUnreadable as e:
+        raise _file_problem(file, e) from None
+
+
+def describe(repo_path: Path | None = None, *, file: Path | str | None = None) -> dict:
     """This repo's gapp.yaml settings, each with what it means, unset ones included.
 
     Reads the file leniently, so a file that fails the schema is still
-    shown, with its problems under `issues`.
+    shown, with its problems under `issues`. With `file`, describes that
+    gapp.yaml-shaped file instead (a deployment's fleet-side manifest): no
+    name and no start method, which belong to a repo.
     """
-    root = _root(repo_path)
-    path = root / "gapp.yaml"
-    result = {"repo": str(root), "exists": path.exists(), "issues": [], "settings": [], "env": [],
-              "start": start_method(root)}
-    manifest = load_manifest(root, strict=False) if path.exists() else {}
+    if file is not None:
+        file = Path(file)
+        result = {"file": str(file), "repo": None, "exists": file.exists(), "issues": [], "settings": [],
+                  "env": [], "start": None, "name": None, "name_source": None}
+        manifest = _read_file(file)
+    else:
+        root = _root(repo_path)
+        path = root / "gapp.yaml"
+        result = {"file": None, "repo": str(root), "exists": path.exists(), "issues": [], "settings": [],
+                  "env": [], "start": start_method(root)}
+        manifest = load_manifest(root, strict=False) if path.exists() else {}
     try:
         validate_manifest(manifest)
     except ManifestValidationError as e:
         result["issues"] = e.issues
 
-    source = name_source(manifest, root)
-    name = get_solution_name(manifest, root)
-    result["name"] = name
-    result["name_source"] = source
-
     rows = result["settings"]
-    rows.append({"key": "name", "value": name, "set": source == "gapp.yaml",
-                 "meaning": NAME_SOURCE_TEXT[source]})
+    if file is None:
+        source = name_source(manifest, root)
+        name = get_solution_name(manifest, root)
+        result["name"] = name
+        result["name_source"] = source
+        rows.append({"key": "name", "value": name, "set": source == "gapp.yaml",
+                     "meaning": NAME_SOURCE_TEXT[source]})
     public = manifest.get("public")
+    start_value = manifest.get("start")
+    if start_value:
+        st = result["start"]
+        if st is None:
+            meaning = "starts the app when its repo has no Dockerfile or Procfile"
+        elif st["method"] == "start":
+            meaning = "starts the app"
+        else:
+            meaning = "ignored: the " + ("Dockerfile" if st["method"] == "dockerfile" else "Procfile") + " starts the app"
+        rows.append({"key": "start", "value": start_value, "set": True, "meaning": meaning})
     rows.append({"key": "public", "value": public, "set": public is not None,
                  "meaning": "anyone can call the URL; the app does its own auth" if public else
                  "private: only callers with Cloud Run invoker access"})
@@ -130,19 +167,46 @@ def describe(repo_path: Path | None = None) -> dict:
     if apis:
         rows.append({"key": "apis", "value": apis, "set": True, "meaning": "enabled by gapp setup"})
 
+    if file is not None:
+        # In a fleet-side manifest, a key it doesn't set is decided by the app repo's gapp.yaml.
+        for row in rows:
+            if not row["set"]:
+                row["value"] = None
+                row["meaning"] = "not set here: the app repo's gapp.yaml decides"
     result["env"] = [_env_row(e) for e in get_env_vars(manifest)]
     return result
 
 
 # -- writing --
 
-def _load_for_write(root: Path) -> dict:
-    if not (root / "gapp.yaml").exists():
+def _target(repo_path: Path | None, file: Path | str | None):
+    """What a write changes: ("file", path) for --file, else ("repo", git root)."""
+    return ("file", Path(file)) if file is not None else ("repo", _root(repo_path))
+
+
+def _load_for_write(target) -> dict:
+    kind, where = target
+    if kind == "file":
+        return _read_file(where)
+    if not (where / "gapp.yaml").exists():
         raise ManifestChangeRefused("No gapp.yaml in this repo. Run `gapp init` first.")
-    return load_manifest(root, strict=False)
+    return load_manifest(where, strict=False)
 
 
-def _write(root: Path, before: dict, after: dict, *, new_deployment: bool, change: str) -> dict:
+def _write(target, before: dict, after: dict, *, new_deployment: bool, change: str) -> dict:
+    kind, where = target
+    if kind == "file":
+        try:
+            validate_manifest(after)
+        except ManifestValidationError as e:
+            raise _file_problem(where, e) from None
+        changed = after != before or not where.exists()
+        if changed:
+            where.write_text(dump_manifest(after))
+        result = describe(file=where)
+        result.update({"changed": changed, "change": change if changed else "no change"})
+        return result
+    root = where
     old_name, new_name = get_solution_name(before, root), get_solution_name(after, root)
     if old_name != new_name and not new_deployment:
         raise ManifestChangeRefused(
@@ -190,12 +254,16 @@ def _parse(key: str, value: str):
     return value
 
 
-def set_value(key: str, value: str, *, new_deployment: bool = False, repo_path: Path | None = None) -> dict:
-    """Set one setting (a key of SETTINGS) in gapp.yaml."""
+def set_value(key: str, value: str, *, new_deployment: bool = False, repo_path: Path | None = None,
+              file: Path | str | None = None) -> dict:
+    """Set one setting (a key of SETTINGS) in gapp.yaml, or in `file`."""
     if key not in SETTINGS:
         raise ManifestChangeRefused(f"Unknown setting '{key}'. Settings: {', '.join(SETTINGS)}. "
                                     "Environment variables: gapp manifest env set.")
-    root = _root(repo_path)
+    if key == "name" and file is not None:
+        raise ManifestChangeRefused("A fleet-side manifest has no name: the deployment's id names it. "
+                                    "Set the name in the app repo's gapp.yaml, without --file.")
+    root = _target(repo_path, file)
     before = _load_for_write(root)
     after = copy.deepcopy(before)
     parsed = _parse(key, value)
@@ -208,9 +276,10 @@ def set_value(key: str, value: str, *, new_deployment: bool = False, repo_path: 
     return _write(root, before, after, new_deployment=new_deployment, change=f"{key} = {str(parsed).lower() if isinstance(parsed, bool) else parsed}")
 
 
-def unset_value(key: str, *, new_deployment: bool = False, repo_path: Path | None = None) -> dict:
-    """Remove one setting (a key of SETTINGS) from gapp.yaml."""
-    root = _root(repo_path)
+def unset_value(key: str, *, new_deployment: bool = False, repo_path: Path | None = None,
+                file: Path | str | None = None) -> dict:
+    """Remove one setting (a key of SETTINGS) from gapp.yaml, or from `file`."""
+    root = _target(repo_path, file)
     before = _load_for_write(root)
     after = copy.deepcopy(before)
     if key not in SETTINGS:
@@ -228,7 +297,7 @@ def unset_value(key: str, *, new_deployment: bool = False, repo_path: Path | Non
 
 
 def env_set(name: str, value: str | None = None, *, secret: str | None = None, generate: bool = False,
-            data_path: bool = False, repo_path: Path | None = None) -> dict:
+            data_path: bool = False, repo_path: Path | None = None, file: Path | str | None = None) -> dict:
     """Add or replace one environment variable.
 
     Exactly one kind: a plain `value`; `secret` (a short secret name, with
@@ -259,7 +328,7 @@ def env_set(name: str, value: str | None = None, *, secret: str | None = None, g
             raise ManifestChangeRefused("Give a value, --secret NAME, or --data-path [SUBFOLDER].")
         entry = {"name": name, "value": value}
         what = value
-    root = _root(repo_path)
+    root = _target(repo_path, file)
     before = _load_for_write(root)
     after = copy.deepcopy(before)
     env = after.setdefault("env", [])
@@ -272,16 +341,16 @@ def env_set(name: str, value: str | None = None, *, secret: str | None = None, g
     return _write(root, before, after, new_deployment=False, change=f"{name} = {what}")
 
 
-def env_unset(name: str, *, repo_path: Path | None = None) -> dict:
+def env_unset(name: str, *, repo_path: Path | None = None, file: Path | str | None = None) -> dict:
     """Remove one environment variable. The secret it named, if any, is left
     in Secret Manager."""
-    root = _root(repo_path)
+    root = _target(repo_path, file)
     before = _load_for_write(root)
     after = copy.deepcopy(before)
     env = after.get("env") or []
     kept = [e for e in env if e.get("name") != name]
     if len(kept) == len(env):
-        raise ManifestChangeRefused(f"gapp.yaml has no variable '{name}'.")
+        raise ManifestChangeRefused(f"{root[1] if root[0] == 'file' else 'gapp.yaml'} has no variable '{name}'.")
     if kept:
         after["env"] = kept
     else:
@@ -300,10 +369,13 @@ def example() -> str:
     description, so the example cannot drift from what gapp accepts."""
     lines = [
         "# gapp.yaml: every key is optional.",
-        "# How the app starts is not here: it is a Procfile web: line or a Dockerfile.",
+        "# An app starts from its Dockerfile, else its Procfile's web: line, else start below.",
         "",
         f"# {_desc(Manifest, 'name')}",
         "name: my-app",
+        "",
+        f"# {_desc(Manifest, 'start')}",
+        "# start: my-app serve",
         "",
         f"# {_desc(Manifest, 'public')}",
         "public: true",

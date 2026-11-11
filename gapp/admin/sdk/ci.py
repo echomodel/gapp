@@ -1178,7 +1178,7 @@ def _refusal_action(code: str) -> str:
     }.get(code, "fix the input")
 
 
-def _default_command(name, *, repo=None, project=None, domain=None, copy_of=None) -> str:
+def _default_command(name, *, repo=None, project=None, domain=None, copy_of=None, manifest=None) -> str:
     parts = ["gapp ci setup", name]
     if copy_of:
         parts += ["--copy-of", copy_of]
@@ -1188,32 +1188,55 @@ def _default_command(name, *, repo=None, project=None, domain=None, copy_of=None
         parts += ["--project", project]
     if domain is not None:
         parts += ["--domain", domain or '""']
+    if manifest is not None:
+        parts += ["--manifest", "<file>"]
     return " ".join(parts)
 
 
+def _shown(value) -> str:
+    text = value if isinstance(value, str) else json.dumps(value, separators=(", ", ": "))
+    return text if len(text) <= 80 else text[:77] + "..."
+
+
 def _entry_changes(before: dict, after: dict) -> list[str]:
-    """What an update does to an entry, one line per change: the domain, then each dropped key."""
+    """What an update does to an entry's gapp.yaml keys, one line per key: the
+    domain first, then each other key set, changed or removed (a key gapp.yaml
+    does not have is "dropped")."""
     lines = []
     if before.get("domain") != after.get("domain"):
         lines.append(f"domain: {before.get('domain') or '(none)'} → {after.get('domain') or '(none)'}")
-    lines += [f"would drop: {key}" for key in fleet.unknown_keys(fleet.manifest_keys(before))]
+    lines += [f"would drop: {path}" for path in fleet.unknown_keys(fleet.manifest_keys(before))]
+    old = fleet.manifest_keys(fleet.without_unknown_keys(before))
+    new = fleet.manifest_keys(after)
+    for key in sorted(set(old) | set(new)):
+        if key == "domain":
+            continue
+        if key not in new:
+            lines.append(f"would remove: {key}")
+        elif key not in old:
+            lines.append(f"would set: {key} = {_shown(new[key])}")
+        elif old[key] != new[key]:
+            lines.append(f"{key}: {_shown(old[key])} → {_shown(new[key])}")
     return lines
 
 
 def _applied(line: str) -> str:
     """A change line as done rather than proposed: "would drop: k" becomes "dropped: k"."""
-    return "dropped:" + line[len("would drop:"):] if line.startswith("would drop:") else line
+    for verb, done in (("drop", "dropped"), ("remove", "removed"), ("set", "set")):
+        if line.startswith(f"would {verb}:"):
+            return done + line[len(f"would {verb}"):]
+    return line
 
 
 def setup_deployment(name: str | None = None, *, repo: str | None = None, project: str | None = None,
-                     domain: str | None = None, copy_of: str | None = None,
+                     domain: str | None = None, copy_of: str | None = None, manifest: dict | None = None,
                      watch: bool = True, command: str | None = None, update: bool = False) -> dict:
     """`gapp ci setup`: the outcome (see `_setup_outcome`) plus the text that
     describes it, built once here. `lines` is what a reader sees first,
     `lines_after` what follows any detail lines; the CLI prints both as
     given and MCP callers get the same words."""
     result = _setup_outcome(name, repo=repo, project=project, domain=domain, copy_of=copy_of,
-                            watch=watch, command=command, update=update)
+                            manifest=manifest, watch=watch, command=command, update=update)
     return _with_setup_text(result, copy_of=copy_of)
 
 
@@ -1253,7 +1276,7 @@ def _with_setup_text(result: dict, *, copy_of: str | None) -> dict:
 
 
 def _setup_outcome(name: str | None = None, *, repo: str | None = None, project: str | None = None,
-                   domain: str | None = None, copy_of: str | None = None,
+                   domain: str | None = None, copy_of: str | None = None, manifest: dict | None = None,
                    watch: bool = True, command: str | None = None, update: bool = False) -> dict:
     """Add or update a deployment of the fleet (`gapp ci setup`). Never uses gcloud, never reads the cwd.
 
@@ -1268,6 +1291,11 @@ def _setup_outcome(name: str | None = None, *, repo: str | None = None, project:
     repo already deployed under another name, id too long, project not
     trusted, owner not allowed) is a plain outcome; the same checks run
     again in the register run, which writes the file with its own token.
+
+    `manifest` is the deployment's whole fleet-side manifest (`--manifest
+    FILE`, parsed): its gapp.yaml keys replace the entry's, so a key the file
+    lacks is removed. It is checked against the schema before anything else.
+    `domain`, when also given, wins over the manifest's.
     """
     result = {"ok": True, "name": None, "repo": None, "project": None, "domain": None, "id": None,
               "fleet_repo": None, "copy_of": copy_of, "action": None, "changes": None,
@@ -1278,6 +1306,11 @@ def _setup_outcome(name: str | None = None, *, repo: str | None = None, project:
     if domain is not None:
         changes["domain"] = domain.strip() or None
     result["changes"] = changes
+    if manifest is not None:
+        try:
+            manifest = fleet.validate_manifest_upload(manifest)
+        except FleetRefusal as e:
+            return {**result, **_outcome("fix the manifest", e.message)}
 
     if copy_of:
         if not (name or "").strip():
@@ -1302,7 +1335,8 @@ def _setup_outcome(name: str | None = None, *, repo: str | None = None, project:
     name = name.strip()
     project = (project or "").strip() or None
     result.update(name=name, repo=repo, project=project)
-    command = command or _default_command(name, repo=repo, project=project, domain=domain, copy_of=copy_of)
+    command = command or _default_command(name, repo=repo, project=project, domain=domain, copy_of=copy_of,
+                                          manifest=manifest)
 
     fleet_repo, stop = _require(result)
     if stop:
@@ -1310,6 +1344,16 @@ def _setup_outcome(name: str | None = None, *, repo: str | None = None, project:
     doc, rd = _load_fleet(fleet_repo)
     if doc is None:
         return {**result, **_fleet_file_outcome(fleet_repo, rd)}
+
+    if manifest is not None:
+        if copy_of:
+            base = {k: v for k, v in fleet.manifest_keys(doc.get(copy_of) or {}).items() if k != "domain"}
+        else:
+            base = doc.get(name) or {}
+        changes = fleet.replacement_changes(base, manifest)
+        if domain is not None:
+            changes["domain"] = domain.strip() or None
+        result["changes"] = changes
 
     try:
         if copy_of:
@@ -1498,6 +1542,29 @@ def status_deployment(name: str) -> dict:
             f"rewrite the entry: gapp ci setup {result['name']} --repo {entry.get('repo')} --project {entry.get('project')} --update"
         )}
     result["last_deploy"] = _last_deploy(fleet_repo, result["name"])
+    return result
+
+
+def deployment_manifest(name: str) -> dict:
+    """A deployment's fleet-side manifest (`gapp ci manifest <name>`): the
+    gapp.yaml keys its entry sets, merged over the app repo's gapp.yaml at
+    deploy. One read of the fleet file; never the app repo, never GCP."""
+    result = {"ok": True, "name": (name or "").strip(), "fleet_repo": None, "repo": None, "manifest": None,
+              "next_step": None}
+    if not result["name"]:
+        return {**result, **_outcome("pass the name", "Name the deployment: `gapp ci manifest <name>`. See them: gapp ci list")}
+    fleet_repo, stop = _require(result)
+    if stop:
+        return stop
+    doc, rd = _load_fleet(fleet_repo)
+    if doc is None:
+        return {**result, **_fleet_file_outcome(fleet_repo, rd)}
+    entry = doc.get(result["name"])
+    if entry is None:
+        return {**result, **_outcome("ci setup", (
+            f"'{result['name']}' is not a deployment in {fleet_repo}. See the deployments: gapp ci list"
+        ))}
+    result.update(repo=entry.get("repo"), manifest=fleet.manifest_keys(entry))
     return result
 
 

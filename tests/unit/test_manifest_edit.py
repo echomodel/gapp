@@ -409,3 +409,61 @@ def test_no_message_sends_the_reader_to_files_the_cli_does_not_install():
     """Someone with only the installed CLI must not be pointed at the repo's docs."""
     hits = [t for t in _message_strings() if re.search(r"README|docs/|CONTRIBUTING\.md", t)]
     assert hits == []
+
+
+# -- --file: a deployment's fleet-side manifest --
+
+def test_file_target_is_created_on_the_first_change_and_has_no_name(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)                                  # no git repo needed
+    f = tmp_path / "staging.yaml"
+    r = m.set_value("public", "true", file=f)
+    assert r["changed"] and yaml.safe_load(f.read_text()) == {"public": True}
+    m.env_set("KEY", secret="api-key", file=f)
+    m.set_value("start", "my-app serve", file=f)
+    assert yaml.safe_load(f.read_text()) == {"public": True, "env": [{"name": "KEY", "secret": {"name": "api-key"}}],
+                                             "start": "my-app serve"}
+    with pytest.raises(m.ManifestChangeRefused, match="has no name"):
+        m.set_value("name", "x", file=f)
+    m.env_unset("KEY", file=f)
+    m.unset_value("start", file=f)
+    assert yaml.safe_load(f.read_text()) == {"public": True}
+
+
+def test_file_show_says_unset_keys_are_the_repos_to_decide(tmp_path):
+    f = tmp_path / "staging.yaml"
+    f.write_text("start: my-app serve\n")
+    r = m.describe(file=f)
+    rows = {row["key"]: row for row in r["settings"]}
+    assert "name" not in rows and r["start"] is None
+    assert rows["start"]["meaning"] == "starts the app when its repo has no Dockerfile or Procfile"
+    assert rows["memory"]["value"] is None and "the app repo's gapp.yaml decides" in rows["memory"]["meaning"]
+
+
+def test_file_problems_name_the_file_not_gapp_yaml(tmp_path):
+    f = tmp_path / "staging.yaml"
+    f.write_text(BAD_YAML)
+    with pytest.raises(m.ManifestChangeRefused, match=r"staging.yaml can't be read as YAML: line 4, column 4"):
+        m.set_value("public", "true", file=f)
+    f.write_text("publik: true\n")
+    with pytest.raises(m.ManifestChangeRefused, match=r"staging.yaml has settings gapp doesn't accept: publik"):
+        m.set_value("public", "true", file=f)
+    assert f.read_text() == "publik: true\n"
+
+
+def test_cli_manifest_file_option_and_upload_hint(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    runner = CliRunner()
+    res = runner.invoke(main, ["manifest", "--file", "s.yaml", "set", "memory", "1Gi"])
+    assert res.exit_code == 0 and "Changed: memory = 1Gi" in res.output
+    out = runner.invoke(main, ["manifest", "--file", "s.yaml", "show"]).output
+    assert "--manifest s.yaml --update" in out and "name " not in out
+
+
+def test_start_can_be_set_in_the_repo_and_shows_whether_it_is_used(tmp_path, monkeypatch):
+    repo = _repo(tmp_path, monkeypatch, files={"gapp.yaml": "name: demo-app\n"})
+    m.set_value("start", "demo serve")
+    rows = {row["key"]: row for row in m.describe()["settings"]}
+    assert rows["start"]["meaning"] == "starts the app"
+    (repo / "Procfile").write_text("web: demo web\n")
+    rows = {row["key"]: row for row in m.describe()["settings"]}
+    assert rows["start"]["meaning"] == "ignored: the Procfile starts the app"

@@ -74,6 +74,11 @@ class Manifest(_StrictModel):
     name: str | None = Field(default=None, description="The deployment's name. It names the Cloud Run service, the data bucket and the secrets, so changing it makes a new deployment. Unset: the origin repo's name, else the folder's.")
     paths: list[str] = Field(default_factory=list, description="Subfolders that are each their own service, for a repo with several.")
     domain: str | None = Field(default=None, description="Custom subdomain mapped at deploy (CNAME it to ghs.googlehosted.com). Unset: the .run.app URL only.")
+    start: str | None = Field(
+        default=None,
+        description="The command that starts the app and serves HTTP on $PORT, used only when the repo has no "
+                    "Dockerfile or Procfile. For a repo you can't change; a repo you own should use a Procfile.",
+    )
     public: bool | None = Field(default=None, description="true: anyone can call the URL, and the app does its own auth. Unset or false: only callers with Cloud Run invoker access.")
     env: list[EnvEntry] = Field(default_factory=list, description="Environment variables the service gets.")
     service: ServiceSpec | None = Field(default=None, description="Cloud Run sizing for each instance.")
