@@ -6,7 +6,10 @@ noted.
 
 | Operation | CLI | MCP tool | Notes |
 |---|---|---|---|
-| Live `gapp.yaml` JSON schema | `gapp manifest schema` | `gapp_schema` | single source of truth for fields |
+| Live `gapp.yaml` JSON schema, or an annotated example | `gapp manifest schema [--example]` | `gapp_schema(example=)` | single source of truth for fields; the example has every key with a comment |
+| Show this repo's settings | `gapp manifest` | `gapp_manifest()` | every setting, set or not, with what it means; env variables by kind; how the app starts; `issues` for anything the schema refuses |
+| Change a setting | `gapp manifest set <key> <value>`, `gapp manifest unset <key>` | `gapp_manifest_set(key, value, new_deployment=)`, `gapp_manifest_unset(key, new_deployment=)` | keys: name, public, domain, memory, cpu, max-instances. Validated; written only when it changes. A different name is a new deployment: refused unless `new_deployment`, which needs the user's yes |
+| Environment variables | `gapp manifest env set <NAME> <value>` / `--secret <s> [--generate]` / `--data-path [<sub>]`, `gapp manifest env remove <NAME>` | `gapp_manifest_env_set(name, value=, secret=, generate=, data_path=)`, `gapp_manifest_env_remove(name)` | one kind per variable; replaces by name. A legacy `service.env` mapping is moved into the list on the first env write |
 | View or set the account | `gapp config account <email>` | `gapp_user(account=)` | per-machine config |
 | Initialize or update `gapp.yaml` | `gapp init` | `gapp_init(secrets=, domain=)` | idempotent; non-None params are written, others kept; `domain=""` removes a domain. Reports how the app starts (`start`: its Dockerfile, or its Procfile `web:` line); with neither, `next_step` says it isn't deployable yet. Takes no start command: that is the app's Procfile |
 | GCP foundation | `gapp setup --project <project-id>` | `gapp_setup(project_id=)` | first run on a project needs the id; marks the project `gapp=hosted` once (never from a CI run) |

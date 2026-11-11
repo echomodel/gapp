@@ -24,6 +24,26 @@ Other changes:
   message when an app has no start method.
 - `gapp init` says "already set" for a repo that already has the
   gapp-solution topic (was "already_set").
+- `gapp manifest` shows the repo's gapp.yaml settings, set or not, each
+  with what it means. `gapp manifest set|unset` changes `name`, `public`,
+  `domain`, `memory`, `cpu` and `max-instances`, and `gapp manifest env
+  set|remove` the environment variables (a plain value, `--secret`
+  with `--generate`, or `--data-path`). Each change is validated and
+  written only when the file changes. A change to the deployment's name
+  needs `--new-deployment`. MCP: `gapp_manifest`, `gapp_manifest_set`,
+  `gapp_manifest_unset`, `gapp_manifest_env_set`,
+  `gapp_manifest_env_remove`.
+- `gapp manifest schema --example` (MCP `gapp_schema(example=True)`)
+  prints an annotated gapp.yaml with every key.
+- `gapp init` says what the deployment's name is, where it came from,
+  and that changing it later makes a new deployment.
+- The help for `gapp`, `gapp status`, `gapp secrets` and `gapp ci init`
+  now covers what was only in the repo's docs: the direct path from init
+  to deploy, what status checks, how to declare secrets, and the GitHub
+  App a fleet needs for private repos. A fleet register run that cannot
+  read a private repo now gives those steps itself.
+- The gapp.yaml schema descriptions say what each setting does and its
+  default. `service.port` is marked as not used.
 
 ## 4.0.0rc10 (pre-release of 4.0.0)
 

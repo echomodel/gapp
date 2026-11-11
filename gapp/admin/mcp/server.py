@@ -32,15 +32,110 @@ def _tool():
 
 
 @_tool()
-def gapp_schema() -> dict:
+def gapp_schema(example: bool = False) -> dict:
     """Return the live gapp.yaml JSON Schema (from the Pydantic model).
 
     Use this to see every valid field, its type, whether it's required,
     and its description. This is the single source of truth; all
-    validation and error responses derive from the same model.
+    validation and error responses derive from the same model. With
+    example=true, returns {"example": <annotated gapp.yaml text>} instead:
+    every key, each with a comment saying what it does.
     """
+    if example:
+        from gapp.admin.sdk.manifest_edit import example as example_text
+        return {"example": example_text()}
     from gapp.admin.sdk.schema import get_schema
     return get_schema()
+
+
+def _manifest_call(fn, *args, **kwargs) -> dict:
+    from gapp.admin.sdk.manifest_edit import ManifestChangeRefused
+    try:
+        return fn(*args, **kwargs)
+    except (ManifestChangeRefused, RuntimeError) as e:
+        return {"ok": False, "error": str(e)}
+
+
+@_tool()
+def gapp_manifest() -> dict:
+    """Show the current repo's gapp.yaml settings, each with what it means.
+
+    Covers every setting, set or not: name (and where it comes from),
+    public, domain, memory, cpu, max-instances, each environment variable
+    (plain value, secret, or the data volume), and how the app starts.
+    `issues` lists anything the schema refuses. Read-only.
+    """
+    from gapp.admin.sdk.manifest_edit import describe
+    return _manifest_call(describe)
+
+
+@_tool()
+def gapp_manifest_set(key: str, value: str, new_deployment: bool = False) -> dict:
+    """Set one setting in the current repo's gapp.yaml, then return the settings.
+
+    Args:
+        key: name, public, domain, memory, cpu or max-instances.
+        value: The new value (public takes true or false).
+        new_deployment: Needed to change the name. The name keys the
+            service, data bucket and secrets, so a new name is a new, empty
+            deployment while the old one keeps its URL and data. Confirm with
+            the user before passing it.
+    """
+    from gapp.admin.sdk.manifest_edit import set_value
+    return _manifest_call(set_value, key, value, new_deployment=new_deployment)
+
+
+@_tool()
+def gapp_manifest_unset(key: str, new_deployment: bool = False) -> dict:
+    """Remove one setting from the current repo's gapp.yaml, so it takes its default.
+
+    Args:
+        key: A setting gapp_manifest_set takes, or any other top-level key the
+            file has.
+        new_deployment: Needed when unsetting name changes the deployment's
+            name (see gapp_manifest_set).
+    """
+    from gapp.admin.sdk.manifest_edit import unset_value
+    return _manifest_call(unset_value, key, new_deployment=new_deployment)
+
+
+@_tool()
+def gapp_manifest_env_set(
+    name: str,
+    value: str | None = None,
+    secret: str | None = None,
+    generate: bool = False,
+    data_path: bool = False,
+) -> dict:
+    """Add or replace one environment variable in the current repo's gapp.yaml.
+
+    Exactly one kind:
+    - a plain value: value="INFO"
+    - read from a secret: secret="api-key" (no value). Set its value later
+      with gapp_secret_set, or pass generate=true to have gapp create one on
+      the first deploy (signing keys and the like).
+    - the data volume's path, kept across deploys: data_path=true, with value
+      as an optional subfolder (e.g. "users").
+
+    Args:
+        name: The variable's name, as the app reads it.
+        value: The plain value, or the subfolder with data_path.
+        secret: Short secret name.
+        generate: With secret: gapp generates the value if none is set.
+        data_path: Point the variable at the data volume.
+    """
+    from gapp.admin.sdk.manifest_edit import env_set
+    return _manifest_call(env_set, name, value, secret=secret, generate=generate, data_path=data_path)
+
+
+@_tool()
+def gapp_manifest_env_remove(name: str) -> dict:
+    """Remove one environment variable from the current repo's gapp.yaml.
+
+    A secret it read stays in Secret Manager.
+    """
+    from gapp.admin.sdk.manifest_edit import env_remove
+    return _manifest_call(env_remove, name)
 
 
 @_tool()
@@ -229,7 +324,7 @@ def gapp_secret_list(name: str | None = None) -> dict:
     - orphans: secret IDs labeled for this solution but not in gapp.yaml
     - hints: structured remediation entries for unattached / conflict /
              orphan scenarios — each with a message and concrete `gcloud`
-             commands. See docs/SECRETS.md for the full recovery guide.
+             commands, which are the whole fix for that scenario.
 
     Args:
         name: Deployment name. Defaults to the current directory's app.

@@ -7,6 +7,7 @@ from pathlib import Path
 from gapp.admin.sdk.util import get_git_root
 from gapp.admin.sdk.manifest import get_solution_name, load_manifest, save_manifest
 from gapp.admin.sdk.start import missing, start_method
+from gapp.admin.sdk.manifest_edit import name_source
 
 
 def init_solution(
@@ -32,6 +33,8 @@ def init_solution(
 
     Returns a dict describing what was done:
         name: solution name
+        name_source: where the name came from before this run: "gapp.yaml",
+            "repo" (the origin remote) or "folder"; init writes it to gapp.yaml
         manifest_status: "created" | "updated" | "unchanged"
         topic_status: "added" | "already_set" | "skipped"
         start: how the app starts ({"method": "dockerfile" | "procfile" |
@@ -68,6 +71,7 @@ def init_solution(
 
     solution_name = get_solution_name(manifest, git_root)
     result["name"] = solution_name
+    result["name_source"] = name_source(manifest, git_root)
     if manifest.get("name") != solution_name:
         manifest = {"name": solution_name, **{k: v for k, v in manifest.items() if k != "name"}}
 

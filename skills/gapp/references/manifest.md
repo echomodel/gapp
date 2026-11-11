@@ -112,9 +112,24 @@ env:
     value: INFO
 ```
 
-For the full field list, run `gapp manifest schema` (or the
-`gapp_schema` tool) rather than guessing; the schema is the live
-source of truth and validation errors quote it.
+Make these changes with `gapp manifest` rather than by editing the
+file: `gapp manifest set public true`, `gapp manifest env set
+APP_KEY --secret app-key --generate`, `gapp manifest env set
+APP_USERS_PATH --data-path users`, `gapp manifest env set LOG_LEVEL
+INFO` (MCP: `gapp_manifest_set`, `gapp_manifest_env_set`). Each one is
+validated and the file is written only when it changes. `gapp manifest`
+(`gapp_manifest`) shows what is set now, each setting with what it means.
+
+The name is the deployment's identity: it keys the service, data
+bucket and secrets. `gapp init` writes the derived name; changing it
+later makes a new, empty deployment, so `gapp manifest set name`
+refuses without `--new-deployment`. Pass that only after the user
+confirms they want a new deployment.
+
+For every key with a comment, run `gapp manifest schema --example`
+(`gapp_schema(example=True)`); `gapp manifest schema` is the JSON
+Schema. Both come from the model gapp validates against, and
+validation errors quote it.
 
 ## Cloud readiness check for MCP servers
 

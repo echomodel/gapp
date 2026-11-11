@@ -25,17 +25,17 @@ class _StrictModel(BaseModel):
 
 class SecretSpec(_StrictModel):
     """A secret-backed env var configuration."""
-    name: str = Field(description="Short secret name (becomes '<solution>-<name>' in Secret Manager).")
-    generate: bool = Field(default=False, description="Auto-generate a random value on first deploy if missing.")
+    name: str = Field(description="Short secret name, stored as '<app name>-<this name>' in Secret Manager. Set its value with `gapp secrets set <this name>`.")
+    generate: bool = Field(default=False, description="true: gapp generates a random value on the first deploy if none is set.")
 
 
 class EnvEntry(_StrictModel):
     """A single environment variable declaration."""
-    name: str = Field(description="Environment variable name as seen by the service.")
-    value: str | None = Field(default=None, description="Plain string value. Mutually exclusive with 'secret'.")
+    name: str = Field(description="The variable's name, as the app reads it.")
+    value: str | None = Field(default=None, description="A plain value. {{SOLUTION_DATA_PATH}} is the data volume's mount path and {{SOLUTION_NAME}} the app's name. Not with 'secret'.")
     secret: SecretSpec | None = Field(
         default=None,
-        description="Secret-backed value: a mapping with 'name' (and optional 'generate').",
+        description="Take the value from a secret: a mapping with 'name' (and optional 'generate'). Not with 'value'.",
     )
 
     @field_validator("secret", mode="before")
@@ -60,10 +60,10 @@ class EnvEntry(_StrictModel):
 
 class ServiceSpec(_StrictModel):
     """Cloud Run service configuration."""
-    memory: str | None = Field(default=None, description="Memory limit (e.g. 512Mi).")
-    cpu: str | None = Field(default=None, description="CPU limit (e.g. '1').")
-    max_instances: int | None = Field(default=None, description="Max Cloud Run instances.")
-    port: int | None = Field(default=None, description="Container port (default 8080).")
+    memory: str | None = Field(default=None, description="Memory per instance (default 512Mi).")
+    cpu: str | None = Field(default=None, description="CPUs per instance (default 1).")
+    max_instances: int | None = Field(default=None, description="Most instances Cloud Run runs at once (default 1).")
+    port: int | None = Field(default=None, description="Not used: the service always listens on $PORT, which Cloud Run sets to 8080.")
     env: dict[str, str] | None = Field(
         default=None,
         description="Legacy dict form of env vars. Prefer the top-level 'env' list.",
@@ -75,7 +75,7 @@ class PrerequisiteSecret(_StrictModel):
 
 
 class Prerequisites(_StrictModel):
-    apis: list[str] = Field(default_factory=list, description="GCP APIs to enable.")
+    apis: list[str] = Field(default_factory=list, description="GCP APIs `gapp setup` enables besides the ones gapp needs.")
     secrets: dict[str, PrerequisiteSecret] = Field(
         default_factory=dict,
         description="Named prerequisite secrets in Secret Manager.",
@@ -84,13 +84,13 @@ class Prerequisites(_StrictModel):
 
 class Manifest(_StrictModel):
     """Top-level gapp.yaml schema."""
-    name: str | None = Field(default=None, description="Solution name override (falls back to repo directory name).")
-    paths: list[str] = Field(default_factory=list, description="Subpaths for multi-service repos.")
-    domain: str | None = Field(default=None, description="Custom domain (subdomain only, CNAME to ghs.googlehosted.com).")
-    public: bool | None = Field(default=None, description="Allow unauthenticated HTTP access?")
-    env: list[EnvEntry] = Field(default_factory=list, description="Environment variables for the service.")
-    service: ServiceSpec | None = Field(default=None, description="Service runtime configuration.")
-    prerequisites: Prerequisites | None = Field(default=None, description="GCP APIs and secrets required.")
+    name: str | None = Field(default=None, description="The deployment's name. It names the Cloud Run service, the data bucket and the secrets, so changing it makes a new deployment. Unset: the origin repo's name, else the folder's.")
+    paths: list[str] = Field(default_factory=list, description="Subfolders that are each their own service, for a repo with several.")
+    domain: str | None = Field(default=None, description="Custom subdomain mapped at deploy (CNAME it to ghs.googlehosted.com). Unset: the .run.app URL only.")
+    public: bool | None = Field(default=None, description="true: anyone can call the URL, and the app does its own auth. Unset or false: only callers with Cloud Run invoker access.")
+    env: list[EnvEntry] = Field(default_factory=list, description="Environment variables the service gets.")
+    service: ServiceSpec | None = Field(default=None, description="Cloud Run sizing for each instance.")
+    prerequisites: Prerequisites | None = Field(default=None, description="Extra GCP APIs to enable at setup.")
 
 
 class ManifestValidationError(ValueError):

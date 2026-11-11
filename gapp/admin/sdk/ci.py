@@ -1692,8 +1692,13 @@ def runner_register(env: dict | None = None, out=print) -> int:
                     return refuse("repo-unreachable", (
                         f"{repo} is not readable with this run's token (private, or it does not exist), and the "
                         f"hosting app's {APP_ID_VAR} variable and {APP_KEY_SECRET} secret are not both set in this "
-                        f"fleet repo. For a private repo, store them (docs/CI.md, Private repos); otherwise check "
-                        f"the repo name."
+                        f"fleet repo. If the repo name is right and the repo is private, give the fleet a GitHub App "
+                        f"that can read it, once: on the GitHub organization that holds the repo, Settings > "
+                        f"Developer settings > GitHub Apps > New GitHub App, with Repository permissions Contents: "
+                        f"Read-only, webhook off, installable only on that account; install it on the organization "
+                        f"(never on all repos of a personal account); generate a private key; then run "
+                        f"`gh variable set {APP_ID_VAR} --repo <fleet-repo> --body <app-id>` and "
+                        f"`gh secret set {APP_KEY_SECRET} --repo <fleet-repo> < <key>.pem` and delete the key file."
                     ))
             what = f"{action} '{name}' -> {entry['repo']} on project '{entry['project']}'."
         elif operation == "copy":
