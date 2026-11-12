@@ -1592,7 +1592,6 @@ def merged_manifest(name: str, *, ref: str | None = None) -> dict:
     (gapp.yaml unreadable, settings gapp doesn't accept, no start method);
     `notes` are what to know (the fleet runs another gapp version).
     """
-    import importlib.metadata
     from gapp.admin.sdk.manifest import parse_manifest_text
     from gapp.admin.sdk.schema import ManifestUnreadable, ManifestValidationError, validate_manifest
     from gapp.admin.sdk.start import START_METHOD_HELP, start_method_of
@@ -1666,7 +1665,8 @@ def merged_manifest(name: str, *, ref: str | None = None) -> dict:
         result["problems"].append(f"{why}, so the deploy would refuse it. {START_METHOD_HELP}")
 
     pinned = _fleet_gapp_ref(fleet_repo)
-    installed = f"v{importlib.metadata.version('gapp')}"
+    import gapp
+    installed = f"v{gapp.__version__}"
     if pinned and pinned != installed:
         result["notes"].append(
             f"{fleet_repo}'s deploys run gapp {pinned}; this was worked out with gapp {installed}, so the deploy "
@@ -2077,9 +2077,9 @@ def _resolve_gapp_ref(gapp_repo: str) -> str:
     `main` HEAD only when that tag isn't published yet (an unreleased dev
     build), so `ci init` from a contributor checkout still works.
     """
-    import importlib.metadata
+    import gapp
 
-    tag = f"v{importlib.metadata.version('gapp')}"
+    tag = f"v{gapp.__version__}"
     exists = subprocess.run(["gh", "api", f"repos/{gapp_repo}/git/ref/tags/{tag}"], capture_output=True, text=True)
     if exists.returncode == 0:
         return tag
