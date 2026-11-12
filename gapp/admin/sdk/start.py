@@ -24,7 +24,7 @@ START_METHOD_HELP = (
 )
 
 
-def _procfile_web(path: Path) -> tuple[str | None, str | None]:
+def _procfile_web(text: str) -> tuple[str | None, str | None]:
     """The Procfile's single `web:` command, or why there is none.
 
     Blank lines and `#` comments are skipped and other process types are
@@ -32,7 +32,7 @@ def _procfile_web(path: Path) -> tuple[str | None, str | None]:
     method: there must be exactly one command to run.
     """
     webs = []
-    for raw in path.read_text().splitlines():
+    for raw in text.splitlines():
         line = raw.strip()
         if not line or line.startswith("#") or ":" not in line:
             continue
@@ -75,12 +75,21 @@ def start_method(root: Path | str) -> dict:
     """
     root = Path(root)
     procfile = root / "Procfile"
-    start = _manifest_start(root)
+    return start_method_of(dockerfile=(root / "Dockerfile").is_file(),
+                           procfile=procfile.read_text() if procfile.is_file() else None,
+                           start=_manifest_start(root))
+
+
+def start_method_of(*, dockerfile: bool, procfile: str | None, start) -> dict:
+    """`start_method` from what it reads: whether there is a Dockerfile, the
+    Procfile's text (None when there is none) and gapp.yaml's `start`. Used
+    where the files are not on disk (a read of a repo through GitHub)."""
+    start = start.strip() if isinstance(start, str) and start.strip() else None
     start_label = "gapp.yaml's start" if start else None
-    if (root / "Dockerfile").is_file():
+    if dockerfile:
         return {"method": "dockerfile", "web": None,
-                "ignored": _ignored("Procfile" if procfile.is_file() else None, start_label), "reason": None}
-    if procfile.is_file():
+                "ignored": _ignored("Procfile" if procfile is not None else None, start_label), "reason": None}
+    if procfile is not None:
         web, reason = _procfile_web(procfile)
         if web:
             return {"method": "procfile", "web": web, "ignored": start_label, "reason": None}

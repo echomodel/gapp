@@ -246,14 +246,16 @@ def _repo_visible(repo: str) -> bool:
     return rc == 0
 
 
-def _read_path(repo: str, path: str, thing: str) -> Read:
-    """A file or directory of a repo through the Contents API.
+def _read_path(repo: str, path: str, thing: str, ref: str | None = None) -> Read:
+    """A file or directory of a repo through the Contents API, at `ref`
+    (a commit, tag or branch) or else the default branch.
 
     A 404 counts as absent only when the repo itself answers, so a repo the
     login cannot see is never reported as a missing file.
     """
-    request = f"GET repos/{repo}/contents/{path}"
-    rc, out, err = _gh_api([f"repos/{repo}/contents/{path}"])
+    endpoint = f"repos/{repo}/contents" + (f"/{path}" if path else "") + (f"?ref={ref}" if ref else "")
+    request = f"GET {endpoint}"
+    rc, out, err = _gh_api([endpoint])
     if rc != 0:
         status, _ = _gh_failure(err)
         if status == 404 and _repo_visible(repo):
@@ -271,8 +273,8 @@ def _read_path(repo: str, path: str, thing: str) -> Read:
     return Read("unchecked", note=_couldnt_check(thing, request, "GitHub returned an answer gapp did not recognise"))
 
 
-def _read_file(repo: str, path: str) -> Read:
-    return _read_path(repo, path, f"{path} in {repo}")
+def _read_file(repo: str, path: str, ref: str | None = None) -> Read:
+    return _read_path(repo, path, f"{path} in {repo}", ref)
 
 
 def _list_dir(repo: str, path: str) -> Read:
@@ -1565,6 +1567,113 @@ def deployment_manifest(name: str) -> dict:
             f"'{result['name']}' is not a deployment in {fleet_repo}. See the deployments: gapp ci list"
         ))}
     result.update(repo=entry.get("repo"), manifest=fleet.manifest_keys(entry))
+    return result
+
+
+def _fleet_gapp_ref(fleet_repo: str) -> str | None:
+    """The gapp version the fleet's deploy workflow is pinned to (`vX.Y.Z`,
+    or a commit), read from its installed gapp-deploy.yml; None if unread."""
+    rd = _read_file(fleet_repo, DEPLOY_WORKFLOW_PATH)
+    match = re.search(r"/\.github/workflows/deploy\.yml@(\S+)", rd.content or "") if rd.present else None
+    return match.group(1) if match else None
+
+
+def merged_manifest(name: str, *, ref: str | None = None) -> dict:
+    """What a CI deploy of `name` at `ref` would use (`gapp ci manifest <name>
+    --merged [--ref REF]`): the deployment's fleet-side manifest merged over
+    the app repo's gapp.yaml at that ref, the way the deploy run merges them,
+    with `name` set to the id.
+
+    Reads the fleet file, then from the app repo, with the caller's own
+    GitHub login: the ref (default: its default branch), the files at the
+    repo's top, gapp.yaml and the Procfile. In memory; no clone, no runner,
+    no GCP; saves nothing. An app repo this login can't read fails only
+    this, with GitHub's reason. `problems` are what the deploy would refuse
+    (gapp.yaml unreadable, settings gapp doesn't accept, no start method);
+    `notes` are what to know (the fleet runs another gapp version).
+    """
+    import importlib.metadata
+    from gapp.admin.sdk.manifest import parse_manifest_text
+    from gapp.admin.sdk.schema import ManifestUnreadable, ManifestValidationError, validate_manifest
+    from gapp.admin.sdk.start import START_METHOD_HELP, start_method_of
+
+    result = deployment_manifest(name)
+    result.update(ref=ref, commit=None, repo_has_gapp_yaml=None, merged=None, start=None,
+                  problems=[], notes=[])
+    if result.get("ok") is False:
+        return result
+    fleet_repo, repo = result["fleet_repo"], result["repo"]
+    doc, _ = _load_fleet(fleet_repo)
+    entry = doc[result["name"]]
+
+    def unreadable(reason: str) -> dict:
+        return {**result, **_outcome("read the app repo", (
+            f"Can't read {repo} from here, so the merged settings can't be shown. {reason.rstrip('.')}. "
+            f"The deploy run reads it with the fleet's own access, so this does not mean the deploy fails. "
+            f"The fleet's side alone: gapp ci manifest {result['name']}"
+        ))}
+
+    if ref:
+        rc, out, err = _gh_api([f"repos/{repo}/commits/{ref}", "--jq", ".sha"])
+        if rc != 0:
+            if _repo_visible(repo):
+                return {**result, **_outcome("fix the ref", (
+                    f"{repo} has no branch, tag or commit '{ref}', so a deploy of it would fail."
+                ))}
+            return unreadable(_refused(err))
+        result["commit"] = out.strip()
+    else:
+        branch, err = _default_branch(repo)
+        if branch is None:
+            return unreadable(_refused(err))
+        result["ref"] = branch
+    at = result["commit"] or result["ref"]
+
+    top = _read_path(repo, "", f"the files of {repo}", at)
+    if top.unchecked:
+        return unreadable(top.note or "")
+    names = {item.get("name") for item in (top.data or []) if isinstance(item, dict) and item.get("type") == "file"}
+
+    base = {}
+    result["repo_has_gapp_yaml"] = "gapp.yaml" in names
+    if result["repo_has_gapp_yaml"]:
+        rd = _read_file(repo, "gapp.yaml", at)
+        if not rd.present:
+            return unreadable(rd.note or "")
+        try:
+            base = parse_manifest_text(rd.content)
+        except ManifestUnreadable as e:
+            result["problems"].append(f"{repo}'s gapp.yaml can't be read as YAML: {e}. The deploy would fail on it.")
+            return {**result, "ok": False, "next_step": {"action": "fix the app repo's gapp.yaml",
+                                                         "hint": result["problems"][0]}}
+    merged = fleet.merge_manifest(base, fleet.overlay_for(entry))
+    merged = {"name": merged.pop("name"), **merged}
+    result["merged"] = merged
+    try:
+        validate_manifest(merged)
+    except ManifestValidationError as e:
+        result["problems"].append("The merged settings have settings gapp doesn't accept, so the deploy would refuse them: "
+                                  + "; ".join(f"{i['path']}: {i['message']}" for i in e.issues))
+
+    procfile = None
+    if "Procfile" in names:
+        rd = _read_file(repo, "Procfile", at)
+        procfile = rd.content if rd.present else None
+    start = start_method_of(dockerfile="Dockerfile" in names, procfile=procfile, start=merged.get("start"))
+    result["start"] = start
+    if not start["method"]:
+        why = f"{repo} at {result['ref']} " + (start["reason"] or "has no Dockerfile, no Procfile and no start setting")
+        result["problems"].append(f"{why}, so the deploy would refuse it. {START_METHOD_HELP}")
+
+    pinned = _fleet_gapp_ref(fleet_repo)
+    installed = f"v{importlib.metadata.version('gapp')}"
+    if pinned and pinned != installed:
+        result["notes"].append(
+            f"{fleet_repo}'s deploys run gapp {pinned}; this was worked out with gapp {installed}, so the deploy "
+            f"could differ. Match them: gapp ci init {fleet_repo}")
+    if result["problems"]:
+        result["ok"] = False
+        result["next_step"] = {"action": "fix the problems", "hint": "\n".join(result["problems"])}
     return result
 
 
