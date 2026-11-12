@@ -61,45 +61,51 @@ def _manifest_call(fn, *args, **kwargs) -> dict:
 
 
 @_tool()
-def gapp_manifest_show() -> dict:
+def gapp_manifest_show(file: str | None = None) -> dict:
     """Show the current repo's gapp.yaml settings, each with what it means.
 
     Covers every setting, set or not: name (and where it comes from),
     public, domain, memory, cpu, max-instances, each environment variable
     (plain value, secret, or the data volume), and how the app starts.
-    `issues` lists anything the schema refuses. Read-only.
+    `issues` lists anything the schema refuses. Read-only. With `file`, shows
+    that gapp.yaml-shaped file instead (e.g. a deployment's fleet-side
+    manifest saved from gapp_ci_manifest); it has no name or start method.
     """
     from gapp.admin.sdk.manifest_edit import describe
-    return _manifest_call(describe)
+    return _manifest_call(describe, file=file)
 
 
 @_tool()
-def gapp_manifest_set(key: str, value: str, new_deployment: bool = False) -> dict:
+def gapp_manifest_set(key: str, value: str, new_deployment: bool = False, file: str | None = None) -> dict:
     """Set one setting in the current repo's gapp.yaml, then return the settings.
 
     Args:
-        key: name, public, domain, memory, cpu or max-instances.
+        key: name, public, domain, start, memory, cpu or max-instances.
         value: The new value (public takes true or false).
         new_deployment: Needed to change the name. The name keys the
             service, data bucket and secrets, so a new name is a new, empty
             deployment while the old one keeps its URL and data. Confirm with
             the user before passing it.
+        file: Change this gapp.yaml-shaped file (e.g. a deployment's fleet-side manifest
+            from gapp_ci_manifest) instead of the repo's gapp.yaml; created on the first change.
     """
     from gapp.admin.sdk.manifest_edit import set_value
-    return _manifest_call(set_value, key, value, new_deployment=new_deployment)
+    return _manifest_call(set_value, key, value, new_deployment=new_deployment, file=file)
 
 
 @_tool()
-def gapp_manifest_unset(key: str, new_deployment: bool = False) -> dict:
+def gapp_manifest_unset(key: str, new_deployment: bool = False, file: str | None = None) -> dict:
     """Remove one setting from the current repo's gapp.yaml, so it takes its default.
 
     Args:
-        key: name, public, domain, memory, cpu or max-instances.
+        key: name, public, domain, start, memory, cpu or max-instances.
         new_deployment: Needed when unsetting name changes the deployment's
             name (see gapp_manifest_set).
+        file: Change this gapp.yaml-shaped file (e.g. a deployment's fleet-side manifest
+            from gapp_ci_manifest) instead of the repo's gapp.yaml; created on the first change.
     """
     from gapp.admin.sdk.manifest_edit import unset_value
-    return _manifest_call(unset_value, key, new_deployment=new_deployment)
+    return _manifest_call(unset_value, key, new_deployment=new_deployment, file=file)
 
 
 @_tool()
@@ -109,8 +115,9 @@ def gapp_manifest_env_set(
     secret: str | None = None,
     generate: bool = False,
     data_path: bool = False,
+    file: str | None = None,
 ) -> dict:
-    """Add or replace one environment variable in the current repo's gapp.yaml.
+    """Add or replace one environment variable in the current repo's gapp.yaml (or in `file`).
 
     Exactly one kind:
     - a plain value: value="INFO"
@@ -126,19 +133,22 @@ def gapp_manifest_env_set(
         secret: Short secret name.
         generate: With secret: gapp generates the value if none is set.
         data_path: Point the variable at the data volume.
+        file: Change this gapp.yaml-shaped file (e.g. a deployment's fleet-side manifest
+            from gapp_ci_manifest) instead of the repo's gapp.yaml; created on the first change.
     """
     from gapp.admin.sdk.manifest_edit import env_set
-    return _manifest_call(env_set, name, value, secret=secret, generate=generate, data_path=data_path)
+    return _manifest_call(env_set, name, value, secret=secret, generate=generate, data_path=data_path, file=file)
 
 
 @_tool()
-def gapp_manifest_env_unset(name: str) -> dict:
+def gapp_manifest_env_unset(name: str, file: str | None = None) -> dict:
     """Remove one environment variable from the current repo's gapp.yaml.
 
-    A secret it read stays in Secret Manager.
+    A secret it read stays in Secret Manager. With `file`, changes that
+    gapp.yaml-shaped file instead of the repo's gapp.yaml.
     """
     from gapp.admin.sdk.manifest_edit import env_unset
-    return _manifest_call(env_unset, name)
+    return _manifest_call(env_unset, name, file=file)
 
 
 @_tool()
@@ -425,6 +435,7 @@ def gapp_ci_setup(
     project: str | None = None,
     domain: str | None = None,
     copy_of: str | None = None,
+    manifest: dict | None = None,
     update: bool = False,
     watch: bool = True,
 ) -> dict:
@@ -433,8 +444,9 @@ def gapp_ci_setup(
     Mirrors gapp_setup for the fleet. The name defaults to the repo's name,
     derived only from `repo` (never from a checkout). The same name again
     updates the deployment's custom domain: `domain` sets it ("" removes
-    it); every other setting comes from the app repo's own gapp.yaml, and
-    the same call drops any key gapp.yaml does not have. A repo already deployed under another name is
+    it), and `manifest` replaces the fleet-side settings; the rest comes
+    from the app repo's own gapp.yaml, and the same call drops any key
+    gapp.yaml does not have. A repo already deployed under another name is
     refused: update that deployment, or add another with `copy_of`, which
     copies the source's repo and gapp.yaml keys but never its id, domain,
     deploy history or secret values, and defaults `project` to the
@@ -454,6 +466,12 @@ def gapp_ci_setup(
         project: GCP project id. Required unless copy_of (then the source's by default).
         domain: Custom domain the deploy maps; "" removes it; None keeps it.
         copy_of: An existing deployment to copy.
+        manifest: The deployment's whole fleet-side manifest (gapp.yaml keys as an
+            object). It replaces the entry's keys, a key it lacks is removed, and
+            the deploy merges it over the app repo's gapp.yaml, so a repo you
+            can't change (even one with no gapp.yaml) can be deployed. Read the
+            current one with gapp_ci_manifest first. `start` in it starts a repo
+            with no Dockerfile or Procfile. `name` is refused.
         update: Apply a change to an existing entry. Without it, a change comes back as ok false with what would change (`changes_shown`).
         watch: Wait for the register run (default True); False returns after the dispatch.
 
@@ -464,7 +482,18 @@ def gapp_ci_setup(
     """
     from gapp.admin.sdk.ci import setup_deployment
     return setup_deployment(name, repo=repo, project=project, domain=domain, update=update,
-                            copy_of=copy_of, watch=watch)
+                            copy_of=copy_of, manifest=manifest, watch=watch)
+
+
+@_tool()
+def gapp_ci_manifest(name: str) -> dict:
+    """A deployment's fleet-side manifest: the gapp.yaml keys the fleet sets for
+    it (`manifest`), merged over the app repo's gapp.yaml at deploy. Read it
+    before changing it with gapp_ci_setup(manifest=..., update=True), since
+    that replaces it whole. One read of the fleet repo; the app repo is never
+    read."""
+    from gapp.admin.sdk.ci import deployment_manifest
+    return deployment_manifest(name)
 
 
 @_tool()

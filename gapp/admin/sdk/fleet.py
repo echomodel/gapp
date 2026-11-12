@@ -1,9 +1,10 @@
 """The fleet file: `gapp/deployments.yaml` in the fleet repo.
 
 One entry per deployment, keyed by the operator-chosen name. An entry's
-own fields are `id`, `repo` and `project`, and it carries the deployment's
-domain; every other setting comes from the deployed repo's gapp.yaml. The
-deploy run merges the entry's keys over the repo's gapp.yaml:
+own fields are `id`, `repo` and `project`; its other keys are the
+deployment's manifest (gapp.yaml keys, set with `gapp ci setup --manifest`,
+or `--domain` for the domain alone). The deploy run merges them over the
+repo's gapp.yaml, or uses them as the whole file when the repo has none:
 
     my-app:
       id: my-app
@@ -47,9 +48,9 @@ DEPLOYMENTS_FILE_INITIAL = """\
 # an entry through the register workflow and `gapp ci deploy` reads it.
 # One entry per deployment, keyed by its name: id (what the GCP resources
 # are keyed by), repo (owner/name), project (the GCP project id; the GitHub
-# Environment of the same name holds the deploy identity) and domain (set
-# with `gapp ci setup --domain`). Every other setting comes from the app
-# repo's own gapp.yaml.
+# Environment of the same name holds the deploy identity). Any other keys
+# are the deployment's manifest (gapp.yaml keys, set with `gapp ci setup
+# --manifest` or --domain), merged over the app repo's own gapp.yaml.
 {}
 """
 
@@ -164,6 +165,31 @@ def validate_changes(changes: dict | None) -> dict:
         raise FleetRefusal("invalid-input", (
             f"'{key}' is not a gapp.yaml key (check for typos); `gapp manifest schema` lists them."
         ))
+    return changes
+
+
+def validate_manifest_upload(manifest) -> dict:
+    """A deployment's fleet-side manifest as uploaded (`gapp ci setup --manifest`):
+    gapp.yaml keys only, `name` refused (the id names the deployment), and the
+    whole of it valid against the gapp.yaml schema."""
+    from gapp.admin.sdk.schema import ManifestValidationError, validate_manifest
+    if not isinstance(manifest, dict):
+        raise FleetRefusal("invalid-input", "The manifest is not a list of key: value settings.")
+    validate_changes(manifest)
+    try:
+        validate_manifest(manifest)
+    except ManifestValidationError as e:
+        raise FleetRefusal("invalid-input", "The manifest has settings gapp doesn't accept: " + "; ".join(
+            f"{i['path']}: {i['message']}" for i in e.issues)) from None
+    return copy.deepcopy(manifest)
+
+
+def replacement_changes(current: dict, manifest: dict) -> dict:
+    """The changes that make an entry's gapp.yaml keys exactly `manifest`:
+    every key of `current` (an entry, or its keys) that `manifest` lacks
+    removed (None), every key of `manifest` set."""
+    changes = {key: None for key in manifest_keys(current) if key not in manifest}
+    changes.update(copy.deepcopy(manifest))
     return changes
 
 

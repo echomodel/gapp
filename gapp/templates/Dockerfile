@@ -18,5 +18,6 @@ RUN if [ -f pyproject.toml ] || [ -f setup.py ]; then \
 
 EXPOSE 8080
 
-# gapp appends the CMD: the app's Procfile web: command, run by the shell
-# so $PORT expands when the container starts.
+# gapp appends the CMD: the app's Procfile web: command (or gapp.yaml's
+# start, for a repo with neither file), run by the shell so $PORT expands
+# when the container starts.

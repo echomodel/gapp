@@ -46,6 +46,22 @@ Other changes:
   `gapp_manifest_env_unset`.
 - `gapp manifest example` (MCP `gapp_manifest_example`) prints an
   annotated gapp.yaml with every key.
+- A CI deployment can carry a manifest: gapp.yaml settings the deploy
+  merges over the app repo's gapp.yaml, or uses as the whole file when
+  the repo has none. So a repo you can't change deploys through CI with
+  no fork, and one repo's deployments can differ.
+  - `gapp ci manifest <name>` (MCP `gapp_ci_manifest`) prints it, as YAML
+    and nothing else.
+  - `gapp ci setup <name> ... --manifest FILE` (MCP `manifest=`) replaces
+    it whole: the change is shown key by key and applied with `--update`,
+    as a commit in the fleet repo. `name` is refused; `--domain` still
+    sets the domain alone and wins over the file's.
+  - `gapp manifest --file FILE` (MCP `file=`) edits such a file with the
+    same commands as the repo's gapp.yaml.
+- `start` in gapp.yaml (`gapp manifest set start '...'`): the start
+  command for a repo with no Dockerfile or Procfile, typically set in a
+  CI deployment's manifest. A Dockerfile or Procfile always wins, and
+  init and status say when `start` is ignored.
 - A gapp.yaml that isn't valid YAML, or has settings gapp doesn't accept,
   now stops every command with one plain message naming the line or keys
   and the two ways out (was a traceback, or a JSON dump of the whole
