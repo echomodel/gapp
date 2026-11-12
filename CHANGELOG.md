@@ -3,6 +3,14 @@
 Notable changes to gapp. Versions are git tags (`vX.Y.Z`); the version
 source is `gapp/__init__.py`.
 
+## Unreleased
+
+- `gapp ci manifest --merged` and `gapp ci init` read gapp's version from
+  `gapp/__init__.py`, the version source. They read the installed
+  package's metadata, which an editable install can leave stale, so
+  `--merged` could warn about a version mismatch that wasn't there, and
+  `ci init` could pin the fleet to an older tag.
+
 ## 4.0.0rc12 (pre-release of 4.0.0)
 
 Breaking changes:

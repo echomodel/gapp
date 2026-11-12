@@ -2,8 +2,6 @@
 worked out from GitHub reads with the caller's own login. Nothing is saved,
 no runner, no GCP."""
 
-import importlib.metadata
-
 import pytest
 import yaml
 from click.testing import CliRunner
@@ -108,7 +106,8 @@ def test_no_start_method_is_a_problem_and_start_in_the_manifest_fixes_it(deploye
 
 
 def test_a_fleet_on_another_gapp_version_gets_a_note(deployed):
-    installed = f"v{importlib.metadata.version('gapp')}"
+    import gapp
+    installed = f"v{gapp.__version__}"
     _pin(deployed, installed)
     assert ci_mod.merged_manifest("my-app")["notes"] == []
     _pin(deployed, "v0.0.1")
