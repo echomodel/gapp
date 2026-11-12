@@ -12,7 +12,8 @@ def test_the_guidance_text_is_exact():
         "Add a Procfile with a web: line that starts the app and serves HTTP on $PORT, for example:\n"
         "  echo 'web: my-app serve' > Procfile\n"
         "  echo 'web: uvicorn my_app.server:app --host 0.0.0.0 --port $PORT' > Procfile\n"
-        "or add a Dockerfile."
+        "or add a Dockerfile. For a repo you can't change, set the command in gapp.yaml instead:\n"
+        "  gapp manifest set start 'my-app serve'"
     )
 
 
@@ -178,12 +179,13 @@ def test_cli_init_reports_the_start_method_or_says_not_deployable(tmp_path, monk
     monkeypatch.setattr(subprocess, "run", _no_gh(subprocess.run))
     result = CliRunner().invoke(cli_main, ["init"])
     assert result.exit_code == 0
-    assert result.output.splitlines()[-5:] == [
+    assert result.output.splitlines()[-6:] == [
         "  Not deployable yet: my-app has no start method.",
         "  Add a Procfile with a web: line that starts the app and serves HTTP on $PORT, for example:",
         "    echo 'web: my-app serve' > Procfile",
         "    echo 'web: uvicorn my_app.server:app --host 0.0.0.0 --port $PORT' > Procfile",
-        "  or add a Dockerfile.",
+        "  or add a Dockerfile. For a repo you can't change, set the command in gapp.yaml instead:",
+        "    gapp manifest set start 'my-app serve'",
     ]
     assert "Starts with" not in result.output and "Next: gapp setup" not in result.output
     (repo / "Procfile").write_text("web: my-app serve\n")
@@ -219,3 +221,36 @@ def test_mcp_init_takes_no_start_setting():
     from gapp.admin.mcp.server import gapp_init
     fn = getattr(gapp_init, "fn", gapp_init)
     assert not {"entrypoint", "cmd"} & set(inspect.signature(fn).parameters)
+
+
+def test_gapp_yaml_start_is_the_fallback_when_there_is_no_dockerfile_or_procfile(tmp_path):
+    (tmp_path / "gapp.yaml").write_text("start: my-app serve\n")
+    start = start_method(tmp_path)
+    assert start == {"method": "start", "web": "my-app serve", "ignored": None, "reason": None}
+    assert describe(start) == "my-app serve (gapp.yaml's start)"
+
+
+def test_a_procfile_or_dockerfile_wins_over_start_and_start_is_reported_ignored(tmp_path):
+    (tmp_path / "gapp.yaml").write_text("start: my-app serve\n")
+    (tmp_path / "Procfile").write_text("web: other serve\n")
+    start = start_method(tmp_path)
+    assert start["method"] == "procfile" and start["ignored"] == "gapp.yaml's start"
+    assert describe(start) == "web: other serve (Procfile) (gapp.yaml's start is ignored)"
+    (tmp_path / "Dockerfile").write_text("FROM scratch\n")
+    start = start_method(tmp_path)
+    assert start["ignored"] == "Procfile and gapp.yaml's start"
+    assert describe(start) == "the Dockerfile (the Procfile and gapp.yaml's start are ignored)"
+
+
+def test_start_does_not_stand_in_for_a_broken_procfile(tmp_path):
+    (tmp_path / "gapp.yaml").write_text("start: my-app serve\n")
+    (tmp_path / "Procfile").write_text("worker: my-app jobs\n")
+    start = start_method(tmp_path)
+    assert start["method"] is None and start["reason"] == "its Procfile has no web: line"
+
+
+def test_the_build_runs_start_as_the_image_command(tmp_path):
+    (tmp_path / "gapp.yaml").write_text("start: my-app serve --port $PORT\n")
+    _git_repo(tmp_path)
+    d = core_mod._prepare_build_dir(tmp_path, "img", start_method(tmp_path))
+    assert (Path(d) / "Dockerfile").read_text().endswith("\nCMD exec my-app serve --port $PORT\n")

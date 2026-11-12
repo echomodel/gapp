@@ -15,6 +15,17 @@ Breaking changes:
   `web:` command and supplies no server of its own.
 - `gapp init` (and the `gapp_init` MCP tool and the SDK's `init_solution`)
   no longer takes `entrypoint`.
+- `gapp_init` (MCP) and the SDK's `init_solution` no longer take `secrets`
+  or `domain`; set them with `gapp manifest` (`gapp_manifest_set`,
+  `gapp_manifest_env_set`). The SDK's `add_secret` and `remove_secret`,
+  which wrote the older form, are removed.
+- The older `service.env` mapping and `prerequisites.secrets` are removed
+  from gapp.yaml. Environment variables are the `env` list, and a secret is
+  an `env` entry with `secret:`. A gapp.yaml that still has either is
+  refused with the key named.
+- `service.port` is removed from gapp.yaml; it was accepted and ignored,
+  since the service listens on `$PORT`, which Cloud Run sets. A gapp.yaml
+  that still has it is refused as having an unknown key.
 
 Other changes:
 
@@ -24,6 +35,47 @@ Other changes:
   message when an app has no start method.
 - `gapp init` says "already set" for a repo that already has the
   gapp-solution topic (was "already_set").
+- `gapp manifest show` shows the repo's gapp.yaml settings, set or not, each
+  with what it means; bare `gapp manifest` lists its commands. `gapp manifest set|unset` changes `name`, `public`,
+  `domain`, `memory`, `cpu` and `max-instances`, and `gapp manifest env
+  set|unset` the environment variables (a plain value, `--secret`
+  with `--generate`, or `--data-path`). Each change is validated and
+  written only when the file changes. A change to the deployment's name
+  needs `--new-deployment`. MCP: `gapp_manifest_show`, `gapp_manifest_set`,
+  `gapp_manifest_unset`, `gapp_manifest_env_set`,
+  `gapp_manifest_env_unset`.
+- `gapp manifest example` (MCP `gapp_manifest_example`) prints an
+  annotated gapp.yaml with every key.
+- A CI deployment can carry a manifest: gapp.yaml settings the deploy
+  merges over the app repo's gapp.yaml, or uses as the whole file when
+  the repo has none. So a repo you can't change deploys through CI with
+  no fork, and one repo's deployments can differ.
+  - `gapp ci manifest <name>` (MCP `gapp_ci_manifest`) prints it, as YAML
+    and nothing else.
+  - `gapp ci setup <name> ... --manifest FILE` (MCP `manifest=`) replaces
+    it whole: the change is shown key by key and applied with `--update`,
+    as a commit in the fleet repo. `name` is refused; `--domain` still
+    sets the domain alone and wins over the file's.
+  - `gapp manifest --file FILE` (MCP `file=`) edits such a file with the
+    same commands as the repo's gapp.yaml.
+- `start` in gapp.yaml (`gapp manifest set start '...'`): the start
+  command for a repo with no Dockerfile or Procfile, typically set in a
+  CI deployment's manifest. A Dockerfile or Procfile always wins, and
+  init and status say when `start` is ignored.
+- A gapp.yaml that isn't valid YAML, or has settings gapp doesn't accept,
+  now stops every command with one plain message naming the line or keys
+  and the two ways out (was a traceback, or a JSON dump of the whole
+  schema). `gapp init --fresh` (MCP `gapp_init(fresh=True)`) starts over:
+  the file is kept as gapp.yaml.bak and a new one holds only the name.
+- `gapp init` says what the deployment's name is, where it came from,
+  and that changing it later makes a new deployment.
+- The help for `gapp`, `gapp status`, `gapp secrets` and `gapp ci init`
+  now covers what was only in the repo's docs: the direct path from init
+  to deploy, what status checks, how to declare secrets, and the GitHub
+  App a fleet needs for private repos. A fleet register run that cannot
+  read a private repo now gives those steps itself.
+- The gapp.yaml schema descriptions say what each setting does and its
+  default.
 
 ## 4.0.0rc10 (pre-release of 4.0.0)
 

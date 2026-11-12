@@ -5,7 +5,6 @@ from pathlib import Path
 import pytest
 
 from gapp.admin.sdk.manifest import (
-    get_prerequisite_secrets,
     get_required_apis,
     get_service_config,
     get_solution_name,
@@ -42,13 +41,16 @@ def test_solution_name_falls_back_to_dir_name():
     assert get_solution_name(manifest, Path("/tmp/my-repo")) == "my-repo"
 
 
-def test_prerequisite_secrets():
-    manifest = {"prerequisites": {"secrets": {"API_KEY": {"description": "API key"}}}}
-    assert "API_KEY" in get_prerequisite_secrets(manifest)
-
-
-def test_prerequisite_secrets_empty():
-    assert get_prerequisite_secrets({}) == {}
+@pytest.mark.parametrize("text,path", [
+    ("prerequisites:\n  secrets:\n    api-key:\n      description: x\n", "prerequisites.secrets"),
+    ("service:\n  env:\n    LOG: INFO\n", "service.env"),
+])
+def test_older_forms_are_unknown_keys(tmp_path, text, path):
+    """Secrets are env entries with secret:, and env is a list; the older forms are refused."""
+    (tmp_path / "gapp.yaml").write_text(text)
+    with pytest.raises(ManifestValidationError) as exc:
+        load_manifest(tmp_path)
+    assert path in str(exc.value)
 
 
 def test_load_manifest_strict_rejects_invalid_schema(tmp_path):
@@ -100,22 +102,14 @@ def test_service_config_defaults():
     manifest = {"service": {"memory": "512Mi"}}
     config = get_service_config(manifest)
     assert "entrypoint" not in config
-    assert config["port"] == 8080
     assert config["memory"] == "512Mi"
     assert config["cpu"] == "1"
     assert config["max_instances"] == 1
-    assert config["env"] == {}
 
 
 def test_service_config_overrides():
-    manifest = {"service": {
-        "memory": "1Gi",
-        "env": {"FOO": "bar"},
-    }}
-    config = get_service_config(manifest)
-    assert config["port"] == 8080
+    config = get_service_config({"service": {"memory": "1Gi"}})
     assert config["memory"] == "1Gi"
-    assert config["env"] == {"FOO": "bar"}
 
 
 # --- New env var support ---
@@ -145,14 +139,6 @@ def test_get_env_vars_new_format():
     assert len(result) == 2
     assert result[0]["name"] == "LOG_LEVEL"
     assert result[1]["secret"]["generate"] is True
-
-
-def test_get_env_vars_legacy_format():
-    manifest = {"service": {"env": {"DB_HOST": "localhost", "LOG_LEVEL": "DEBUG"}}}
-    result = get_env_vars(manifest)
-    assert len(result) == 2
-    names = {e["name"] for e in result}
-    assert names == {"DB_HOST", "LOG_LEVEL"}
 
 
 def test_get_env_vars_empty():
@@ -260,18 +246,6 @@ env:
     msg = str(exc.value)
     assert "env.0.name" in msg
     assert "required" in msg.lower() or "missing" in msg.lower()
-
-
-def test_prerequisite_secret_unknown_field_rejected(tmp_path):
-    """Nested dicts (prerequisites.secrets.<name>) also reject typos."""
-    _write_yaml(tmp_path, """
-prerequisites:
-  secrets:
-    api-token:
-      desription: typo of description
-""")
-    with pytest.raises(ManifestValidationError, match="desription"):
-        load_manifest(tmp_path)
 
 
 def test_service_max_instances_wrong_type_rejected(tmp_path):
@@ -403,3 +377,11 @@ def test_manifest_name_wins_over_origin(tmp_path):
     repo = tmp_path / "repo"
     _git_repo(repo, "https://github.com/acme/ignored.git")
     assert get_solution_name({"name": "explicit"}, repo) == "explicit"
+
+
+def test_gapp_yaml_has_no_port_setting(tmp_path):
+    """The service listens on $PORT, which Cloud Run sets; service.port is an unknown key."""
+    (tmp_path / "gapp.yaml").write_text("service:\n  port: 9000\n")
+    with pytest.raises(ManifestValidationError) as exc:
+        load_manifest(tmp_path)
+    assert "service.port" in str(exc.value)

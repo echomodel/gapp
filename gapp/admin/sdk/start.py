@@ -1,8 +1,10 @@
-"""How an app starts: a Dockerfile, or a Procfile with one `web:` line.
+"""How an app starts: a Dockerfile, a Procfile with one `web:` line, or
+gapp.yaml's `start`, in that order.
 
-gapp reads these files and never writes them. It knows no frameworks and
-detects nothing: an app declares how it starts in a file it owns, in a
-format other builders read too. gapp.yaml has no start settings.
+gapp reads these and never writes them. It knows no frameworks and detects
+nothing. A repo you own should start from a Dockerfile or Procfile, which
+other builders read too. `start` is the fallback for a repo you can't
+change: a fleet deployment sets it in its fleet-side manifest.
 
 One check (`start_method`) and one guidance text (`START_METHOD_HELP`)
 are shared by init, status, setup and deploy, so every command says the
@@ -17,7 +19,8 @@ START_METHOD_HELP = (
     "Add a Procfile with a web: line that starts the app and serves HTTP on $PORT, for example:\n"
     "  echo 'web: my-app serve' > Procfile\n"
     "  echo 'web: uvicorn my_app.server:app --host 0.0.0.0 --port $PORT' > Procfile\n"
-    "or add a Dockerfile."
+    "or add a Dockerfile. For a repo you can't change, set the command in gapp.yaml instead:\n"
+    "  gapp manifest set start 'my-app serve'"
 )
 
 
@@ -43,33 +46,62 @@ def _procfile_web(path: Path) -> tuple[str | None, str | None]:
     return webs[0], None
 
 
+def _manifest_start(root: Path) -> str | None:
+    """gapp.yaml's `start` command, if the file sets one. A file gapp can't
+    read gives none here; the commands that read it report the problem."""
+    from gapp.admin.sdk.manifest import load_manifest
+    from gapp.admin.sdk.schema import ManifestUnreadable
+    try:
+        value = load_manifest(root, strict=False).get("start")
+    except ManifestUnreadable:
+        return None
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _ignored(*names: str | None) -> str | None:
+    names = [n for n in names if n]
+    return " and ".join(names) or None
+
+
 def start_method(root: Path | str) -> dict:
     """How the app in `root` starts.
 
-    Returns {"method": "dockerfile" | "procfile" | None, "web": <command>
-    or None, "ignored": "Procfile" or None, "reason": why there is none, or
-    None}. A Dockerfile wins over a Procfile; the Procfile is then reported
-    as ignored.
+    Returns {"method": "dockerfile" | "procfile" | "start" | None, "web":
+    <command> or None, "ignored": what is set but ignored ("Procfile",
+    "gapp.yaml's start", or both) or None, "reason": why there is none, or
+    None}. A Dockerfile wins over a Procfile, and a Procfile over gapp.yaml's
+    `start`. A Procfile that is there but has no single web: line is no
+    start method (its reason says why); `start` does not stand in for it.
     """
     root = Path(root)
     procfile = root / "Procfile"
+    start = _manifest_start(root)
+    start_label = "gapp.yaml's start" if start else None
     if (root / "Dockerfile").is_file():
         return {"method": "dockerfile", "web": None,
-                "ignored": "Procfile" if procfile.is_file() else None, "reason": None}
+                "ignored": _ignored("Procfile" if procfile.is_file() else None, start_label), "reason": None}
     if procfile.is_file():
         web, reason = _procfile_web(procfile)
         if web:
-            return {"method": "procfile", "web": web, "ignored": None, "reason": None}
-        return {"method": None, "web": None, "ignored": None, "reason": reason}
+            return {"method": "procfile", "web": web, "ignored": start_label, "reason": None}
+        return {"method": None, "web": None, "ignored": start_label, "reason": reason}
+    if start:
+        return {"method": "start", "web": start, "ignored": None, "reason": None}
     return {"method": None, "web": None, "ignored": None, "reason": None}
 
 
 def describe(start: dict) -> str:
     """The start method in words, for "Starts with: ..."."""
+    ignored = start.get("ignored") or ""
+    if ignored:
+        ignored = ignored.replace("Procfile", "the Procfile", 1) if ignored.startswith("Procfile") else ignored
+        ignored = f" ({ignored} {'are' if ' and ' in ignored else 'is'} ignored)"
     if start["method"] == "dockerfile":
-        return "the Dockerfile" + (" (the Procfile is ignored)" if start.get("ignored") else "")
+        return "the Dockerfile" + ignored
     if start["method"] == "procfile":
-        return f"web: {start['web']} (Procfile)"
+        return f"web: {start['web']} (Procfile)" + ignored
+    if start["method"] == "start":
+        return f"{start['web']} (gapp.yaml's start)"
     return "nothing yet"
 
 
