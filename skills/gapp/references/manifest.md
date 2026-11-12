@@ -24,16 +24,19 @@ up.
 
 ## How the app starts
 
-gapp starts an app from a file in the app's folder, never from
-`gapp.yaml`:
+gapp starts an app from a file in the app's folder, else from
+`gapp.yaml`'s `start`:
 
 - **A Dockerfile.** gapp builds it as is.
 - **A Procfile** with one `web:` line: the command that starts the
   app and serves HTTP on `$PORT`. gapp builds from its own template
   and runs that command.
 
-With both, the Dockerfile wins and the Procfile is ignored. If the
-repo has a Dockerfile, that is the start method; you are done.
+- **`start` in gapp.yaml**, only when there is neither file: a
+  fallback for a repo you can't change (see below).
+
+The Dockerfile wins over the Procfile, and the Procfile over `start`.
+If the repo has a Dockerfile, that is the start method; you are done.
 Otherwise:
 
 1. Work out the command that starts the app and serves HTTP on
@@ -56,10 +59,29 @@ Otherwise:
    run `gapp init`. It reports `Starts with: web: ... (Procfile)` when
    gapp sees it.
 
-Never put the start command in `gapp.yaml`: it has no start settings,
-and unknown keys are refused. When any gapp command reports "Not
-deployable yet" or "has no start method", relay its message to the
-user and ask; do not guess a command.
+For a repo the user owns, write the Procfile; don't use `start`.
+`start` is for a repo they can't change, deployed through CI: set it
+in the deployment's fleet-side manifest (`gapp manifest --file FILE
+set start '...'`, then `gapp ci setup NAME ... --manifest FILE`), with
+the user's confirmation of the command, as for a Procfile. When any
+gapp command reports "Not deployable yet" or "has no start method",
+relay its message to the user and ask; do not guess a command.
+
+## A CI deployment's fleet-side manifest
+
+Through CI, a deployment's settings are the app repo's `gapp.yaml`
+with the fleet's manifest for that deployment merged over it (keys
+replaced, env variables by name), or the manifest alone when the repo
+has no `gapp.yaml`. Use it for a repo the user can't change, or to give
+one repo's deployments different settings.
+
+1. `gapp ci manifest NAME > FILE` (`gapp_ci_manifest`): the current one.
+   An upload replaces it whole, so always start from it.
+2. Edit with `gapp manifest --file FILE set|unset|env set|env unset ...`
+   (the MCP manifest tools take `file=`). It has no `name`.
+3. `gapp ci setup NAME --repo OWNER/REPO --project PROJECT --manifest
+   FILE` shows what would change; show the user, then re-run with
+   `--update` (`gapp_ci_setup(manifest=..., update=True)`).
 
 ## Minimal configuration
 
@@ -112,9 +134,32 @@ env:
     value: INFO
 ```
 
-For the full field list, run `gapp manifest schema` (or the
-`gapp_schema` tool) rather than guessing; the schema is the live
-source of truth and validation errors quote it.
+Make these changes with `gapp manifest` rather than by editing the
+file: `gapp manifest set public true`, `gapp manifest env set
+APP_KEY --secret app-key --generate`, `gapp manifest env set
+APP_USERS_PATH --data-path users`, `gapp manifest env set LOG_LEVEL
+INFO` (MCP: `gapp_manifest_set`, `gapp_manifest_env_set`). Each one is
+validated and the file is written only when it changes. `gapp manifest
+show` (`gapp_manifest_show`) shows what is set now, each setting with
+what it means.
+
+The name is the deployment's identity: it keys the service, data
+bucket and secrets. `gapp init` writes the derived name; changing it
+later makes a new, empty deployment, so `gapp manifest set name`
+refuses without `--new-deployment`. Pass that only after the user
+confirms they want a new deployment.
+
+For every key with a comment, run `gapp manifest example`
+(`gapp_manifest_example`); `gapp manifest schema` (`gapp_schema`) is the
+JSON Schema. Both come from the model gapp validates against.
+
+**A broken gapp.yaml.** When any command reports that gapp.yaml can't
+be read or has settings gapp doesn't accept, relay the message: it
+names the line or key. Prefer fixing those lines, which keeps the other
+settings. Starting over with `gapp init --fresh` (`gapp_init(fresh=True)`)
+keeps the old file as gapp.yaml.bak and leaves only the name; pass it
+only after the user says yes, then re-add their settings with
+`gapp manifest`.
 
 ## Cloud readiness check for MCP servers
 

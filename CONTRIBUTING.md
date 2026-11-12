@@ -109,16 +109,21 @@ Each phase completes cleanly and tells the user what comes next. No phase does d
 Each solution repo has a manifest at the root:
 
 ```yaml
-prerequisites:
-  secrets:
-    api-token:
-      description: "API authentication token"
+name: my-app
+public: true
+env:
+  - name: API_TOKEN
+    secret:
+      name: api-token
 ```
 
+`gapp manifest example` prints every key with what it does.
+
 Key decisions:
-- **gapp.yaml says nothing about how the app starts** — that is the app's own Procfile `web:` line or Dockerfile (see "How an app starts" below).
+- **How the app starts is the app's own Procfile `web:` line or Dockerfile**; gapp.yaml's `start` is only a fallback for a repo with neither (see "How an app starts" below).
 - **Port 8080 is hardcoded** — not configurable. Cloud Run sets `$PORT` to 8080, and a Procfile command must serve on `$PORT`.
-- **No `prerequisites.apis`** — foundation APIs are hardcoded in `gapp setup`.
+- **`prerequisites.apis` is only for extra APIs** — the APIs gapp itself needs are hardcoded in `gapp setup`; the list adds the app's own.
+- **One form for each thing.** Environment variables are the `env` list; a secret is an `env` entry with `secret:`. The older `service.env` mapping and `prerequisites.secrets` are not in the schema, so a file that still has them is refused with the key named.
 - **Secrets require an explicit `name`** — the `name` field under `secret:` is the short name in Secret Manager. gapp prefixes it with the solution name: `name: app-key` on solution `my-app` → `my-app-app-key` in Secret Manager. No auto-derivation from the env var name.
 - **Every gapp-managed secret is stamped with `gapp-solution=<name>`** — the label is the machine-readable ownership signal. `gapp secrets list`, the pre-deploy validator, and any future tooling query Secret Manager by `labels.gapp-solution=<solution>` (one call) and diff against gapp.yaml declarations.
 - **gapp never implicitly takes over pre-existing secrets** — if `gapp secrets set` or a deploy-time generate path tries to create `<solution>-<short-name>` and a secret at that ID already exists without a matching `gapp-solution=<solution>` label, the operation fails with an actionable error. Every secret gapp manages is labeled; the absence of a label (or a different owner label) means something outside gapp's lifecycle put it there, and silently adopting it would be a security-sensitive side-effect. The user must investigate manually with `gcloud secrets describe` and either delete the existing secret (so gapp can reclaim the name) or resolve the ownership conflict another way.
@@ -179,9 +184,13 @@ service:
 
 **How an app starts is a file the app owns, in a portable format.** An app starts from a Dockerfile, or from a Procfile with exactly one `web:` line: the command that starts the app and serves HTTP on `$PORT`. These are the same files other builders read. gapp knows no frameworks, never detects one, and never writes app files; it only checks that a start method exists. One SDK check (`gapp/admin/sdk/start.py`) and one message are shared by init, status, setup and deploy, and deploy refuses before building an app without one. With both files, the Dockerfile wins and the Procfile is reported as ignored.
 
-**Why not gapp.yaml.** A start command in gapp.yaml would work only with gapp. A Procfile works with gapp's own build template and with standard builders such as buildpacks, unchanged, so builds can move to buildpacks without touching any app.
+**`start` in gapp.yaml is a fallback, not a second way.** It is used only when the repo has no Dockerfile and no Procfile, and a Dockerfile or Procfile always wins (init and status say `start` is ignored). It exists because a CI deployment of a repo you can't change has nowhere else to put the command: the fleet's manifest for the deployment sets it. A repo you own should use a Procfile, which works with gapp's template and with standard builders such as buildpacks. If gapp moves to buildpacks, `start` is passed as the buildpacks' documented entrypoint build setting, which they use when there is no Procfile, so `start` stays portable. A Procfile that is there but broken is no start method; `start` doesn't stand in for it, so a mistake in a file the repo owns is never silently bypassed.
 
-**One way to declare how an app starts:** gapp.yaml has no start settings; anything unknown in it is refused.
+**gapp.yaml is changed through the CLI, not only by hand.** Someone with nothing but the installed CLI must be able to set every deployment setting. `gapp manifest show` shows the repo's own settings, set or not, each with what it means, because a command reports the caller's state; generic reference text belongs in help. Bare `gapp manifest` is a group and lists its commands; only `show`'s text output carries a footer naming the change commands, and `--json`, `schema` and `example` print only their content, so they can be piped. `gapp manifest set/unset` and `gapp manifest env set/unset` (`gapp/admin/sdk/manifest_edit.py`) change one setting, validate the result against the schema, and write through `save_manifest` only when the content changes. `gapp manifest example` prints every key with its schema description as the comment, so it can't drift from the model; the README shows the same text, and tests check both and that every schema key appears. `paths` and `prerequisites.apis` stay hand edits: both are rare, and the manifest help and `show`'s footer say so and print the file's path, so a CLI-only user knows where to go. Verb pairs: `set`/`unset` for named values (settings and env variables), `add`/`remove` for list members (`ci sources`). `unset` takes only the settings `set` takes; it is not a way to edit arbitrary structure. No message the CLI, MCP tools or SDK print points to the README or the repo's docs, which the installed CLI does not have; a test enforces it.
+
+**A broken gapp.yaml is reported, never repaired.** A file that isn't YAML (`ManifestUnreadable`, with line and column) or fails the schema (`ManifestValidationError`, each key and why) stops every command that reads it with one plain message: where it's wrong, and the two ways out, fixing those lines or `gapp init --fresh`. No command edits structure it can't read; `unset` takes only known settings. `--fresh` moves the file to a numbered `gapp.yaml.bak` and writes one holding only the name, the old file's when it can be read (its single top-level `name:` line if it isn't YAML), and says when it couldn't. It never prompts: the flag is the user's instruction, and the backup is what makes it safe. The MCP `gapp_init(fresh=True)` description tells an agent to get the user's yes first, since the agent, not the user, passes the flag. The CI overlay step reads the repo's file through the same parser, so a deploy run reports the same message.
+
+**The name is guarded.** The name keys the Cloud Run service, the data bucket and the secrets, so a different name is a new, empty deployment while the old one keeps its URL and data. `gapp init` writes the derived name (origin repo, else folder) so it stays the same in any clone, including one without an origin remote. Any `gapp manifest` change that alters the effective name is refused unless `--new-deployment` is given; writing the name the deployment already has is not a change and needs nothing. CI deploys are unaffected: the fleet overlay sets the name to the entry's id.
 
 **Terraform and declared state.** Each deploy applies a fixed Terraform module from state kept in the deployment's own bucket, so a deployment is reproducible from its repo and its project, a redeploy changes only what changed, and drift is corrected on the next deploy.
 
@@ -189,7 +198,7 @@ service:
 
 **Dockerfile tradeoffs.** The design preference is for solutions to NOT maintain a Dockerfile — gapp generates one, meaning less maintenance and consistent builds across solutions. But maintaining a Dockerfile gives full control over the build (custom system deps, non-Python components, multi-stage builds). Both are valid. gapp uses a solution's Dockerfile without question when present.
 
-**`env` section replaces `prerequisites.secrets`.** The old `prerequisites.secrets` section is deprecated. The `env` section supports plain values, secret-backed values, and auto-generation (`generate: true`). Each secret entry requires a `name` field — the short name used in Secret Manager (auto-prefixed with the solution name for isolation). `{{VARIABLE}}` substitution resolves gapp-provided values (`SOLUTION_DATA_PATH`, `SOLUTION_NAME`) at deploy time. Secrets with `generate: true` are created automatically during deploy. Secrets without `generate` must be populated in advance with `gapp secrets set`.
+**Environment variables and secrets are the `env` list.** The `env` section supports plain values, secret-backed values, and auto-generation (`generate: true`). Each secret entry requires a `name` field — the short name used in Secret Manager (auto-prefixed with the solution name for isolation). `{{VARIABLE}}` substitution resolves gapp-provided values (`SOLUTION_DATA_PATH`, `SOLUTION_NAME`) at deploy time. Secrets with `generate: true` are created automatically during deploy. Secrets without `generate` must be populated in advance with `gapp secrets set`.
 
 ## Static Terraform + Generated tfvars.json
 
@@ -620,7 +629,7 @@ These rules are on purpose; keep them unless the design changes. What they mean 
 - **A second entry for a registered repo is refused unless it is `--copy-of`.** Accidental duplicates (a typo in the name) would otherwise create a second service quietly. The explicit flag is the intent.
 - **Never guess between projects.** A name on two hosted projects is refused without `--project` (see "Finding a deployment"); a wrong guess deploys to the wrong place.
 - **No environments.** gapp 3's environment was a project label (`gapp-env`) and nothing else; a deployment plus its project carries the same information (see "No environments").
-- **An entry carries only the domain; gapp.yaml carries the rest.** `--config` merged a local file into the entry. That change could not be repeated or reviewed, so it was removed. Re-running `gapp ci setup … --update` rewrites the entry and drops keys gapp.yaml doesn't have, so setup is the one repair; any change to an existing entry is shown first and needs `--update`, and the same request again is unchanged; `--copy-of` never copies such keys. No path asks anyone to edit `gapp/deployments.yaml`.
+- **An entry's manifest is set whole, and every change is recorded.** The old `--config` merged a local file into the entry, and nothing recorded what it changed, so it was removed. `--manifest FILE` is different in the two ways that mattered: the file replaces the entry's gapp.yaml keys whole (a key it lacks is removed, so the result is exactly the file), and the change is written by the register run as a commit in the fleet repo, shown key by key first and applied only with `--update`. `gapp ci manifest <name>` prints the current one, so an edit starts from what is there. The manifest is validated against the schema before anything is read or dispatched, and `name` is refused (the id names the deployment). `--domain` still sets the domain alone and wins over the manifest's. Re-running `gapp ci setup … --update` drops keys gapp.yaml doesn't have, so setup is the one repair. No path asks anyone to edit `gapp/deployments.yaml`.
 - **Status doesn't check trust.** Only a deploy run proves a project trusts the fleet (its Environment and Workload Identity Federation sign-in). A status read could only guess, and the Environments API isn't reachable from every machine. So status reports what's deployed, where, and the last deploy, and the deploy run refuses with the project-setup step.
 - **Allowed sources are a repository variable** (see "Why the allowed sources are a repository variable"). Reading or changing it needs the Actions variables API, which a sandboxed agent session may not reach.
 
@@ -710,8 +719,9 @@ names and the marker sentence in each `ci` command's help.
 The **fleet repo** (the term replaces "CI repo" everywhere) holds gapp's
 three workflows (deploy, register, status) and `gapp/deployments.yaml`: one entry per **deployment**,
 keyed by an operator-chosen name, flat shape, no nested block. `id`,
-`repo` and `project` are the entry's own fields, and the entry carries
-the deployment's domain; every other setting comes from the app repo's
+`repo` and `project` are the entry's own fields, and the entry can carry
+a manifest for the deployment (gapp.yaml keys, set with `--manifest` or,
+for the domain alone, `--domain`); the rest comes from the app repo's
 gapp.yaml (see "Deployment identity: deliberate rules"). The deploy run's
 overlay step merges the entry's keys over the repo's gapp.yaml
 (`fleet.merge_manifest`). gapp core is unchanged. `id` keys every GCP

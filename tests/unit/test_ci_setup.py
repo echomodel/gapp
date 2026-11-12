@@ -322,12 +322,12 @@ def test_rename_refuses_a_missing_deployment_or_a_taken_name(wired):
 def test_setup_has_no_working_directory_parameters():
     import inspect
     params = inspect.signature(ci_mod.setup_deployment).parameters
-    assert set(params) == {"name", "repo", "project", "domain", "copy_of", "watch", "command", "update"}
+    assert set(params) == {"name", "repo", "project", "domain", "copy_of", "manifest", "watch", "command", "update"}
     assert "solution" not in params and "solution_repo" not in params
 
 
 def test_setup_takes_no_config_file_anywhere():
-    """No option merges a local file into an entry: an entry carries the domain (--domain); the app's gapp.yaml the rest."""
+    """The old --config merge is gone; a deployment's fleet-side settings are its manifest (--manifest), a whole replace."""
     import inspect
     from click.testing import CliRunner
     from gapp.admin.cli.main import main
@@ -436,3 +436,97 @@ def test_setup_text_is_built_in_the_sdk_for_every_outcome(wired):
     assert res["ok"] is False
     assert res["lines"] == ["me/other can't be set up yet."]
     assert "is not yet trusted to deploy to GCP project my-proj" in res["next_step"]["hint"]
+
+
+# -- the fleet-side manifest: --manifest and gapp ci manifest --
+
+
+def test_a_manifest_sets_a_new_deployments_settings_and_ci_manifest_reads_them_back(wired):
+    manifest = {"public": True, "start": "my-app serve",
+                "env": [{"name": "API_KEY", "secret": {"name": "api-key"}}]}
+    res = _setup(manifest=manifest)
+    assert res["ok"] is True and res["dispatched"] is True
+    entry = wired.deployments(FLEET)["my-app"]
+    assert entry == {"id": "my-app", "repo": "me/my-app", "project": "my-proj", **manifest}
+    got = ci_mod.deployment_manifest("my-app")
+    assert got["ok"] is True and got["manifest"] == manifest and got["repo"] == "me/my-app"
+
+
+def test_a_manifest_replaces_the_entrys_settings_whole_and_is_shown_before_update(wired):
+    _setup(domain="mcp.example.com")
+    wired.deploy(FLEET, "my-app", "me/my-app", "my-proj", domain="mcp.example.com", public=True,
+                 env=[{"name": "A", "value": "1"}])
+    dispatched = len(wired.dispatched)
+    new = {"service": {"memory": "1Gi"}, "env": [{"name": "B", "value": "2"}]}
+    res = _setup(manifest=new)
+    assert res["ok"] is False and res["next_step"]["action"] == "pass --update" and len(wired.dispatched) == dispatched
+    assert res["changes_shown"] == [
+        "domain: mcp.example.com → (none)",
+        'env: [{"name": "A", "value": "1"}] → [{"name": "B", "value": "2"}]',
+        "would remove: public",
+        'would set: service = {"memory": "1Gi"}',
+    ]
+    res = _setup(manifest=new, update=True)
+    assert res["ok"] is True and res["action"] == "updated"
+    assert "removed: public" in res["changes_shown"]
+    assert wired.deployments(FLEET)["my-app"] == {"id": "my-app", "repo": "me/my-app", "project": "my-proj", **new}
+    assert _setup(manifest=new)["action"] == "unchanged"
+
+
+def test_domain_wins_over_the_manifests_domain(wired):
+    _setup(manifest={"domain": "a.example.com", "public": True}, domain="b.example.com")
+    entry = wired.deployments(FLEET)["my-app"]
+    assert entry["domain"] == "b.example.com" and entry["public"] is True
+
+
+@pytest.mark.parametrize("manifest, says", [
+    ({"name": "other"}, "'name' is not a key a deployment can set"),
+    ({"publik": True}, "'publik' is not a gapp.yaml key"),
+    ({"service": {"memory": 512}}, "service.memory"),
+    ({"repo": "me/other"}, "'repo' is the entry's own field"),
+    (["public"], "not a list of key: value settings"),
+])
+def test_a_bad_manifest_is_refused_before_anything_is_read_or_dispatched(wired, manifest, says):
+    res = _setup(manifest=manifest)
+    assert res["ok"] is False and says in res["next_step"]["hint"]
+    assert wired.dispatched == []
+
+
+def test_a_copy_with_a_manifest_gets_exactly_that_manifest(wired):
+    _setup(manifest={"public": True, "env": [{"name": "A", "value": "1"}]})
+    res = ci_mod.setup_deployment("my-app-staging", copy_of="my-app", manifest={"service": {"memory": "2Gi"}})
+    assert res["ok"] is True
+    entry = wired.deployments(FLEET)["my-app-staging"]
+    assert entry["repo"] == "me/my-app" and entry["service"] == {"memory": "2Gi"}
+    assert "public" not in entry and "env" not in entry
+
+
+def test_ci_manifest_of_an_unknown_deployment_names_the_list(wired):
+    res = ci_mod.deployment_manifest("nope")
+    assert res["ok"] is False and "gapp ci list" in res["next_step"]["hint"]
+
+
+def test_cli_ci_manifest_prints_only_yaml_and_setup_reads_the_file(wired, tmp_path):
+    import yaml
+    from click.testing import CliRunner
+    from gapp.admin.cli.main import main
+    path = tmp_path / "my-app.yaml"
+    path.write_text("public: true\nstart: my-app serve\n")
+    res = CliRunner().invoke(main, ["ci", "setup", "--repo", "me/my-app", "--project", "my-proj",
+                                    "--manifest", str(path)])
+    assert res.exit_code == 0, res.output
+    out = CliRunner().invoke(main, ["ci", "manifest", "my-app"]).output
+    assert out.startswith("# Fleet-side manifest for my-app, merged over me/my-app's gapp.yaml at deploy.\n")
+    assert yaml.safe_load(out) == {"public": True, "start": "my-app serve"}
+    bad = tmp_path / "bad.yaml"
+    bad.write_text("env:\n  - name: A\n   value: b\n")
+    res = CliRunner().invoke(main, ["ci", "setup", "--repo", "me/my-app", "--project", "my-proj", "--manifest", str(bad)])
+    assert res.exit_code == 1 and "can't be read as YAML: line 3" in res.output
+
+
+def test_the_deploy_run_starts_a_repo_with_no_gapp_yaml_from_the_fleet_manifest(tmp_path):
+    """The overlay writes the fleet manifest as the whole file; `start` in it is the start method."""
+    from gapp.admin.sdk.start import start_method
+    entry = {"id": "my-app", "repo": "me/my-app", "project": "my-proj", "public": True, "start": "my-app serve"}
+    ci_mod.runner_overlay(str(tmp_path / "gapp.yaml"), __import__("json").dumps(fleet.overlay_for(entry)))
+    assert start_method(tmp_path) == {"method": "start", "web": "my-app serve", "ignored": None, "reason": None}

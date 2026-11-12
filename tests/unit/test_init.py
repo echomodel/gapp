@@ -69,19 +69,6 @@ def test_init_takes_no_start_setting():
     assert "cmd" not in inspect.signature(init_solution).parameters
 
 
-def test_init_adds_secrets(tmp_path, monkeypatch):
-    """Verify init_solution adds prerequisite secrets."""
-    repo = tmp_path / "app"
-    repo.mkdir()
-    (repo / ".git").mkdir()
-    monkeypatch.chdir(repo)
-    
-    init_solution(repo, secrets={"api-key": "Internal API token"})
-    manifest = load_manifest(repo)
-    assert "api-key" in manifest["prerequisites"]["secrets"]
-    assert manifest["prerequisites"]["secrets"]["api-key"]["description"] == "Internal API token"
-
-
 def test_init_skips_topic_if_not_github(tmp_path, monkeypatch):
     """Verify topic status is 'skipped' if gh command fails."""
     repo = tmp_path / "app"
@@ -133,8 +120,3 @@ def test_init_writes_once_in_gapps_style_with_the_name_first(tmp_path, monkeypat
     assert init_solution(repo)["manifest_status"] == "unchanged"
 
 
-def test_init_with_an_empty_secrets_or_same_domain_changes_nothing(tmp_path, monkeypatch):
-    repo = _repo(tmp_path, monkeypatch)
-    (repo / "gapp.yaml").write_text("name: app\ndomain: d.example.com\n")
-    assert init_solution(repo, secrets={}, domain="d.example.com")["manifest_status"] == "unchanged"
-    assert (repo / "gapp.yaml").read_text() == "name: app\ndomain: d.example.com\n"

@@ -199,9 +199,9 @@ def test_build_tfvars_emits_env_secret_declarations(tmp_path):
     )
     (repo / "Procfile").write_text("web: my-app serve\n")
 
-    cfg = {"memory": "512Mi", "cpu": "1", "max_instances": 5, "env": {}}
+    cfg = {"memory": "512Mi", "cpu": "1", "max_instances": 5}
     tfvars = _build_tfvars(
-        "my-app", "proj-123", "img:tag", cfg, {}, repo, False, "",
+        "my-app", "proj-123", "img:tag", cfg, repo, False, "",
         "gapp-my-app-proj-123",
         solution_name="my-app",
     )
@@ -210,33 +210,6 @@ def test_build_tfvars_emits_env_secret_declarations(tmp_path):
         "APP_KEY": "my-app-app-key",
         "API_TOKEN": "my-app-api-token",
     }
-
-
-def test_build_tfvars_merges_env_secrets_with_prerequisites_secrets(tmp_path):
-    """Env-secret declarations and prerequisites.secrets both reach the secrets tfvar."""
-    from gapp.admin.sdk.core import _build_tfvars
-
-    repo = tmp_path / "app"
-    repo.mkdir()
-    (repo / "gapp.yaml").write_text(
-        "name: my-app\n"
-        "env:\n"
-        "  - name: APP_KEY\n"
-        "    secret: {name: app-key, generate: true}\n"
-    )
-    (repo / "Procfile").write_text("web: my-app serve\n")
-
-    cfg = {"memory": "512Mi", "cpu": "1", "max_instances": 5, "env": {}}
-    prerequisites = {"legacy-secret": {"description": "from old prerequisites block"}}
-    tfvars = _build_tfvars(
-        "my-app", "proj-123", "img:tag", cfg, prerequisites, repo, False, "",
-        "gapp-my-app-proj-123",
-        solution_name="my-app",
-    )
-
-    assert tfvars["secrets"]["APP_KEY"] == "my-app-app-key"
-    assert "LEGACY_SECRET" in tfvars["secrets"]
-    assert len(tfvars["secrets"]) == 2
 
 
 def test_build_tfvars_uses_solution_name_for_workspace_services(tmp_path):
@@ -253,9 +226,9 @@ def test_build_tfvars_uses_solution_name_for_workspace_services(tmp_path):
     )
     (repo / "Procfile").write_text("web: my-app serve\n")
 
-    cfg = {"memory": "512Mi", "cpu": "1", "max_instances": 5, "env": {}}
+    cfg = {"memory": "512Mi", "cpu": "1", "max_instances": 5}
     tfvars = _build_tfvars(
-        "my-svc", "proj-123", "img:tag", cfg, {}, repo, False, "",
+        "my-svc", "proj-123", "img:tag", cfg, repo, False, "",
         "gapp-parent-app-proj-123",
         solution_name="parent-app",
     )
@@ -275,9 +248,9 @@ def test_build_tfvars_emits_data_bucket(tmp_path):
     (repo / "gapp.yaml").write_text("name: my-app\n")
     (repo / "Procfile").write_text("web: my-app serve\n")
 
-    cfg = {"memory": "512Mi", "cpu": "1", "max_instances": 1, "env": {}}
+    cfg = {"memory": "512Mi", "cpu": "1", "max_instances": 1}
     tfvars = _build_tfvars(
-        "my-app", "proj-123", "img:tag", cfg, {}, repo, False, "",
+        "my-app", "proj-123", "img:tag", cfg, repo, False, "",
         "gapp-my-app-proj-123",
         solution_name="my-app",
     )
@@ -298,9 +271,9 @@ def test_build_tfvars_data_bucket_matches_get_bucket_name_convention(tmp_path):
     repo.mkdir()
     (repo / "gapp.yaml").write_text("name: my-app\n")
     (repo / "Procfile").write_text("web: my-app serve\n")
-    cfg = {"memory": "512Mi", "cpu": "1", "max_instances": 1, "env": {}}
+    cfg = {"memory": "512Mi", "cpu": "1", "max_instances": 1}
     tfvars = _build_tfvars(
-        "my-app", "proj-123", "img:tag", cfg, {}, repo, False, "",
+        "my-app", "proj-123", "img:tag", cfg, repo, False, "",
         expected,
         solution_name="my-app",
     )
@@ -340,9 +313,9 @@ def test_build_tfvars_emits_every_required_key(tmp_path, key):
     (repo / "gapp.yaml").write_text("name: my-app\n")
     (repo / "Procfile").write_text("web: my-app serve\n")
 
-    cfg = {"memory": "512Mi", "cpu": "1", "max_instances": 1, "env": {}}
+    cfg = {"memory": "512Mi", "cpu": "1", "max_instances": 1}
     tfvars = _build_tfvars(
-        "my-app", "proj-123", "img:tag", cfg, {}, repo, False, "",
+        "my-app", "proj-123", "img:tag", cfg, repo, False, "",
         "gapp-my-app-proj-123",
         solution_name="my-app",
     )
