@@ -4,7 +4,7 @@ from pathlib import Path
 
 import yaml
 
-from gapp.admin.sdk.schema import ManifestValidationError, validate_manifest
+from gapp.admin.sdk.schema import ManifestUnreadable, ManifestValidationError, validate_manifest
 
 
 def load_manifest(repo_path: Path, strict: bool = True) -> dict:
@@ -24,10 +24,26 @@ def load_manifest(repo_path: Path, strict: bool = True) -> dict:
     manifest_path = repo_path / "gapp.yaml"
     if not manifest_path.exists():
         return {}
-    with open(manifest_path) as f:
-        data = yaml.safe_load(f) or {}
+    data = parse_manifest_text(manifest_path.read_text())
     if strict:
         validate_manifest(data)
+    return data
+
+
+def parse_manifest_text(text: str) -> dict:
+    """Parse gapp.yaml's text. Raises ManifestUnreadable (with line and
+    column) for text that isn't YAML or isn't a mapping of keys."""
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError as e:
+        mark = getattr(e, "problem_mark", None)
+        problem = getattr(e, "problem", None) or str(e).splitlines()[0]
+        raise ManifestUnreadable(problem, mark.line + 1 if mark else None,
+                                 mark.column + 1 if mark else None) from None
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        raise ManifestUnreadable("the file is not a list of key: value settings")
     return data
 
 
@@ -101,11 +117,6 @@ def _origin_repo_name(repo_path: Path) -> str | None:
     return tail or None
 
 
-def get_prerequisite_secrets(manifest: dict) -> dict:
-    """Return prerequisite secrets from the manifest."""
-    return manifest.get("prerequisites", {}).get("secrets", {})
-
-
 def get_required_apis(manifest: dict) -> list:
     """Return required GCP APIs from the manifest."""
     return manifest.get("prerequisites", {}).get("apis", [])
@@ -115,47 +126,16 @@ def get_service_config(manifest: dict) -> dict:
     """Return service configuration with defaults."""
     service = manifest.get("service", {})
     return {
-        "port": 8080,
         "memory": service.get("memory", "512Mi"),
         "cpu": service.get("cpu", "1"),
         "max_instances": service.get("max_instances", 1),
-        "env": service.get("env", {}),
     }
 
 
 def get_env_vars(manifest: dict) -> list[dict]:
-    """Return env var declarations from the manifest.
-
-    Supports both the new `env` section and the legacy `service.env` dict.
-    New format:
-        env:
-          - name: LOG_LEVEL
-            value: INFO
-          - name: API_TOKEN
-            secret:
-              name: api-token
-
-    Legacy format (service.env dict):
-        service:
-          env:
-            LOG_LEVEL: INFO
-
-    Returns a normalized list of dicts, each with:
-        name: str
-        value: str | None (for plain env vars)
-        secret: dict | bool | None (for secret-backed env vars)
-    """
-    # New format
-    env_list = manifest.get("env", [])
-    if env_list:
-        return env_list
-
-    # Legacy: service.env dict → normalize to list
-    legacy = manifest.get("service", {}).get("env", {})
-    if legacy and isinstance(legacy, dict):
-        return [{"name": k, "value": v} for k, v in legacy.items()]
-
-    return []
+    """Return the env var declarations from the manifest's `env` list:
+    dicts with `name` and either `value` or `secret` ({name, generate})."""
+    return manifest.get("env") or []
 
 
 def get_domain(manifest: dict) -> str | None:

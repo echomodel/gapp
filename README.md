@@ -27,7 +27,7 @@ Plain gcloud is enough when there's one service, deployed by hand, with no secre
 As your footprint grows across dozens of GCP projects, remembering exactly where you deployed a specific app—and which service account, bucket, and state file it uses—becomes a nightmare. `gapp` solves this by moving the "Registry" into the Cloud itself. You never have to track where things live; `gapp` discovers them for you.
 
 ### **2. The "Zero-Fork" Public Repo**
-Traditional deployment tools often require you to hardcode project IDs, regions, or bucket names in your repository. `gapp` allows a repo to remain entirely **deployment-agnostic**. Anyone can clone a public, `gapp`-enabled repo and deploy it to their own isolated environment without modifying a single line of code or setting up complex local env vars.
+Your repo describes the app, not where it runs. A repo deployed with `gapp` says what the app needs: how it starts (a Procfile or Dockerfile) and its settings in `gapp.yaml` (public access, environment variables, which secrets it reads). It never says where it runs: no project id, region or bucket name, and no secret values. Those come from whoever deploys it, so anyone can deploy the same repo to their own Google Cloud project without changing it.
 
 ### **3. Stateful Portability**
 Because `gapp` calculates infrastructure locations deterministically, you can switch machines or users and `gapp` will automatically "re-attach" to the same buckets and data. You get durable, stateful deployments from nothing but a repo and a `gcloud` login.
@@ -37,9 +37,10 @@ Because `gapp` calculates infrastructure locations deterministically, you can sw
 ## 🚀 The Gapp Journey
 
 ### **1. Your First Deployment**
-Get your app live in three simple steps.
+Get your app live in a few steps.
 ```bash
 gapp init                          # Scaffold the local manifest (gapp.yaml)
+gapp manifest show                 # See its settings; gapp manifest set / env set change them
 gapp setup --project <project-id>  # Prep the project and register it as home
 gapp deploy                        # Build and push your first version live
 ```
@@ -54,6 +55,85 @@ gapp deploy                        # Build and push your first version live
 - **A Dockerfile**, which gapp builds as is.
 
 With both, the Dockerfile wins and the Procfile is ignored. With neither, `gapp init`, `status` and `setup` say the app isn't deployable yet, and `gapp deploy` refuses before building. gapp.yaml doesn't say how the app starts.
+
+**Configuring the deployment: gapp.yaml.** Everything else about the deployment is in the app's `gapp.yaml`, and the `gapp manifest` commands read and change it, so nothing needs editing by hand:
+
+```bash
+gapp manifest show                                  # this repo's settings, each with what it means
+gapp manifest set public true                       # also: name, domain, memory, cpu, max-instances
+gapp manifest unset domain
+gapp manifest env set LOG_LEVEL INFO                # a plain value
+gapp manifest env set API_KEY --secret api-key      # read from a secret; then gapp secrets set api-key
+gapp manifest env set SIGNING_KEY --secret signing-key --generate   # gapp generates the value
+gapp manifest env set APP_USERS_PATH --data-path users              # the data volume, kept across deploys
+gapp manifest env unset LOG_LEVEL
+gapp manifest example                               # the annotated file below
+gapp manifest schema                                # the JSON Schema, for tools
+```
+
+Each change is checked against the schema and written only when the file changes. `gapp manifest` on its own lists these commands. Two advanced keys have no command and are edited in gapp.yaml at the root of the app's repo: `paths`, for a repo with several services, and `prerequisites.apis`, for extra GCP APIs. The example below shows their format, and every gapp command checks the file.
+
+**The name.** `gapp init` writes the deployment's name into gapp.yaml: the origin repo's name, else the folder's, unless gapp.yaml already has one. It prints the name and where it came from. Writing it keeps the name the same in any clone, including one with no origin remote. The name keys the Cloud Run service, the data bucket and the secrets, so a different name is a new, empty deployment while the old one keeps its URL and data. That's why `gapp manifest set name` refuses a different name unless you pass `--new-deployment`. CI deploys don't use this name: a fleet deployment's id names its resources.
+
+**When gapp.yaml is broken.** If gapp.yaml isn't valid YAML, or has a setting gapp doesn't accept, every command that reads it stops with the same message: the line and column, or each key and what's wrong with it. Nothing changes the file. There are two ways out:
+
+- Fix the lines it names.
+- Start over: `gapp init --fresh` moves the file to `gapp.yaml.bak` (or `.bak.1`, `.bak.2`, ...) and writes a new one holding only the name, then you set what you need with `gapp manifest`. It keeps the old file's name when it can read it, and says so when it can't. It asks nothing: the flag is the instruction, and nothing is deleted.
+
+Every key gapp.yaml takes, as `gapp manifest example` prints it:
+
+```yaml
+# gapp.yaml: every key is optional.
+# How the app starts is not here: it is a Procfile web: line or a Dockerfile.
+
+# The deployment's name. It names the Cloud Run service, the data bucket and the secrets, so changing it makes a new deployment. Unset: the origin repo's name, else the folder's.
+name: my-app
+
+# true: anyone can call the URL, and the app does its own auth. Unset or false: only callers with Cloud Run invoker access.
+public: true
+
+# Custom subdomain mapped at deploy (CNAME it to ghs.googlehosted.com). Unset: the .run.app URL only.
+domain: app.example.com
+
+# Environment variables the service gets.
+env:
+  # The variable's name, as the app reads it.
+  - name: LOG_LEVEL
+    # A plain value. {{SOLUTION_DATA_PATH}} is the data volume's mount path and {{SOLUTION_NAME}} the app's name. Not with 'secret'.
+    value: INFO
+  - name: APP_DATA
+    value: "{{SOLUTION_DATA_PATH}}/data"
+  - name: API_KEY
+    # Take the value from a secret: a mapping with 'name' (and optional 'generate'). Not with 'value'.
+    secret:
+      # Short secret name, stored as '<app name>-<this name>' in Secret Manager. Set its value with `gapp secrets set <this name>`.
+      name: api-key
+  - name: SIGNING_KEY
+    secret:
+      name: signing-key
+      # true: gapp generates a random value on the first deploy if none is set.
+      generate: true
+
+# Cloud Run sizing for each instance.
+service:
+  # Memory per instance (default 512Mi).
+  memory: 1Gi
+  # CPUs per instance (default 1).
+  cpu: "1"
+  # Most instances Cloud Run runs at once (default 1).
+  max_instances: 2
+
+# Extra GCP APIs to enable at setup.
+prerequisites:
+  # GCP APIs `gapp setup` enables besides the ones gapp needs.
+  apis:
+    - firestore.googleapis.com
+
+# Subfolders that are each their own service, for a repo with several. Each subfolder has its own gapp.yaml.
+# paths:
+#   - services/api
+#   - services/worker
+```
 
 ### **2. Redeploying Later**
 Iterate on your code without ever mentioning the project ID again.
@@ -95,7 +175,8 @@ When a name is on more than one project, `gapp deploy` and `gapp status` need `-
 Known limits:
 - A deploy doesn't record which repo or commit it came from, so gapp can't warn before replacing a deployment built from a different repo.
 - There's no plan-only step that previews infrastructure changes before a deploy applies them.
-- In CI, the app's repo must have a gapp.yaml; the fleet entry adds only the domain. Deploying a repo without a gapp.yaml isn't supported yet.
+- In CI, the app's repo must have a gapp.yaml; the fleet entry adds only the domain. Deploying a repo without a gapp.yaml isn't supported yet. A deploy run whose repo has a broken gapp.yaml fails with the message above; fix it in the app's repo.
+- Every deployment of a repo gets the same `gapp.yaml` settings. To give one deployment different settings (more memory, a different admission policy), the repo's `gapp.yaml` has to change.
 - gapp 4 doesn't see deployments made by gapp 3 until each is redeployed once with gapp 4.
 
 ### **5. Teams and Shared Organizations**
@@ -200,7 +281,12 @@ gapp deploy --project <project-id>
 *   `gapp secrets list [<name>]`: Show declared secrets, deploy-readiness, and remediation hints. See [Secrets, ownership, and recovery scenarios](docs/SECRETS.md) for the full label model and conflict-resolution guide.
 *   `gapp secrets get <secret-name>`: Fetch a secret value or its hash + length.
 *   `gapp secrets set <secret-name> [<value>]`: Store secrets in GCP Secret Manager.
-*   `gapp manifest schema`: Print the live JSON Schema for `gapp.yaml`.
+*   `gapp init [--fresh]`: Write gapp.yaml with the deployment's name and report how the app starts. `--fresh` starts over, keeping the current file as `gapp.yaml.bak`.
+*   `gapp manifest show [--json]`: This repo's gapp.yaml settings, set or not, each with what it means.
+*   `gapp manifest set <key> <value>` / `unset <key>`: Change `name`, `public`, `domain`, `memory`, `cpu` or `max-instances`. Changing the name needs `--new-deployment`.
+*   `gapp manifest env set <NAME> <value>` (or `--secret <secret> [--generate]`, or `--data-path [<subfolder>]`) / `env unset <NAME>`: The service's environment variables.
+*   `gapp manifest example`: An annotated gapp.yaml with every key (valid YAML, nothing else).
+*   `gapp manifest schema`: The JSON Schema for `gapp.yaml` (nothing else on stdout).
 
 ### **CI/CD (`gapp ci`)**
 *   `gapp ci init [<owner>/<repo>] [--create] [--owner <org>]`: Show, find, set or create your fleet repo; the only command that sets it. Setting an existing repo installs or updates gapp's three workflows (deploy, register, status) and creates `gapp/deployments.yaml` (never overwritten); `--create` makes a new private, tagged fleet repo first.

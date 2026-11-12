@@ -9,7 +9,7 @@ from functools import wraps
 
 from mcp.server.fastmcp import FastMCP
 
-from gapp.admin.sdk.schema import ManifestValidationError
+from gapp.admin.sdk.schema import ManifestUnreadable, ManifestValidationError
 
 mcp = FastMCP("gapp-admin")
 
@@ -19,7 +19,7 @@ def _catch_manifest_errors(fn):
     def wrapper(*args, **kwargs):
         try:
             return fn(*args, **kwargs)
-        except ManifestValidationError as e:
+        except (ManifestValidationError, ManifestUnreadable) as e:
             return e.to_dict()
     return wrapper
 
@@ -37,10 +37,108 @@ def gapp_schema() -> dict:
 
     Use this to see every valid field, its type, whether it's required,
     and its description. This is the single source of truth; all
-    validation and error responses derive from the same model.
+    validation and error responses derive from the same model. For a
+    commented gapp.yaml, use gapp_manifest_example.
     """
     from gapp.admin.sdk.schema import get_schema
     return get_schema()
+
+
+@_tool()
+def gapp_manifest_example() -> dict:
+    """Return {"example": <text>}: an annotated gapp.yaml with every key, each
+    commented with what it does and its default. Valid YAML."""
+    from gapp.admin.sdk.manifest_edit import example as example_text
+    return {"example": example_text()}
+
+
+def _manifest_call(fn, *args, **kwargs) -> dict:
+    from gapp.admin.sdk.manifest_edit import ManifestChangeRefused
+    try:
+        return fn(*args, **kwargs)
+    except (ManifestChangeRefused, RuntimeError) as e:
+        return {"ok": False, "error": str(e)}
+
+
+@_tool()
+def gapp_manifest_show() -> dict:
+    """Show the current repo's gapp.yaml settings, each with what it means.
+
+    Covers every setting, set or not: name (and where it comes from),
+    public, domain, memory, cpu, max-instances, each environment variable
+    (plain value, secret, or the data volume), and how the app starts.
+    `issues` lists anything the schema refuses. Read-only.
+    """
+    from gapp.admin.sdk.manifest_edit import describe
+    return _manifest_call(describe)
+
+
+@_tool()
+def gapp_manifest_set(key: str, value: str, new_deployment: bool = False) -> dict:
+    """Set one setting in the current repo's gapp.yaml, then return the settings.
+
+    Args:
+        key: name, public, domain, memory, cpu or max-instances.
+        value: The new value (public takes true or false).
+        new_deployment: Needed to change the name. The name keys the
+            service, data bucket and secrets, so a new name is a new, empty
+            deployment while the old one keeps its URL and data. Confirm with
+            the user before passing it.
+    """
+    from gapp.admin.sdk.manifest_edit import set_value
+    return _manifest_call(set_value, key, value, new_deployment=new_deployment)
+
+
+@_tool()
+def gapp_manifest_unset(key: str, new_deployment: bool = False) -> dict:
+    """Remove one setting from the current repo's gapp.yaml, so it takes its default.
+
+    Args:
+        key: name, public, domain, memory, cpu or max-instances.
+        new_deployment: Needed when unsetting name changes the deployment's
+            name (see gapp_manifest_set).
+    """
+    from gapp.admin.sdk.manifest_edit import unset_value
+    return _manifest_call(unset_value, key, new_deployment=new_deployment)
+
+
+@_tool()
+def gapp_manifest_env_set(
+    name: str,
+    value: str | None = None,
+    secret: str | None = None,
+    generate: bool = False,
+    data_path: bool = False,
+) -> dict:
+    """Add or replace one environment variable in the current repo's gapp.yaml.
+
+    Exactly one kind:
+    - a plain value: value="INFO"
+    - read from a secret: secret="api-key" (no value). Set its value later
+      with gapp_secret_set, or pass generate=true to have gapp create one on
+      the first deploy (signing keys and the like).
+    - the data volume's path, kept across deploys: data_path=true, with value
+      as an optional subfolder (e.g. "users").
+
+    Args:
+        name: The variable's name, as the app reads it.
+        value: The plain value, or the subfolder with data_path.
+        secret: Short secret name.
+        generate: With secret: gapp generates the value if none is set.
+        data_path: Point the variable at the data volume.
+    """
+    from gapp.admin.sdk.manifest_edit import env_set
+    return _manifest_call(env_set, name, value, secret=secret, generate=generate, data_path=data_path)
+
+
+@_tool()
+def gapp_manifest_env_unset(name: str) -> dict:
+    """Remove one environment variable from the current repo's gapp.yaml.
+
+    A secret it read stays in Secret Manager.
+    """
+    from gapp.admin.sdk.manifest_edit import env_unset
+    return _manifest_call(env_unset, name)
 
 
 @_tool()
@@ -58,16 +156,15 @@ def gapp_user(account: str | None = None) -> dict:
 
 
 @_tool()
-def gapp_init(
-    secrets: dict | None = None,
-    domain: str | None = None,
-) -> dict:
-    """Initialize or configure a gapp solution in the current repo.
+def gapp_init(fresh: bool = False) -> dict:
+    """Initialize a gapp app in the current repo: write gapp.yaml with the deployment's name.
 
-    Idempotent. Creates gapp.yaml on first call. Also used to update
-    gapp configuration settings later, e.g. add secrets or set a custom
-    domain. Only non-None parameters are written; omitted parameters leave
-    existing values unchanged.
+    Idempotent. The name is gapp.yaml's if it has one, else the origin
+    repo's, else the folder's (`name_source` says which); init writes it so
+    it stays the same in any clone. The name keys the service, data bucket
+    and secrets. Every other setting (public, domain, environment variables,
+    secrets, sizing) is set with gapp_manifest_set and gapp_manifest_env_set;
+    gapp_manifest_show shows what is set now.
 
     How the app starts is not set here: it is the app's own Procfile (a
     `web:` line that serves HTTP on $PORT) or Dockerfile. The result's
@@ -75,17 +172,17 @@ def gapp_init(
     app isn't deployable yet and how to add one. Write the Procfile only
     after confirming its command with the user.
 
+    A gapp.yaml gapp can't read, or with settings it doesn't accept, is
+    never changed; the error says what's wrong. fresh=true starts over:
+    the current file is kept as gapp.yaml.bak and a new one holds only the
+    name. Show the user the error and get their yes before passing fresh;
+    fixing the named lines keeps their other settings.
+
     Args:
-        secrets: Dict of secret name to description for prerequisites.
-        domain: Custom domain to map to the service (e.g., mcp.example.com).
-            Requires a CNAME record pointing to ghs.googlehosted.com.
-            Pass empty string to remove an existing domain mapping.
+        fresh: Replace gapp.yaml with a new one, keeping the old as a backup.
     """
     from gapp.admin.sdk.init import init_solution
-    return init_solution(
-        secrets=secrets,
-        domain=domain,
-    )
+    return init_solution(fresh=fresh)
 
 
 @_tool()
@@ -229,7 +326,7 @@ def gapp_secret_list(name: str | None = None) -> dict:
     - orphans: secret IDs labeled for this solution but not in gapp.yaml
     - hints: structured remediation entries for unattached / conflict /
              orphan scenarios — each with a message and concrete `gcloud`
-             commands. See docs/SECRETS.md for the full recovery guide.
+             commands, which are the whole fix for that scenario.
 
     Args:
         name: Deployment name. Defaults to the current directory's app.

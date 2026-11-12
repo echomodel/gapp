@@ -15,9 +15,8 @@ domain, or adds a Procfile. When there is no `gapp.yaml`:
 2. Run init to write `gapp.yaml` and register the solution locally.
    It says `Starts with: ...`, or "Not deployable yet" with what to
    add; relay that to the user rather than guessing.
-3. Declare any secrets the app needs under `env` with a `secret`
-   entry, or under `prerequisites.secrets` for prerequisite-only
-   declarations.
+3. Declare any secrets the app needs as `env` entries with a `secret`,
+   using `gapp manifest env set NAME --secret <name> [--generate]`.
 
 Init needs no cloud identity. If `gh` is logged in it also tags the
 GitHub repo with the `gapp-solution` topic; otherwise it skips that
