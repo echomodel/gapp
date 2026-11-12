@@ -3,7 +3,7 @@
 Notable changes to gapp. Versions are git tags (`vX.Y.Z`); the version
 source is `gapp/__init__.py`.
 
-## Unreleased
+## 4.0.0rc11 (pre-release of 4.0.0)
 
 Breaking changes:
 
