@@ -694,6 +694,8 @@ gapp has **two fleet systems that do not talk to each other**:
   the working directory. Their record is `gapp/deployments.yaml` in the
   fleet repo and the project's GitHub Environment.
 
+The per-command list of what each needs and touches is in [docs/ACCESS.md](docs/ACCESS.md); keep it in step when a command's access changes.
+
 **No command consults the other system's state**, there is no shared
 local store, and no `--force` reconciliation. Every command's requirements
 are fixed by its name; nothing is conditional on hidden state. Labels
