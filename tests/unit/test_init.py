@@ -103,3 +103,38 @@ def test_init_skips_topic_if_not_github(tmp_path, monkeypatch):
     
     res = init_solution(repo)
     assert res["topic_status"] == "skipped"
+
+
+def test_init_leaves_gapp_yaml_untouched_when_nothing_changes(tmp_path, monkeypatch):
+    repo = _repo(tmp_path, monkeypatch)
+    text = "# my app\nname: app\npublic: true\nenv:\n- name: A\n  value: 'x'\n"
+    (repo / "gapp.yaml").write_text(text)
+    res = init_solution(repo)
+    assert res["manifest_status"] == "unchanged"
+    assert (repo / "gapp.yaml").read_text() == text          # byte for byte, comments and style kept
+
+
+def test_init_writes_once_in_gapps_style_with_the_name_first(tmp_path, monkeypatch):
+    repo = _repo(tmp_path, monkeypatch)
+    (repo / "gapp.yaml").write_text(
+        "public: true\nenv:\n- name: A\n  secret:\n    name: a\n- name: B\n  value: '{{SOLUTION_DATA_PATH}}/b'\n")
+    res = init_solution(repo)
+    assert res["manifest_status"] == "updated"
+    assert (repo / "gapp.yaml").read_text() == (
+        "name: app\n"
+        "public: true\n"
+        "env:\n"
+        "  - name: A\n"
+        "    secret:\n"
+        "      name: a\n"
+        "  - name: B\n"
+        "    value: \"{{SOLUTION_DATA_PATH}}/b\"\n"
+    )
+    assert init_solution(repo)["manifest_status"] == "unchanged"
+
+
+def test_init_with_an_empty_secrets_or_same_domain_changes_nothing(tmp_path, monkeypatch):
+    repo = _repo(tmp_path, monkeypatch)
+    (repo / "gapp.yaml").write_text("name: app\ndomain: d.example.com\n")
+    assert init_solution(repo, secrets={}, domain="d.example.com")["manifest_status"] == "unchanged"
+    assert (repo / "gapp.yaml").read_text() == "name: app\ndomain: d.example.com\n"
