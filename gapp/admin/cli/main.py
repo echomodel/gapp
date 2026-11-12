@@ -673,9 +673,15 @@ def ci_setup_cmd(name, repo, project, domain, copy_of, manifest_path, update, no
 
 @ci_group.command("manifest")
 @click.argument("name")
+@click.option("--merged", is_flag=True,
+              help="Print what a deploy would use instead: this manifest merged over the app repo's gapp.yaml. "
+                   "Reads the app repo with your own GitHub login.")
+@click.option("--ref", default=None,
+              help="With --merged (implies it): the app repo's commit, tag or branch, as for `gapp ci deploy --ref`. "
+                   "Default: its default branch.")
 @click.option("--json", "json_out", is_flag=True,
               help="Print the command's result as JSON (the same dict the MCP tool returns) and nothing else.")
-def ci_manifest_cmd(name, json_out):
+def ci_manifest_cmd(name, merged, ref, json_out):
     """Print NAME's fleet-side manifest as YAML, and nothing else.
 
     These are the gapp.yaml keys the fleet sets for the deployment; the
@@ -684,11 +690,45 @@ def ci_manifest_cmd(name, json_out):
     NAME ... --manifest FILE --update`. One read of the fleet repo; the app
     repo is never read.
 
+    With --merged, print what a deploy at --ref would use: the merge done
+    the way the deploy run does it, with the app repo's gapp.yaml, top-level
+    files and Procfile read through GitHub with your own login. It also says
+    how the app starts, and what the deploy would refuse (on stderr, exit
+    1). Nothing is saved. Two limits: the deploy run reads the app repo with
+    the fleet's own access, so a repo you can't read here can still deploy;
+    and it runs the gapp version the fleet's workflows are pinned to, which
+    is noted when it differs from this one.
+
     \b
       gapp ci manifest my-app > my-app.yaml
+      gapp ci manifest my-app --merged
+      gapp ci manifest my-app --ref v1.4.0
     """
-    from gapp.admin.sdk.ci import deployment_manifest
     from gapp.admin.sdk.manifest import dump_manifest
+    if merged or ref:
+        from gapp.admin.sdk.ci import merged_manifest
+        from gapp.admin.sdk.start import describe
+        result = merged_manifest(name, ref=ref)
+        if json_out:
+            _emit_json(result)
+        if result.get("merged") is None:
+            click.echo(result["next_step"]["hint"], err=True)
+            raise SystemExit(1)
+        at = result["ref"] + (f" ({result['commit'][:12]})" if result.get("commit") else "")
+        source = (f"the fleet-side manifest merged over {result['repo']}'s gapp.yaml" if result["repo_has_gapp_yaml"]
+                  else f"the fleet-side manifest alone ({result['repo']} has no gapp.yaml)")
+        click.echo(f"# What a deploy of {result['name']} at {at} uses: {source}.")
+        if result["start"]["method"]:
+            click.echo(f"# Starts with: {describe(result['start'])}")
+        for note in result["notes"]:
+            click.echo(f"# {note}")
+        click.echo(dump_manifest(result["merged"]), nl=False)
+        for problem in result["problems"]:
+            click.echo(problem, err=True)
+        if result["problems"]:
+            raise SystemExit(1)
+        return
+    from gapp.admin.sdk.ci import deployment_manifest
     result = deployment_manifest(name)
     if json_out:
         _emit_json(result)

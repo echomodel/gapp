@@ -138,6 +138,10 @@ cloud agent. No terraform or gcloud on the deploying machine.
    it with `gapp manifest --file FILE ...`, upload with `--update`. For
    a repo with no Dockerfile or Procfile, set `start` in it. Show the
    user what would change before passing `--update`.
+   `gapp ci manifest <name> --merged [--ref REF]` shows what a deploy at
+   that ref would use (merged settings, start method, problems). It
+   reads the app repo with this machine's login; if that read is refused,
+   the deploy can still work, since the run uses the fleet's own access.
 5. **Environments and second instances.** `gapp ci setup <new>
    --copy-of <existing> [--project <other-project>] [--domain <d>]`
    makes another deployment of the same repo: its own id (so its own

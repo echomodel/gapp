@@ -486,12 +486,25 @@ def gapp_ci_setup(
 
 
 @_tool()
-def gapp_ci_manifest(name: str) -> dict:
+def gapp_ci_manifest(name: str, merged: bool = False, ref: str | None = None) -> dict:
     """A deployment's fleet-side manifest: the gapp.yaml keys the fleet sets for
     it (`manifest`), merged over the app repo's gapp.yaml at deploy. Read it
     before changing it with gapp_ci_setup(manifest=..., update=True), since
     that replaces it whole. One read of the fleet repo; the app repo is never
-    read."""
+    read.
+
+    With merged=True (or a ref), also `merged`: what a deploy at `ref` (the
+    app repo's commit, tag or branch; default its default branch) would use,
+    merged the way the deploy run does, plus `start` (how it starts),
+    `problems` (what the deploy would refuse) and `notes`. Reads the app repo
+    with this machine's GitHub login and saves nothing. A repo that login
+    can't read fails only this; the deploy run reads it with the fleet's own
+    access. The deploy runs the gapp version the fleet is pinned to; a note
+    says when that differs from this one.
+    """
+    if merged or ref:
+        from gapp.admin.sdk.ci import merged_manifest
+        return merged_manifest(name, ref=ref)
     from gapp.admin.sdk.ci import deployment_manifest
     return deployment_manifest(name)
 

@@ -38,6 +38,10 @@ Other changes:
   no fork, and one repo's deployments can differ.
   - `gapp ci manifest <name>` (MCP `gapp_ci_manifest`) prints it, as YAML
     and nothing else.
+  - `gapp ci manifest <name> --merged [--ref REF]` (MCP `merged=`, `ref=`)
+    prints what a deploy at REF would use: the manifest merged over the app
+    repo's gapp.yaml, how the app starts, and what the deploy would refuse.
+    It reads the app repo with your own GitHub login and saves nothing.
   - `gapp ci setup <name> ... --manifest FILE` (MCP `manifest=`) replaces
     it whole: the change is shown key by key and applied with `--update`,
     as a commit in the fleet repo. `name` is refused; `--domain` still

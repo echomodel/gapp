@@ -56,7 +56,8 @@ class FakeGitHub:
         self.private = {}       # "owner/repo" -> bool (a repo that exists)
         self.admin = {}         # "owner/repo" -> bool (gh login's admin permission; default True)
         self.topics = {}        # "owner/repo" -> set of topics
-        self.files = {}         # ("owner/repo", path) -> content
+        self.files = {}         # ("owner/repo", path) -> content (the default branch)
+        self.ref_files = {}     # ("owner/repo", ref) -> {path: content}: a branch, tag or commit other than the default
         self.variables = {}     # ("owner/repo", NAME) -> value
         self.secrets = set()    # ("owner/repo", NAME)
         self.environments = {}  # ("owner/repo", env) -> {VAR: value}
@@ -348,7 +349,13 @@ class FakeGitHub:
         if rest[0] == "environments":
             return self._environment_get(endpoint)
         if rest[0] == "contents":
-            return self._contents(repo, "/".join(rest[1:]))
+            ref = dict(kv.partition("=")[::2] for kv in query.split("&") if kv).get("ref")
+            return self._contents(repo, "/".join(rest[1:]), ref)
+        if rest[0] == "commits" and len(rest) == 2:
+            ref = rest[1]
+            if ref == self.default_branch or (repo, ref) in self.ref_files:
+                return _Result(0, f"sha-{ref}\n")
+            return _Result(1, "", f"gh: No commit found for SHA: {ref} (HTTP 422)")
         if rest == ["actions", "variables"]:
             return _Result(0, json.dumps({"total_count": 0, "variables": []}))
         if rest[0] == "actions" and rest[1] in ("variables", "secrets") and len(rest) == 3:
@@ -372,17 +379,22 @@ class FakeGitHub:
             return _Result(0, json.dumps({"names": sorted(self.topics.get(repo, set()))}))
         return self.other(cmd, {})
 
-    def _contents(self, repo, path):
-        content = self.files.get((repo, path))
+    def _contents(self, repo, path, ref=None):
+        ref = ref[4:] if ref and ref.startswith("sha-") else ref
+        if ref and ref != self.default_branch:
+            files = {(repo, p): c for p, c in self.ref_files.get((repo, ref), {}).items()}
+        else:
+            files = self.files
+        content = files.get((repo, path))
         if content is not None:
             return _Result(0, json.dumps({
                 "type": "file", "name": path.rsplit("/", 1)[-1], "sha": f"sha-{len(content)}",
                 "content": base64.b64encode(content.encode()).decode(),
             }))
-        prefix = path.rstrip("/") + "/"
+        prefix = path.rstrip("/") + "/" if path else ""
         listing = [{"type": "file", "name": p[len(prefix):], "path": p}
-                   for (r, p) in self.files if r == repo and p.startswith(prefix) and "/" not in p[len(prefix):]]
-        if listing:
+                   for (r, p) in files if r == repo and p.startswith(prefix) and "/" not in p[len(prefix):]]
+        if listing or (not path and repo in self.private):
             return _Result(0, json.dumps(listing))
         return _Result(1, "", "gh: Not Found (HTTP 404)")
 
