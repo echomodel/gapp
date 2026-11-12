@@ -200,7 +200,7 @@ gapp list
 ```
 
 ### **7. Deploy From Anywhere (CI/CD)**
-gapp has **two fleet systems, kept apart**. The root commands (`gapp setup`, `deploy`, `status`, `list`, `secrets`) deploy the local checkout to GCP with gcloud. The `gapp ci` commands manage your **fleet** through GitHub only: they never use gcloud (except `gapp ci project setup`) and never read the working directory. The fleet is kept in a private **fleet repo**: `gapp/deployments.yaml`, one entry per **deployment** (a repo deployed to a project under a name you choose; the same repo deployed twice is two deployments), plus gapp's three workflows (deploy, register, status). The `ci` group mirrors the root verbs.
+gapp has **two fleet systems, kept apart**. The root commands (`gapp setup`, `deploy`, `status`, `list`, `secrets`) deploy the local checkout to GCP with gcloud. The `gapp ci` commands manage your **fleet** through GitHub only: they never use gcloud (except `gapp ci project setup`) and never read the working directory. What each command needs on your machine, and who touches Google Cloud and GitHub: [Access](docs/ACCESS.md). The fleet is kept in a private **fleet repo**: `gapp/deployments.yaml`, one entry per **deployment** (a repo deployed to a project under a name you choose; the same repo deployed twice is two deployments), plus gapp's three workflows (deploy, register, status). The `ci` group mirrors the root verbs.
 
 **From nothing to first deploy:**
 
@@ -325,4 +325,5 @@ gapp deploy --project <project-id>
 
 *   [Secrets, ownership, and recovery scenarios](docs/SECRETS.md) — how gapp manages Secret Manager, the label model, and what to do when statuses go sideways (`unattached`, `conflict`, `orphan`).
 *   [CI/CD setup](docs/CI.md) — wiring GitHub Actions deployments via Workload Identity Federation.
+*   [Access](docs/ACCESS.md) — what each command needs on your machine, and whether you or a runner touches Google Cloud and GitHub.
 *   [Contributing](CONTRIBUTING.md) — architecture, design principles, conventions for code, comments, and examples.
