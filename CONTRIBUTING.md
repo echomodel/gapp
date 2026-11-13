@@ -1079,6 +1079,52 @@ history, and are shared by every machine and teammate; CI so deploys run
 from anywhere with only GitHub access, including agent sessions with no
 gcloud login.
 
+#### Which deployment a command means
+
+A command run in an app's clone finds its deployment by the clone's
+remote (host, owner and repo), matched against the `repo` of the fleet's
+definitions. The folder's name is never used. An operator knows their
+repos; they should not have to recall a name, a project or where things
+went to redeploy a fix to the same place.
+
+| The fleet has | The command |
+|---|---|
+| one deployment for this repo | uses it |
+| several | refuses, and prints the exact command for each, with its name and project |
+| none | treats the app as new and proposes the repo's name; refuses if that name belongs to another repo |
+
+**A folder's name may suggest, never select.** It is used in one place:
+as the proposed name of a deployment that does not exist yet, where the
+operator sees it before anything is made. It never picks an existing
+deployment. Anything that acts on an existing deployment (a deploy, a
+secret, a status) reaches it by the remote checked against the fleet, or
+by a name the operator gave. A folder's name is an accident of one
+machine; acting on it could land one app on another's service, data or
+secrets.
+
+**A remote names a repo, not a deployment.** One repo can have several
+deployments (a copy, a renamed one), and only the fleet knows how many.
+So the remote finds candidates and the fleet decides: one match is used,
+several are refused. The remote's repo name alone is never the answer.
+
+- A deployment can always be named outright, from any folder.
+- The remote read is `origin`. With no `origin` and exactly one remote,
+  that one. With no `origin` and several, the command refuses and lists
+  them.
+- A clone with no remote cannot be told apart from any other. The one
+  exception is `name:` in its gapp.yaml, and a name alone matches only a
+  definition that has no `repo`. A definition tied to a repo is matched
+  only by that repo's remote, so a name can never land a clone on another
+  repo's deployment, its data or its secrets. With no remote and no
+  name, the command refuses.
+- A repo that was renamed or moved no longer matches its definition. The
+  command says so and lists the fleet's deployments; one command points
+  a definition at the new repo. It fails closed, never onto a guess.
+- A fork has another owner, so it matches nothing and is treated as new.
+- `gapp ci` commands take the deployment's name and give the same result
+  from any folder; they read no remote.
+- Nothing here needs GitHub: the key is the remote, whatever the host.
+
 ### Why the direction follows
 
 Each step is a reason, and each rules out the design before it.
@@ -1220,6 +1266,9 @@ Each step is a reason, and each rules out the design before it.
   other git hosts are supported in CI (see the open questions), an app
   kept elsewhere deploys only from a checkout.
 
+- Two clones with no remote and the same `name:` in gapp.yaml are the
+  same deployment as far as gapp can tell.
+
 ### Open questions
 
 - Where the local file lives, and whether each profile has its own.
@@ -1230,7 +1279,11 @@ Each step is a reason, and each rules out the design before it.
 - Apps with no GitHub repo: an optional `repo`, deployable only from a
   checkout.
 - How a GitHub fleet is written before CI is installed there.
-- What becomes of `name` in gapp.yaml and of `gapp init`.
+- What becomes of `gapp init`, and whether `name:` in gapp.yaml has any
+  job besides the clone with no remote.
+- A shortcut for picking among several deployments of one repo without
+  recalling a name. Deferred; the printed commands may be enough.
+- How a definition records a repo on a host other than GitHub.
 - One file per deployment in the fleet repo.
 - Whether a definition's settings are changed in place by one command,
   replacing export, edit, upload.
