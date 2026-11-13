@@ -5,6 +5,12 @@ source is `gapp/__init__.py`.
 
 ## Unreleased
 
+- `gapp ci project setup <project>` also enables the APIs a deployment
+  needs and grants Cloud Build its permissions. A project used only
+  through CI, where nobody ran `gapp setup` from a machine, could not take
+  its first deploy: a runner's identity may do neither. APIs an app lists
+  under `apis` in gapp.yaml are still enabled only by `gapp setup` run by
+  someone who may enable them.
 - `gapp secrets list|get|set --deployment <name>` (MCP: `deployment=`)
   works on a deployment of your fleet from any folder: its project and
   declared secrets are read from the fleet (the fleet-side manifest merged

@@ -14,6 +14,13 @@ import pytest
 from gapp.admin.sdk import ci as ci_mod
 
 FLEET = "acme/fleet"
+
+
+class _REAL:
+    """The real steps, kept before the fixture stubs them."""
+    _enable_project_apis = staticmethod(ci_mod._enable_project_apis)
+    _ensure_build_permissions = staticmethod(ci_mod._ensure_build_permissions)
+
 WIF = "projects/123456789012/locations/global/workloadIdentityPools/github/providers/github"
 SA = "@".join(["gapp-deploy", "my-proj.iam.gserviceaccount.com"])
 REQUIREMENTS = "requires gcloud signed in as an Owner of the project and `gh` signed in as an admin of the fleet repo"
@@ -24,6 +31,8 @@ def machine(monkeypatch, fleet_repo, fake_gh):
     """A workstation with gh and gcloud, every GCP step stubbed to succeed."""
     monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}" if name in ("gh", "gcloud") else None)
     monkeypatch.setattr(ci_mod, "require_gcloud_account", lambda: "owner@example.com")
+    monkeypatch.setattr(ci_mod, "_enable_project_apis", lambda project_id: "enabled")
+    monkeypatch.setattr(ci_mod, "_ensure_build_permissions", lambda project_id: "set")
     monkeypatch.setattr(ci_mod, "_ensure_wif_pool", lambda project_id: "created")
     monkeypatch.setattr(ci_mod, "_ensure_wif_provider", lambda project_id, owner: "created")
     monkeypatch.setattr(ci_mod, "_ensure_deploy_sa", lambda project_id: "created")
@@ -40,6 +49,38 @@ def test_project_setup_creates_the_resources_and_records_the_environment(machine
     assert res["hosted"] == "set"
     assert res["environment_record"] == "created"
     assert machine.environments[(FLEET, "my-proj")] == {"GAPP_WIF_PROVIDER": WIF, "GAPP_DEPLOY_SERVICE_ACCOUNT": SA}
+
+
+def test_project_setup_prepares_a_project_no_one_ran_gapp_setup_on(machine, monkeypatch):
+    """A project used only through CI: the APIs and Cloud Build's grants come
+    from this step, since a runner's identity may do neither."""
+    calls = []
+
+    class R:
+        returncode, stdout, stderr = 0, "", ""
+    monkeypatch.setattr(ci_mod, "run_gcloud", lambda args, **kw: calls.append(args) or R())
+    for name in ("_enable_project_apis", "_ensure_build_permissions"):
+        monkeypatch.setattr(ci_mod, name, getattr(_REAL, name))
+    res = ci_mod.setup_ci_project("my-proj")
+    assert res["ok"] is True and res["apis"] == "enabled" and res["build_permissions"] == "set"
+    enable = calls[0]
+    assert enable[:2] == ["services", "enable"] and enable[-2:] == ["--project", "my-proj"]
+    for api in ("run.googleapis.com", "cloudbuild.googleapis.com", "artifactregistry.googleapis.com",
+                "secretmanager.googleapis.com", "cloudresourcemanager.googleapis.com", "iamcredentials.googleapis.com"):
+        assert api in enable
+    member = "serviceAccount:" + "@".join(["123456789012-compute", "developer.gserviceaccount.com"])
+    grants = [(c[c.index("--member") + 1], c[c.index("--role") + 1]) for c in calls[1:]]
+    assert grants == [(member, "roles/storage.objectViewer"), (member, "roles/artifactregistry.writer")]
+
+
+def test_a_refused_api_enable_stops_before_anything_else_and_names_the_owner_requirement(machine, monkeypatch):
+    def refuse(project_id):
+        raise RuntimeError("PERMISSION_DENIED: Permission denied to enable service")
+    monkeypatch.setattr(ci_mod, "_enable_project_apis", refuse)
+    monkeypatch.setattr(ci_mod, "_ensure_wif_pool", lambda project_id: pytest.fail("ran after a refused enable"))
+    res = ci_mod.setup_ci_project("my-proj")
+    assert res["ok"] is False and REQUIREMENTS in res["next_step"]["hint"]
+    assert "enable the APIs a deployment needs" in res["next_step"]["hint"]
 
 
 def test_project_setup_is_idempotent(machine, monkeypatch):

@@ -752,7 +752,10 @@ def _gcloud_outcome(step: str, project_id: str, detail: str) -> dict:
 def setup_ci_project(project: str) -> dict:
     """Make the fleet repo trusted to deploy to a GCP project. Once per project, idempotent.
 
-    Creates or confirms the Workload Identity pool and provider and the
+    Enables the APIs a deployment needs and lets Cloud Build read sources
+    and push images, so a project nobody ran `gapp setup` on (one used only
+    through CI) can take its first deploy: a runner's identity may do
+    neither. Creates or confirms the Workload Identity pool and provider and the
     `gapp-deploy` service account in the project, binds the pool to the
     fleet repo, and records the deploy identity in the fleet repo as the
     GitHub Environment named after the project. The only `gapp ci` command
@@ -762,8 +765,8 @@ def setup_ci_project(project: str) -> dict:
     """
     project_id = (project or "").strip()
     result = {"ok": True, "project_id": project_id, "fleet_repo": None,
-              "wif_pool": None, "wif_provider": None, "service_account": None, "binding": None,
-              "hosted": None, "environment": project_id, "environment_record": None, "changed": None, "next_step": None}
+              "apis": None, "wif_pool": None, "wif_provider": None, "service_account": None, "binding": None,
+              "build_permissions": None, "hosted": None, "environment": project_id, "environment_record": None, "changed": None, "next_step": None}
     if not project_id:
         return {**result, **_outcome("pass the project", "Name the GCP project: `gapp ci project setup <project>`.")}
     fleet_repo, stop = _require(result)
@@ -791,11 +794,14 @@ def setup_ci_project(project: str) -> dict:
         return {**result, **_outcome("sign in to gcloud as an Owner", f"{e} {PROJECT_SETUP_REQUIREMENTS}")}
 
     steps = (
+        ("apis", "enable the APIs a deployment needs", lambda: _enable_project_apis(project_id)),
         ("wif_pool", "create or confirm the Workload Identity pool", lambda: _ensure_wif_pool(project_id)),
         ("wif_provider", "create or confirm the Workload Identity provider",
          lambda: _ensure_wif_provider(project_id, fleet_repo.split("/")[0])),
         ("service_account", "create or confirm the gapp-deploy service account", lambda: _ensure_deploy_sa(project_id)),
         ("binding", "bind the Workload Identity pool to the fleet repo", lambda: _ensure_wif_binding(project_id, fleet_repo)),
+        ("build_permissions", "let Cloud Build read sources and push images",
+         lambda: _ensure_build_permissions(project_id)),
         ("hosted", "mark the project as hosting gapp deployments (gapp=hosted)", lambda: _mark_project_hosted(project_id)),
     )
     for key, step, fn in steps:
@@ -2073,6 +2079,34 @@ def _ensure_deploy_sa(project_id: str) -> str:
         if res.returncode != 0:
             raise RuntimeError(res.stderr.strip())
     return status
+
+
+# What signing in from GitHub Actions needs, on top of what a deployment needs.
+_CI_SIGN_IN_APIS = ("iam.googleapis.com", "iamcredentials.googleapis.com", "sts.googleapis.com")
+
+
+def _enable_project_apis(project_id: str) -> str:
+    """Enable the foundation APIs and the ones CI sign-in uses. Unlike a
+    deploy's tolerant enable, a refusal here is an error: this step is the
+    Owner's, and nothing later can make up for it."""
+    from gapp.admin.sdk.core import FOUNDATION_APIS
+    result = run_gcloud(["services", "enable", *FOUNDATION_APIS, *_CI_SIGN_IN_APIS, "--project", project_id],
+                        capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip())
+    return "enabled"
+
+
+def _ensure_build_permissions(project_id: str) -> str:
+    """The same grants `gapp setup` makes, with their failures reported."""
+    build_domain = "developer.gserviceaccount.com"
+    build_sa = f"{_get_project_number(project_id)}-compute@{build_domain}"
+    for role in ("roles/storage.objectViewer", "roles/artifactregistry.writer"):
+        res = run_gcloud(["projects", "add-iam-policy-binding", project_id, "--member", f"serviceAccount:{build_sa}",
+                          "--role", role, "--condition", "None"], capture_output=True, text=True)
+        if res.returncode != 0:
+            raise RuntimeError(res.stderr.strip())
+    return "set"
 
 
 def _ensure_wif_binding(project_id: str, fleet_repo: str) -> str:

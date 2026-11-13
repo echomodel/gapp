@@ -26,7 +26,7 @@ No command consults the other system's state, there is no shared local store, an
 | `gapp ci init <owner>/<repo>` | Sets an existing repo as the fleet repo for this machine and installs or updates gapp's files in it; a repo that does not exist stops with the `--create` command | `gh` that can write to the repo |
 | `gapp ci init <owner>/<repo> --create` | Creates a private fleet repo, tagged, with the workflows and an empty deployments file, and sets it; a repo that exists stops with the plain `init` command | `gh` that can create repos |
 | `gapp ci sources add\|remove\|list <owner>` | The GitHub owners whose repos may be deployed from the fleet | `gh` write |
-| `gapp ci project setup <project>` | Once per GCP project: trust between the fleet repo and the project (WIF pool, provider, deploy account, binding, the project's Environment), and the project's `gapp=hosted` mark | gcloud as an Owner, `gh` as an admin |
+| `gapp ci project setup <project>` | Once per GCP project: trust between the fleet repo and the project (WIF pool, provider, deploy account, binding, the project's Environment), the APIs a deployment needs and Cloud Build's permissions, and the project's `gapp=hosted` mark | gcloud as an Owner, `gh` as an admin |
 | `gapp ci setup [<name>] --repo <owner>/<repo> --project <p> [--domain <d>]` | Adds or updates a deployment; the name defaults to the repo's name | `gh` that can dispatch |
 | `gapp ci setup <name> --copy-of <existing> [--project <p>] [--domain <d>]` | A new deployment from an existing one | `gh` that can dispatch |
 | `gapp ci rename <old> <new>` | Changes the name only | `gh` that can dispatch |
