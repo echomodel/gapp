@@ -315,7 +315,8 @@ def gapp_secret_set(name: str, value: str, deployment: str | None = None) -> dic
         name: The secret's short name from gapp.yaml (e.g. "api-key").
         value: The secret value to store.
         deployment: A deployment of the fleet (see gapp_ci_list), instead
-            of the app in the current folder.
+            of the app in the current folder. Reads the fleet with gh; no
+            runner is used. The one root tool argument that reads the fleet.
     """
     from gapp.admin.sdk.secrets import set_secret
     return set_secret(name, value, deployment=deployment)

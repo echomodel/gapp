@@ -36,6 +36,6 @@ So a machine with only `gh` (a cloud agent session, a teammate's laptop) can run
 - **Any machine with `gh`:** every `ci` command except `ci project setup`, for every deployment in the fleet, with no checkout.
 - **A machine with gcloud as a project Owner and `gh` as a fleet repo admin:** `ci project setup`, once per project.
 
-`gapp secrets ... --deployment <name>` is the one root command that reads the fleet. A secret's value goes from your machine straight to Secret Manager, so it needs gcloud; the fleet only says which project and which secrets. It is how a deployment with no folder of its own (configured only in the fleet, or a copy) gets its secrets. If your `gh` login can't read the app repo, it works from the settings the fleet holds and says so.
+`gapp secrets ... --deployment <name>` is the one exception to the wall: a root command that reads the fleet. It does not use a runner, a workflow or Actions; it only reads the fleet file (and the app repo's gapp.yaml) with your `gh` login, and writes nothing to GitHub. A secret's value goes from your machine straight to Secret Manager, so it needs gcloud; the fleet only says which project and which secrets. It is how a deployment with no folder of its own (configured only in the fleet, or a copy) gets its secrets. If your `gh` login can't read the app repo, it works from the settings the fleet holds and says so.
 
 `gapp ci manifest --merged` reads the app repo with your own `gh` login, so it can fail where a deploy works: the runner reads with the fleet's own access.

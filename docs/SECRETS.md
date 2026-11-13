@@ -56,7 +56,7 @@ gapp secrets list --deployment alerts
 gapp secrets set channels --deployment alerts
 ```
 
-The deployment's id, project and declared secrets are read from the fleet: the fleet-side manifest merged over the app repo's gapp.yaml, which is what a CI deploy uses. The value still goes from your machine to Secret Manager, so this needs gcloud as well as `gh`. A secret the deployment doesn't declare is refused, with the declared ones listed. The MCP tools take the same `deployment` argument.
+The deployment's id, project and declared secrets are read from the fleet: the fleet-side manifest merged over the app repo's gapp.yaml, which is what a CI deploy uses. The value still goes from your machine to Secret Manager, so this needs gcloud as well as `gh`. No runner is involved and nothing is written to GitHub. A secret the deployment doesn't declare is refused, with the declared ones listed. The MCP tools take the same `deployment` argument.
 
 CLI and MCP are thin wrappers over a single SDK module
 (`gapp.admin.sdk.secrets`). All logic — discovery, classification,

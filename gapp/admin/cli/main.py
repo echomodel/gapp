@@ -1181,14 +1181,20 @@ def secrets_group():
     fleet (its settings for the deployment merged over the app repo's
     gapp.yaml), so it also works for a deployment configured only in the
     fleet and for a copy. It needs gh for that read and gcloud for the
-    secret.
+    secret. No runner is involved: the value goes from this machine to
+    Secret Manager.
+
+    \b
+    --deployment is the one case where a command outside `gapp ci` reads
+    your fleet. Every other root command works from the app's folder and
+    Google Cloud alone.
     """
 
 
 _DEPLOYMENT_OPTION = click.option(
     "--deployment", default=None, metavar="NAME",
     help="A deployment of your fleet, instead of the app in the current folder. Its project and declared "
-         "secrets are read from the fleet (needs gh).")
+         "secrets are read from the fleet (needs gh; no runner).")
 
 
 @secrets_group.command("list")

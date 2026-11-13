@@ -11,7 +11,8 @@ source is `gapp/__init__.py`.
   over the app repo's gapp.yaml). This is how to set the secrets of a
   deployment configured only in the fleet, or of a copy made with
   `--copy-of`, neither of which has a folder that describes it. It needs
-  `gh` as well as gcloud. Without `--deployment` the commands are unchanged.
+  `gh` as well as gcloud, and no runner. It is the one root command that
+  reads the fleet. Without `--deployment` the commands are unchanged.
 - A deploy on a runner that finds a secret missing names that command, and
   `gapp ci setup --copy-of` does too.
 - `gapp ci manifest --merged` and `gapp ci init` read gapp's version from
