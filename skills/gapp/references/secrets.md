@@ -57,7 +57,17 @@ hidden input, which keeps it out of shell history and transcripts:
 gapp secrets set api-key              # prompts; or --from-stdin
 ```
 
-The MCP form is `gapp_secret_set(name="api-key", value=...)`. Never
+For a deployment with no checkout to stand in (one configured only in
+the fleet, or a copy), name it; the project and the declared secrets
+then come from the fleet, from any folder. It needs gcloud and `gh`:
+
+```bash
+gapp secrets list --deployment my-app-staging
+gapp secrets set api-key --deployment my-app-staging
+```
+
+The MCP form is `gapp_secret_set(name="api-key", value=...)`, with
+`deployment=` for the fleet form. Never
 ask the user to paste a secret into chat; point them at the prompt.
 
 The list output also reports `unattached`, `conflict`, and `orphan`

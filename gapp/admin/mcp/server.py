@@ -255,7 +255,7 @@ def gapp_deploy(
 
 
 @_tool()
-def gapp_secret_get(name: str, plaintext: bool = False) -> dict:
+def gapp_secret_get(name: str, plaintext: bool = False, deployment: str | None = None) -> dict:
     """Get a secret from GCP Secret Manager.
 
     Use this to retrieve secrets that gapp manages for a deployed solution —
@@ -281,13 +281,15 @@ def gapp_secret_get(name: str, plaintext: bool = False) -> dict:
     Args:
         name: The secret's short name from gapp.yaml (e.g. "app-key").
         plaintext: If True, return the actual secret value. Default False.
+        deployment: A deployment of the fleet, instead of the app in the
+            current folder (see gapp_secret_set).
     """
     from gapp.admin.sdk.secrets import get_secret
-    return get_secret(name, plaintext=plaintext)
+    return get_secret(name, plaintext=plaintext, deployment=deployment)
 
 
 @_tool()
-def gapp_secret_set(name: str, value: str) -> dict:
+def gapp_secret_set(name: str, value: str, deployment: str | None = None) -> dict:
     """Store a secret value in GCP Secret Manager for a deployed solution.
 
     Use this to populate secrets that the solution needs at runtime but
@@ -302,16 +304,26 @@ def gapp_secret_set(name: str, value: str) -> dict:
     field (e.g. "api-key"). gapp prefixes this with the solution name
     to produce the full Secret Manager ID automatically.
 
+    Which app: by default the one in the current folder. Pass deployment
+    to name a deployment of the fleet instead, from any folder: its project
+    and declared secrets are then read from the fleet (the fleet's settings
+    for it merged over the app repo's gapp.yaml), so this also works for a
+    deployment configured only in the fleet and for a copy made with
+    copy_of. That read needs gh; storing the secret needs gcloud.
+
     Args:
         name: The secret's short name from gapp.yaml (e.g. "api-key").
         value: The secret value to store.
+        deployment: A deployment of the fleet (see gapp_ci_list), instead
+            of the app in the current folder. Reads the fleet with gh; no
+            runner is used. The one root tool argument that reads the fleet.
     """
     from gapp.admin.sdk.secrets import set_secret
-    return set_secret(name, value)
+    return set_secret(name, value, deployment=deployment)
 
 
 @_tool()
-def gapp_secret_list(name: str | None = None) -> dict:
+def gapp_secret_list(name: str | None = None, deployment: str | None = None) -> dict:
     """List all secret-backed env vars and whether they are ready for deploy.
 
     Shows each secret's env var name, resolved Secret Manager ID, whether
@@ -340,9 +352,13 @@ def gapp_secret_list(name: str | None = None) -> dict:
 
     Args:
         name: Deployment name. Defaults to the current directory's app.
+        deployment: A deployment of the fleet, instead of the app in the
+            current folder: its declared secrets and project are read from
+            the fleet (see gapp_secret_set). `notes` says when the app
+            repo's gapp.yaml could not be read. Not with name.
     """
     from gapp.admin.sdk.secrets import list_secrets
-    return list_secrets(name=name)
+    return list_secrets(name=name, deployment=deployment)
 
 
 @_tool()

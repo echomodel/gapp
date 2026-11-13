@@ -850,10 +850,24 @@ Recorded as deferred, not overlooked:
   it to Secret Manager. Deferred because every set waits for a runner
   start, the key handling is a lot of machinery, and whoever can start
   workflows could then set a secret to a value they know. `generate:
-  true` already covers secrets that only need to be random. That `gapp
-  secrets set` cannot find the declared secrets of a deployment
-  configured only in the fleet is a different matter, answered by
-  "Direction: one fleet".
+  true` already covers secrets that only need to be random.
+
+### `secrets --deployment`: the one root command that reads the fleet
+
+A secret's value has to travel from the operator's machine to Secret
+Manager, so setting one is a gcloud command. But a deployment configured
+only in the fleet, or a copy, has no folder whose gapp.yaml says which
+project and which secrets. `gapp secrets list|get|set --deployment
+<name>` reads those from the fleet (the fleet-side manifest merged over
+the app repo's gapp.yaml, as a deploy does) and then works on Secret
+Manager as usual. It only reads GitHub, and writes nothing there. It
+needs no runner, workflow or Actions: the dependency is on the fleet's
+record, not on CI. It was not put under `gapp ci` because it needs gcloud
+on the operator's machine, which `ci` commands never do, and because a
+`ci` command means work done on a runner. It is
+the single place a root command crosses into the fleet; "Direction: one
+fleet" removes the need for the exception by making the fleet the
+authority for every command.
 - Collision when the same name is also deployed to the same project from
   a laptop with the root commands (a custom domain maps to one service,
   so that second mapping is refused; otherwise the rule is documented,

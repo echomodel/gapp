@@ -40,9 +40,23 @@ Operators set the short name; gapp owns the prefix.
 | CLI | `gapp secrets list` | Show declared secrets, status, and remediation hints. |
 | CLI | `gapp secrets get NAME` | Fetch a secret. Default: hash + length. `--plaintext` prints the value. |
 | CLI | `gapp secrets set NAME [VALUE]` | Set a secret. Without VALUE, prompts (or use `--from-stdin`). |
+| CLI | `gapp secrets list\|get\|set ... --deployment NAME` | The same, for a deployment of your fleet, from any folder (see below). |
 | MCP | `gapp_secret_list` | Same as CLI list, returns structured JSON. |
 | MCP | `gapp_secret_get` | Same as CLI get. |
 | MCP | `gapp_secret_set` | Same as CLI set. |
+
+### A deployment with no folder: `--deployment`
+
+Without `--deployment`, the commands work on the app in the current folder: its gapp.yaml says which secrets are declared.
+
+A deployment configured only in the fleet (the app repo has no gapp.yaml), or a copy made with `gapp ci setup --copy-of`, has no folder that describes it. Name it instead:
+
+```bash
+gapp secrets list --deployment alerts
+gapp secrets set channels --deployment alerts
+```
+
+The deployment's id, project and declared secrets are read from the fleet: the fleet-side manifest merged over the app repo's gapp.yaml, which is what a CI deploy uses. The value still goes from your machine to Secret Manager, so this needs gcloud as well as `gh`. No runner is involved and nothing is written to GitHub. A secret the deployment doesn't declare is refused, with the declared ones listed. The MCP tools take the same `deployment` argument.
 
 CLI and MCP are thin wrappers over a single SDK module
 (`gapp.admin.sdk.secrets`). All logic — discovery, classification,

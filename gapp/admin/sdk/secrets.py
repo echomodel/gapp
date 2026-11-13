@@ -6,7 +6,15 @@ Listing and pre-deploy validation use a single label-filtered
 `gcloud secrets list` call instead of N per-secret describes.
 See issue #27 for the full design rationale.
 
-Project resolution: every entry point that needs the GCP project for a
+Two ways to say which deployment a secret belongs to. From the app's
+folder (the default): its gapp.yaml names it and declares the secrets, and
+the project is found from the labels in GCP. With `deployment` (`--deployment
+<name>`): the fleet names it, and its id, project and declared secrets come
+from the fleet (`ci.deployment_env`), so a deployment configured only in
+the fleet, or a copy whose id is not the repo's name, can have its secrets
+set from any folder. This is the one root command that reads the fleet.
+
+Project resolution from the folder: every entry point that needs the GCP project for a
 solution MUST go through `GappSDK.resolve_solution_with_project(...)`,
 not `resolve_solution(...)` alone. `resolve_solution` returns shape only
 and always sets `project_id=None`; calling it without the chained
@@ -18,6 +26,7 @@ resolved the same project correctly.
 import subprocess
 from pathlib import Path
 
+from gapp.admin.sdk.cloud.base import on_ci_runner
 from gapp.admin.sdk.core import GappSDK
 from gapp.admin.sdk.manifest import get_env_vars, load_manifest
 from gapp.admin.sdk.util import run_gcloud
@@ -25,12 +34,15 @@ from gapp.admin.sdk.util import run_gcloud
 GAPP_SOLUTION_LABEL = "gapp-solution"
 
 
-def set_secret(name: str, value: str) -> dict:
+def set_secret(name: str, value: str, deployment: str | None = None) -> dict:
     """Store a secret value in Secret Manager, stamping the solution label.
+
+    `deployment` names a deployment of the fleet instead of using the
+    current folder (see the module docstring).
 
     Returns dict with: name, secret_id, project_id, secret_status.
     """
-    resolved = _find_secret(name)
+    resolved = _find_secret(name, deployment)
     project_id = resolved["project_id"]
     if not project_id:
         raise RuntimeError("No GCP project attached. Run 'gapp setup --project <project-id>' first.")
@@ -48,7 +60,25 @@ def set_secret(name: str, value: str) -> dict:
     }
 
 
-def list_secrets(name: str | None = None) -> dict:
+def _deployment_context(deployment: str) -> dict:
+    """The fleet's answer for `--deployment`: id, project, env entries."""
+    from gapp.admin.sdk.ci import deployment_env
+    ctx = deployment_env(deployment)
+    if ctx.get("ok") is False:
+        raise RuntimeError(ctx["next_step"]["hint"])
+    return ctx
+
+
+def _unread_repo_note(ctx: dict) -> str | None:
+    """Says that only the fleet's own settings were looked at, when the app
+    repo's gapp.yaml could not be read."""
+    if ctx.get("repo_checked") is False:
+        return (f"{ctx['repo']}'s gapp.yaml could not be read from here, so only the settings the fleet holds "
+                f"for {ctx['name']} were checked. {ctx.get('repo_note') or ''}").strip()
+    return None
+
+
+def list_secrets(name: str | None = None, deployment: str | None = None) -> dict:
     """List secret-backed env vars and diff them against what exists in GCP.
 
     First does a single label-filtered `gcloud secrets list` to enumerate
@@ -66,17 +96,26 @@ def list_secrets(name: str | None = None) -> dict:
     in the top-level `hints` array; CLI renderers can emit them as
     footnotes after the table.
     """
-    ctx = GappSDK().resolve_solution_with_project(name)
-    if not ctx:
-        raise RuntimeError(
-            "Not inside an app's folder. Run this in the app's repo, or run gapp init there first."
-        )
-
-    solution_name = ctx["name"]
-    project_id = ctx.get("project_id")
-    repo_path = ctx.get("repo_path")
-    manifest = load_manifest(Path(repo_path).expanduser()) if repo_path else {}
-    env_entries = get_env_vars(manifest)
+    notes = []
+    if deployment:
+        if name:
+            raise RuntimeError("Give a name or --deployment, not both.")
+        fleet_ctx = _deployment_context(deployment)
+        solution_name, project_id, env_entries = fleet_ctx["id"], fleet_ctx["project"], fleet_ctx["env"]
+        if note := _unread_repo_note(fleet_ctx):
+            notes.append(note)
+    else:
+        ctx = GappSDK().resolve_solution_with_project(name)
+        if not ctx:
+            raise RuntimeError(
+                "Not inside an app's folder. Run this in the app's repo, or name a deployment of your fleet "
+                "with --deployment <name>."
+            )
+        solution_name = ctx["name"]
+        project_id = ctx.get("project_id")
+        repo_path = ctx.get("repo_path")
+        manifest = load_manifest(Path(repo_path).expanduser()) if repo_path else {}
+        env_entries = get_env_vars(manifest)
 
     present_ids = set()
     if project_id:
@@ -126,10 +165,12 @@ def list_secrets(name: str | None = None) -> dict:
 
     return {
         "solution": solution_name,
+        "deployment": deployment,
         "project_id": project_id,
         "secrets": secrets,
         "orphans": orphans,
         "hints": hints,
+        "notes": notes,
     }
 
 
@@ -294,12 +335,19 @@ def validate_declared_secrets(project_id: str, solution_name: str, manifest: dic
     if not problems:
         return
 
-    lines = [f"{len(problems)} secret(s) declared in gapp.yaml are not deployable:"]
+    where = "for this deployment" if on_ci_runner() else "in gapp.yaml"
+    lines = [f"{len(problems)} secret(s) declared {where} are not deployable:"]
     for p in problems:
         lines.append(f"  {p['env_var']} → {p['secret_id']}")
         if p["kind"] == "missing":
             lines.append(f"    Status: missing in GCP")
-            lines.append(f"    Resolve: gapp secrets set {p['name']} <value>")
+            if on_ci_runner():
+                # On a runner the name is the deployment's id, which is its
+                # name in the fleet unless it was renamed.
+                lines.append(f"    Resolve, from a machine with gcloud: gapp secrets set {p['name']} "
+                             f"--deployment {solution_name}")
+            else:
+                lines.append(f"    Resolve: gapp secrets set {p['name']} <value>")
         elif p["kind"] == "unattached":
             lines.append(f"    Status: exists in GCP but has no `{GAPP_SOLUTION_LABEL}` label")
             lines.append(
@@ -354,12 +402,37 @@ def materialize_generated_secrets(project_id: str, solution_name: str, manifest:
     return results
 
 
-def _find_secret(name: str) -> dict:
-    """Look up a secret by its short name as declared in the checkout's gapp.yaml."""
+def _find_secret(name: str, deployment: str | None = None) -> dict:
+    """Look up a secret by its short name: as declared for a deployment of
+    the fleet when `deployment` is given, else in the checkout's gapp.yaml."""
+    if deployment:
+        fleet_ctx = _deployment_context(deployment)
+        known = []
+        for entry in fleet_ctx["env"]:
+            secret_cfg = entry.get("secret")
+            if not isinstance(secret_cfg, dict):
+                continue
+            known.append(secret_cfg["name"])
+            if secret_cfg["name"] == name:
+                return {
+                    "name": name,
+                    "env_var": entry["name"],
+                    "secret_id": f"{fleet_ctx['id']}-{name}",
+                    "solution": fleet_ctx["id"],
+                    "generate": secret_cfg.get("generate", False),
+                    "project_id": fleet_ctx["project"],
+                }
+        message = (f"No secret '{name}' is declared for {fleet_ctx['name']}. "
+                   f"Declared: {', '.join(known) or '(none)'}.")
+        if note := _unread_repo_note(fleet_ctx):
+            message += " " + note
+        raise RuntimeError(message)
+
     ctx = GappSDK().resolve_solution_with_project()
     if not ctx:
         raise RuntimeError(
-            "Not inside an app's folder. Run this in the app's repo, or run gapp init there first."
+            "Not inside an app's folder. Run this in the app's repo, or name a deployment of your fleet "
+            "with --deployment <name>."
         )
 
     repo_path = ctx.get("repo_path")
@@ -393,11 +466,12 @@ def _find_secret(name: str) -> dict:
     )
 
 
-def get_secret(name: str, plaintext: bool = False) -> dict:
-    """Get a secret from Secret Manager by its short name."""
+def get_secret(name: str, plaintext: bool = False, deployment: str | None = None) -> dict:
+    """Get a secret from Secret Manager by its short name. `deployment` names
+    a deployment of the fleet instead of using the current folder."""
     import hashlib
 
-    resolved = _find_secret(name)
+    resolved = _find_secret(name, deployment)
     project_id = resolved["project_id"]
     if not project_id:
         raise RuntimeError("No GCP project attached. Run 'gapp setup --project <project-id>' first.")
