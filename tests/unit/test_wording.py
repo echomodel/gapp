@@ -10,6 +10,8 @@ from gapp.admin.sdk.cloud.dummy import DummyCloudProvider
 from gapp.admin.sdk.core import GappSDK
 
 NOT_IN_APP = "Not inside an app's folder. Run this in the app's repo, or run gapp init there first."
+NOT_IN_APP_SECRETS = ("Not inside an app's folder. Run this in the app's repo, or name a deployment of your fleet "
+                      "with --deployment <name>.")
 
 
 def _summary(monkeypatch, apps, projects):
@@ -42,7 +44,7 @@ def test_secrets_outside_an_app_folder(call, tmp_path, monkeypatch):
     monkeypatch.setattr(sec_mod.GappSDK, "resolve_solution_with_project", lambda self, *a, **k: None)
     with pytest.raises(RuntimeError) as exc:
         call()
-    assert str(exc.value) == NOT_IN_APP
+    assert str(exc.value) == NOT_IN_APP_SECRETS
 
 
 def test_setup_outside_an_app_folder(tmp_path, monkeypatch):
