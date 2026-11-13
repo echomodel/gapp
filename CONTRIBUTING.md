@@ -683,6 +683,8 @@ See [docs/CI.md](docs/CI.md) for the full design: authentication architecture, t
 
 ## Two fleet systems
 
+This is the code as it stands. The direction that replaces it, and why, is in "Direction: one fleet" below.
+
 gapp has **two fleet systems that do not talk to each other**:
 
 - **Root commands** (`gapp setup`, `deploy`, `status`, `list`, `secrets`)
@@ -835,11 +837,23 @@ Recorded as deferred, not overlooked:
   later `repos:` list).
 - Environments as a first-class concept.
 - Binding to or importing resources gapp did not create; a `--id` flag.
-- Setting secrets through CI (`gapp ci secrets set <deployment> <name>`:
-  stdin or hidden prompt, never an argument; a GitHub Environment secret
-  that a workflow writes to Secret Manager). Also needed because `gapp
-  secrets set` cannot find declared secrets for a fleet-configured
-  deployment with no local gapp.yaml. A separate ticket.
+- Setting secrets through CI (`gapp ci secrets set <deployment> <name>`,
+  the value on stdin, never an argument), for a machine with no gcloud
+  login. Storing the value as a GitHub Actions or Environment secret for
+  a workflow to copy does not work everywhere: a sandboxed agent session
+  may be refused GitHub's Actions secrets API, even the read of the
+  public key a value is encrypted with. The route that needs only a
+  workflow dispatch: project setup creates a key pair (private half in
+  the project's Environment, public half in a file in the fleet repo),
+  the command encrypts the value on the caller's machine and sends the
+  ciphertext as a workflow input, and the runner decrypts it and writes
+  it to Secret Manager. Deferred because every set waits for a runner
+  start, the key handling is a lot of machinery, and whoever can start
+  workflows could then set a secret to a value they know. `generate:
+  true` already covers secrets that only need to be random. That `gapp
+  secrets set` cannot find the declared secrets of a deployment
+  configured only in the fleet is a different matter, answered by
+  "Direction: one fleet".
 - Collision when the same name is also deployed to the same project from
   a laptop with the root commands (a custom domain maps to one service,
   so that second mapping is refused; otherwise the rule is documented,
@@ -895,3 +909,342 @@ repo; the allowlist became `gapp ci sources add|remove|list` over
 `GAPP_ALLOWED_SOURCES`; `ci trigger` became `ci deploy`, the same verb as
 the direct system; `gapp status` reports the direct system only and never
 crashes; and a read GitHub refused is "couldn't check", in GitHub's words.
+
+## Direction: one fleet
+
+**Not built. Nothing in this section describes how gapp behaves today.**
+For current behavior, read the sections above ("Two fleet systems",
+"Finding a deployment", "Resolution rules") and the code. The commands
+and behaviors named here that do not exist yet include `gapp fleet`,
+`recover`, the local fleet file, and root commands reading the fleet. Do
+not rely on them, document them as available, or start building them
+without the owner's go-ahead.
+
+This section records where the design is going and why, so the same
+questions are not argued again. Where the sections above differ from it,
+this section is the direction and they are what it will replace.
+
+### The problem with two fleet systems
+
+Two places say what is deployed: the fleet file (used by `gapp ci`), and
+the working folder plus GCP labels (used by the root commands). Keeping
+them apart was deliberate, and it costs more than it saves:
+
+- **Two lists, neither complete.** `gapp list` shows what was set up in
+  the cloud, for the signed-in gcloud account. `gapp ci list` shows what
+  is intended. They name things differently (id against name) once a
+  deployment is renamed or copied.
+- **The two systems can change one deployment with different settings.**
+  A root `gapp deploy` never reads the fleet, so it deploys with the
+  repo's gapp.yaml alone and reverts anything the fleet sets. The domain
+  guard catches the domain and nothing else.
+- **Commands cannot find what they need.** `gapp secrets set` takes the
+  deployment from the folder, so it cannot serve a deployment whose
+  settings live only in the fleet, or a copy whose id differs from the
+  repo's name.
+- **Every verb exists twice.**
+
+### Goals
+
+- One answer to "what do I operate, and where". Never type a project,
+  never need a particular folder to act on a deployment.
+- A first deploy with only a gcloud login: no GitHub, no repo, no file to
+  create, no path to type.
+- No git for the operator: no clone, commit, push, pull or merge to keep
+  gapp's records right, on a workstation or in an agent session.
+- A fleet change from an agent session stays one command.
+- Durable records that outlive a machine, for anyone who wants them.
+- Each added capability is opt-in and leaves earlier users untouched.
+
+### Terms
+
+- **Deployment**: one app on one project under one name. Use the bare word
+  when the distinction below does not matter.
+- **Deployment definition**: its record in the fleet (repo, project, id,
+  settings). What is intended.
+- **Tracked**: the fleet you are attached to has its definition.
+  **Untracked**: it exists in Google Cloud and this fleet does not list it.
+- **Active**: it exists in Google Cloud (it has been deployed).
+  **Inactive**: defined, not deployed yet. Active says nothing about health.
+
+"Entry" in the sections above is the deployment definition.
+
+### The intended design
+
+Written in the present tense for brevity; all of it is intended, none of it built.
+
+- **The fleet is the one authority.** Every command, root or `ci`, reads
+  the deployment definition from the fleet and acts on that. Labels stop
+  being a way to find or identify a deployment at run time.
+- **The fleet lives in exactly one place, chosen once.** By default it is
+  a plain file gapp creates on the machine. `gapp fleet use
+  <owner>/<repo>` keeps it in a GitHub repo instead (the fixed path
+  `gapp/deployments.yaml`). There is never a second copy, so there is
+  nothing to sync. `gapp fleet` says where it is; so does `gapp list`.
+- **A GitHub fleet is changed by one remote operation per change**, each
+  recorded as a commit there, as the register run does. gapp holds no
+  working copy and is not a git client (principle 16).
+- **`ci` means "run it on a runner".** The root commands act with the
+  operator's gcloud login; the `ci` commands dispatch. CI needs the fleet
+  on GitHub, because the runner reads it there.
+- **The local file is not versioned.** Each change keeps the previous
+  copy beside it and says so. History and rollback come with a GitHub
+  fleet.
+- **Moving a fleet** is `gapp fleet export`, `gapp fleet use`, `gapp fleet
+  import`. Import keeps a backup before it replaces anything.
+- **Recovery is a command, never a mode.** Each deploy saves the
+  deployment definition with the deployment's own state in its bucket.
+  `recover` reads those copies from the projects marked `gapp=hosted` and
+  rebuilds the fleet; a test deploys, deletes the fleet, recovers and
+  compares. The same read reports untracked deployments. Labels also let
+  a deploy refuse to take over a deployment another fleet tracks.
+- **What a deploy saves is the fleet's side, not the merged result.**
+  The cloud records a deployment's merged settings and the commit that
+  was built. It does not record the app's repo, the name when it differs
+  from the id, or which settings the fleet set and which the repo's
+  gapp.yaml set. Saving the definition itself answers all three: the
+  repo's side stays in the repo at the recorded commit, so a recovered
+  fleet is identical to the one lost.
+- **Commands are written once.** Two small pieces differ by where the
+  fleet lives: "read the fleet" and "save a change to it". Everything
+  above them is shared. The visible difference is speed: a local change
+  is instant, a change to a GitHub fleet takes a runner start.
+- **What a command needs stays readable from what you typed.** Where the
+  fleet lives is one explicit setting, shown by `gapp fleet`; the command
+  name says who acts (your login, or a runner). Nothing is detected.
+  "Root commands never read GitHub" goes: it existed to keep two systems
+  apart, and with a GitHub fleet every command reads it there.
+- **`list` is intent; `status` is what is there.** That is true today as
+  well: `gapp list` shows the buckets `gapp setup` labelled, not what is
+  serving.
+- **The operator owns the GitHub repo.** gapp attaches to a repo it is
+  given. Creating it, and who may reach it, are the operator's business.
+- **Finding the fleet from another machine is optional.** Marking a repo
+  so it can be found (a topic), and searching for it, stay out of every
+  routine command. At most a `ci` command notes that the repo is not
+  marked; the note never fails anything and can be turned off.
+- **Commands are split where the access, cost or frequency changes.**
+  Rare, privileged or slow steps get their own command; the frequent one
+  (deploy) needs the least access and runs in the most places. A step
+  that needs no more than its neighbour and always runs with it is not a
+  command of its own.
+- **So `gapp setup`, as a step per app, goes.** Today it mixes two kinds
+  of work. Turning on APIs, granting Cloud Build its permissions and
+  marking the project are once per project and need an Owner: they
+  belong to project setup. Creating and labelling the deployment's
+  bucket is cheap and per deployment: it belongs to deploy. Defining the
+  deployment is a fleet change that touches no cloud.
+- **Project setup is the one Owner step, and it is a contract.** Once
+  per project: the APIs, the build permissions, the hosted mark, and for
+  CI the sign-in trust and the deploy account. Today these are divided
+  between `gapp setup` and `gapp ci project setup`, and the second does
+  not turn on the APIs or grant the build permissions, which the runner
+  is deliberately not allowed to do; a project used only through CI
+  still needs a `gapp setup` from someone's checkout first. What project
+  setup guarantees is listed in one place, so an organisation that
+  prepares projects with its own tooling can meet it without gapp.
+- **Terraform for a deployment, not for the project.** A deployment is
+  about six linked resources that change on every deploy and sometimes
+  need removing: what Terraform is for. Project setup is a short fixed
+  list, set once, only ever added to: a few re-runnable checks do it,
+  with no state, no extra bucket and no Terraform on the Owner's
+  machine. A deploy that finds a piece missing says to run project
+  setup again. The runner applying the project's foundation was
+  rejected: changing a project's access policy is an Owner's power, and
+  the deploy identity must not be able to set up projects or escalate.
+- **`gapp ci X` means "do X on a runner"**, for the verbs that touch
+  Google Cloud (deploy, status). Anything about the fleet has one form
+  and no `ci` twin. `ci init` and `ci sources` exist only for CI.
+- **`status` reads the state with Terraform's own command**, the
+  supported way, then checks what is live: the service's health URL and
+  the domain mapping.
+
+What an operator is told, in this order: a local fleet to try gapp on one
+machine; a GitHub fleet so the records survive the machine, carry
+history, and are shared by every machine and teammate; CI so deploys run
+from anywhere with only GitHub access, including agent sessions with no
+gcloud login.
+
+### Why the direction follows
+
+Each step is a reason, and each rules out the design before it.
+
+1. **The secrets gap is a symptom.** A deployment whose settings live
+   only in the fleet cannot have a secret set, and neither can a copy.
+   Either patch (setting it from the operator's machine with gcloud,
+   which makes a second `ci` command use gcloud; or carrying it through a
+   runner as an encrypted Actions secret, which costs a workflow and a
+   runner start) leaves the cause in place: two authorities.
+2. **One fleet kept as a git repo on the operator's disk** removes the
+   second authority and brings git into the routine. The fleet is edited
+   locally and pushed, so a `ci` command has to know the local repo
+   matches the remote before it dispatches.
+3. **That check has no simple form.** Comparing commits misfires when the
+   fleet shares a repo with unrelated work; comparing the one definition
+   avoids that and is more machinery; a dedicated fleet repo with a
+   plain commit check is the least bad.
+4. **Every placement of the git step is awkward.** A push between
+   changing the fleet and deploying through CI; gapp committing while the
+   operator pushes; a pass-through (`gapp fleet git ...`); `ci` commands
+   that push or pull by themselves when no merge is needed and stop when
+   one is. Each leaves the operator running git, or gapp managing a
+   working copy, for something that is configuration. A second, remote
+   way to change the fleet for agents means two writers and diverged
+   history.
+5. **The problem is two copies, not git.** Configuration is not sacred
+   because it sits in git: any tool with a local and a remote copy
+   overwrites one with the other, and has lost updates and stale reads
+   whatever stores them. And an agent session is thrown away, so its
+   copy can only ever be a download of the remote. The remote is the
+   authority whether the design says so or not.
+6. **A local file only, with the definition sent in each CI request,**
+   has one mode and the least code, and fails on the same fact: agent
+   sessions hold the file only by cloning a shared repo, and keep their
+   changes only by committing and pushing it.
+7. **So: one copy, where it has to be.** Keep the mechanism the `ci`
+   side already has (the fleet on GitHub, one remote operation per
+   change, no working copy) and have the root commands read the same
+   fleet. A local file remains for a first deploy with no GitHub.
+
+### Objections and answers
+
+- **"gapp becomes unusable without server setup."** The default fleet is
+  a local file gapp creates; GitHub enters when the operator wants
+  durability, sharing or CI.
+- **"Every command is implemented twice."** Two small pieces are (see
+  "The intended design").
+- **"A list of intent is worse than a list of what exists."** Today's
+  list is not a list of what is serving either, and two lists that
+  disagree are worse than one. Untracked deployments are found by the
+  report.
+- **"This is the registry gapp 3 removed."** It is not (see the last
+  registry item below), with one caution: a local fleet nobody moves to
+  GitHub is a single unshared file, which is why `recover` exists.
+- **"Not versioning the local file risks losing it."** Accepted: a
+  backup on every change, `recover` from the cloud, and a GitHub fleet
+  for anyone who wants history. Versioning config is the job of the
+  operator's own tools.
+
+### Considered and rejected
+
+- **Keep two systems and patch each gap** (a fleet-aware `secrets`
+  command, a second resolver). Every patch adds a path between the
+  systems while the two authorities remain.
+- **A local git working copy of the fleet repo**, edited locally and
+  pushed. Local and remote copies drift; a `ci` command then needs a
+  "push first" or a sync step; two machines changing the fleet means a
+  merge. Whether gapp commits and pushes or the operator does, git ends
+  up in the operator's routine, and a tool that manages a long-lived
+  working copy has to answer for every state git can be in.
+- **Commit for the operator, leave push to them, pass other git commands
+  through.** Tools that never use the remote themselves do this well.
+  gapp's `ci` commands depend on the remote being current, so the operator
+  would run git before gapp to make gapp's own command work.
+- **A local file only, with the definition sent in each CI request** and
+  nothing stored on GitHub. Simplest code, and sharing becomes the
+  operator's job: an agent session has the file only by cloning a repo,
+  and its changes survive only if committed and pushed, which is the
+  split workflow again. A stale copy deploys stale settings with nothing
+  to compare against.
+- **Overwrite-style sync between a local and a remote copy.** Any
+  two-copy design has lost updates and stale reads, with or without git.
+- **The fleet in GitHub repository or Environment variables.** No
+  history, last write wins, small size limits, and an API not every
+  session can reach.
+- **Labels as a fallback when the fleet has no definition.** A second
+  authority by another name. Labels serve `recover` and the takeover
+  guard only.
+- **A hidden git repository under the local file.** Rollback would
+  expose it, and config managers do not expect one in a data folder.
+- **The per-machine registry gapp 3 removed.** That was an unshared cache
+  of name to project and checkout path, reconstructed from labels. The
+  fleet is the authority, has one home, and moves to GitHub with one
+  command.
+- **`ci` commands that sync the fleet repo by themselves** (push or pull
+  when no merge is needed). gapp would be managing a working copy after
+  all, and still stops when both sides changed.
+- **Two ways to change the fleet** (a local edit, and a remote one for
+  agents). Two writers to one file, and histories that diverge.
+- **Words for the two sides of a deployment that were tried:**
+  "instance" (implies several per deployment, which a deployment cannot
+  have), "installation" (redundant after "deployment"), "stack",
+  "footprint", "resources" (not a single noun), "live" (reads as
+  healthy). "Tracked" and "active" are adjectives, so "deployment" stays
+  the one noun.
+
+### Prior art
+
+- **Terraform.** State is the authority, never a scan of the cloud;
+  `import` is a recovery tool, not a way of working; state is a local
+  file by default and the same commands use a remote backend once one is
+  configured. The fleet's two homes follow that.
+- **Kustomize.** A base in the app's repo and an overlay kept elsewhere:
+  gapp.yaml and the fleet's settings for a deployment.
+- **pass, chezmoi, etckeeper, `npm version`.** Tools with a repo away
+  from the working folder that commit what they wrote and stop there
+  (chezmoi adds a pass-through to git). It works for them because they
+  never depend on the remote themselves.
+- **Jenkins X, and `flux bootstrap`.** Tools that do push. Jenkins X
+  manages pull requests on environment repos and is known for the
+  complexity that brings. `flux bootstrap` avoids a working copy: a fresh
+  clone, one commit, push, retry. The register run is that idea.
+
+### Accepted limits
+
+- The fleet's path in a GitHub repo is fixed.
+- A local fleet has a one-step backup and no history.
+- `recover` returns each deployment as last deployed: a definition never
+  deployed, or changed since its last deploy, is not in the cloud.
+- With a GitHub fleet, every command needs GitHub access and the root
+  commands need `gh` as well as gcloud; there are no offline changes; a
+  fleet change takes a runner start.
+- A session with no gcloud login cannot set a secret value until a
+  runner path for it exists.
+- Moving the fleet to another repo means `gapp ci project setup` again
+  for each project, because the trust names the repo.
+- CI runs on GitHub Actions only. GitHub Enterprise is untested. Until
+  other git hosts are supported in CI (see the open questions), an app
+  kept elsewhere deploys only from a checkout.
+
+### Open questions
+
+- Where the local file lives, and whether each profile has its own.
+- Deployments that exist only as labels when a fleet is first created:
+  import them once without asking (no migration for the operator), or
+  leave it to `recover`.
+- Whether a root `gapp deploy` still runs only in the app's checkout.
+- Apps with no GitHub repo: an optional `repo`, deployable only from a
+  checkout.
+- How a GitHub fleet is written before CI is installed there.
+- What becomes of `name` in gapp.yaml and of `gapp init`.
+- One file per deployment in the fleet repo.
+- Whether a definition's settings are changed in place by one command,
+  replacing export, edit, upload.
+- How little the fleet repo's workflow files can hold (a few lines that
+  hand off to gapp's shared workflow), and whether they name the gapp
+  version or the CLI sends its own with each request.
+- Secret values from a session with no gcloud login: the runner path
+  in step 1 above, as a later addition to `ci`.
+- For a team: whether fleet changes may be required to go through pull
+  requests on the fleet repo, and how the commands report that.
+- The word for defining a deployment once `setup` prepares nothing
+  (`setup`, or a plainer one such as `add`), and whether the CI trust for
+  a project is `gapp ci project setup` or an option on project setup,
+  since an Owner runs it on their own machine.
+- One state bucket per project, created by project setup, holding each
+  deployment's state in its own folder, with Terraform creating the
+  deployment's data bucket (guarded against destroy). It ends the bucket
+  made outside Terraform and keeps state out of the app's reach; it
+  needs existing deployments adopted with no manual import, which is
+  unverified.
+- Today the app's service account is granted the whole bucket, state
+  included, though its mount is limited to `data/`. Restricting the
+  grant to `data/` closes that without moving anything.
+- A deeper check on `status` that asks Google Cloud about every resource
+  in the state (`terraform plan -refresh-only`), for "is it all still
+  there".
+- `status` calls a fixed `/health` path without credentials, so an app
+  with no such route, or one that is not public, reads as unhealthy.
+- CI deploys of public repos on other git hosts (a clone URL in the
+  definition, a host-aware allowed list); private ones need a stored key
+  or token per host.
