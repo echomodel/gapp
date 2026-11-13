@@ -1161,7 +1161,7 @@ def manifest_example_cmd():
 
 @main.group("secrets")
 def secrets_group():
-    """List, get, and set secret values for the current app.
+    """List, get, and set secret values for an app.
 
     \b
     A secret is declared in gapp.yaml as an environment variable read from it:
@@ -1171,21 +1171,39 @@ def secrets_group():
       gapp secrets list                  each secret's state, with the commands that fix it
       gapp secrets set api-key           store a value (prompts; --from-stdin to pipe)
     Each is stored in Secret Manager as <app name>-<secret name>.
+
+    \b
+    Which app: the one in the current folder, or with --deployment NAME a
+    deployment of your fleet, from any folder:
+      gapp secrets list --deployment my-app
+      gapp secrets set api-key --deployment my-app
+    With --deployment, the project and the declared secrets come from the
+    fleet (its settings for the deployment merged over the app repo's
+    gapp.yaml), so it also works for a deployment configured only in the
+    fleet and for a copy. It needs gh for that read and gcloud for the
+    secret.
     """
+
+
+_DEPLOYMENT_OPTION = click.option(
+    "--deployment", default=None, metavar="NAME",
+    help="A deployment of your fleet, instead of the app in the current folder. Its project and declared "
+         "secrets are read from the fleet (needs gh).")
 
 
 @secrets_group.command("list")
 @click.argument("name", required=False)
-def secrets_list_cmd(name):
+@_DEPLOYMENT_OPTION
+def secrets_list_cmd(name, deployment):
     """Show declared secrets, deploy-readiness, and remediation hints."""
     from gapp.admin.sdk.secrets import list_secrets
     try:
-        result = list_secrets(name=name)
+        result = list_secrets(name=name, deployment=deployment)
     except RuntimeError as e:
         click.echo(f"  Error: {e}", err=True)
         raise SystemExit(1)
 
-    click.echo(f"App:     {result['solution']}")
+    click.echo(f"App:     {result.get('deployment') or result['solution']}")
     if result.get("project_id"):
         click.echo(f"Project: {result['project_id']}")
     else:
@@ -1201,10 +1219,14 @@ def secrets_list_cmd(name):
                 f"{s['status']:<18} {'yes' if s['generate'] else 'no'}"
             )
     else:
-        click.echo("\n  No secrets declared in gapp.yaml.")
+        click.echo(f"\n  No secrets declared for {result['deployment']}." if result.get("deployment")
+                   else "\n  No secrets declared in gapp.yaml.")
+    for note in result.get("notes") or []:
+        click.echo(f"\n  Note: {note}")
 
     if result["orphans"]:
-        click.echo("\n  Orphans (labeled in GCP but not declared in gapp.yaml):")
+        click.echo("\n  Orphans (labeled in GCP but not declared"
+                   + (f" for {result['deployment']}):" if result.get("deployment") else " in gapp.yaml):"))
         for orphan_id in result["orphans"]:
             click.echo(f"    - {orphan_id}")
 
@@ -1223,11 +1245,12 @@ def secrets_list_cmd(name):
 @secrets_group.command("get")
 @click.argument("name")
 @click.option("--plaintext", is_flag=True, help="Print the actual secret value (default: hash + length only).")
-def secrets_get_cmd(name, plaintext):
+@_DEPLOYMENT_OPTION
+def secrets_get_cmd(name, plaintext, deployment):
     """Fetch a secret. Default output is a hash + length; --plaintext prints the value."""
     from gapp.admin.sdk.secrets import get_secret
     try:
-        result = get_secret(name, plaintext=plaintext)
+        result = get_secret(name, plaintext=plaintext, deployment=deployment)
     except RuntimeError as e:
         click.echo(f"  Error: {e}", err=True)
         raise SystemExit(1)
@@ -1245,15 +1268,23 @@ def secrets_get_cmd(name, plaintext):
 @click.argument("name")
 @click.argument("value", required=False)
 @click.option("--from-stdin", is_flag=True, help="Read value from stdin (use to avoid shell history).")
-def secrets_set_cmd(name, value, from_stdin):
+@_DEPLOYMENT_OPTION
+def secrets_set_cmd(name, value, from_stdin, deployment):
     """Store a secret value. Without VALUE, prompts (or pass --from-stdin to pipe)."""
-    from gapp.admin.sdk.secrets import set_secret
+    from gapp.admin.sdk.secrets import _find_secret, set_secret
+    if deployment and not from_stdin and value is None:
+        # Check the deployment and the secret before asking for the value.
+        try:
+            _find_secret(name, deployment)
+        except RuntimeError as e:
+            click.echo(f"  Error: {e}", err=True)
+            raise SystemExit(1)
     if from_stdin:
         value = sys.stdin.read().rstrip("\n")
     elif value is None:
         value = click.prompt("Value", hide_input=True, confirmation_prompt=True)
     try:
-        result = set_secret(name, value)
+        result = set_secret(name, value, deployment=deployment)
     except RuntimeError as e:
         click.echo(f"  Error: {e}", err=True)
         raise SystemExit(1)

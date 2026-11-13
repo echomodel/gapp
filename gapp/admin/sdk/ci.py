@@ -1262,8 +1262,9 @@ def _with_setup_text(result: dict, *, copy_of: str | None) -> dict:
     elif copy_of:
         lines.append(f"{nm} is set up as a copy of {copy_of}: {rp} deploys to {pj}"
                      + (" (the same project as the source)." if result.get("project_from_source") else "."))
-        lines.append(f"Set the secrets the app's gapp.yaml declares on {pj} before the first deploy: "
-                     f"gapp secrets list shows them from the app's folder.")
+        lines.append(f"Set its secrets on {pj} before the first deploy: "
+                     f"`gapp secrets list --deployment {nm}` shows them, and "
+                     f"`gapp secrets set <secret> --deployment {nm}` stores one.")
     elif result.get("action") == "updated" and result.get("changes_shown"):
         lines.append(f"{nm} updated ({rp} to {pj}):")
         lines += ["  " + c for c in result["changes_shown"]]
@@ -1567,6 +1568,55 @@ def deployment_manifest(name: str) -> dict:
             f"'{result['name']}' is not a deployment in {fleet_repo}. See the deployments: gapp ci list"
         ))}
     result.update(repo=entry.get("repo"), manifest=fleet.manifest_keys(entry))
+    return result
+
+
+def deployment_env(name: str) -> dict:
+    """What `gapp secrets ... --deployment <name>` needs from the fleet: the
+    deployment's id and project, and the env entries a deploy would use (the
+    fleet-side manifest merged over the app repo's gapp.yaml on its default
+    branch, as the deploy run merges them).
+
+    Reads the fleet file and, if it can, the app repo's gapp.yaml, with the
+    caller's own GitHub login; never GCP. `repo_checked` is False when the
+    app repo's gapp.yaml could not be read (`repo_note` says why): `env` then
+    holds only what the fleet sets, which is all there is for a deployment
+    configured only in the fleet.
+    """
+    from gapp.admin.sdk.manifest import get_env_vars, parse_manifest_text
+    from gapp.admin.sdk.schema import ManifestUnreadable
+
+    result = {"ok": True, "name": (name or "").strip(), "fleet_repo": None, "repo": None, "id": None,
+              "project": None, "env": [], "repo_checked": None, "repo_note": None, "next_step": None}
+    if not result["name"]:
+        return {**result, **_outcome("pass the name", "Name the deployment: `--deployment <name>`. See them: gapp ci list")}
+    fleet_repo, stop = _require(result)
+    if stop:
+        return stop
+    doc, rd = _load_fleet(fleet_repo)
+    if doc is None:
+        return {**result, **_fleet_file_outcome(fleet_repo, rd)}
+    entry = doc.get(result["name"])
+    if entry is None:
+        return {**result, **_outcome("ci setup", (
+            f"'{result['name']}' is not a deployment in {fleet_repo}. See the deployments: gapp ci list"
+        ))}
+    repo = entry.get("repo")
+    result.update(repo=repo, id=entry.get("id") or result["name"], project=entry.get("project"))
+
+    base = {}
+    rd = _read_file(repo, "gapp.yaml")
+    if rd.present:
+        try:
+            base = parse_manifest_text(rd.content)
+            result["repo_checked"] = True
+        except ManifestUnreadable as e:
+            result.update(repo_checked=False, repo_note=f"{repo}'s gapp.yaml can't be read as YAML: {e}")
+    elif rd.absent:
+        result["repo_checked"] = True
+    else:
+        result.update(repo_checked=False, repo_note=rd.note)
+    result["env"] = get_env_vars(fleet.merge_manifest(base, fleet.overlay_for(entry)))
     return result
 
 

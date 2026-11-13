@@ -166,8 +166,9 @@ def test_setup_copy_of_reports_no_env_or_secret_lists(monkeypatch):
     out = _run(["ci", "setup", "my-app-staging", "--copy-of", "my-app", "--project", "staging-proj"]).output.splitlines()
     assert out[0] == "my-app-staging is set up as a copy of my-app: me/my-app deploys to staging-proj."
     assert not [l for l in out if l.startswith(("Env copied", "Secrets "))]
-    assert ("Set the secrets the app's gapp.yaml declares on staging-proj before the first deploy: "
-            "gapp secrets list shows them from the app's folder.") in out
+    assert ("Set its secrets on staging-proj before the first deploy: "
+            "`gapp secrets list --deployment my-app-staging` shows them, and "
+            "`gapp secrets set <secret> --deployment my-app-staging` stores one.") in out
     assert out[-1] == "Deploy it: gapp ci deploy my-app-staging"
 
 

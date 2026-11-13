@@ -27,7 +27,7 @@ state.
 | init (write `gapp.yaml`) | optional | no | no | optional | `gapp init` adds a repo topic when `gh` is logged in; otherwise it just writes the file. Writing `gapp.yaml` by hand from the schema is fine too. |
 | setup | yes | project admin: enable services, create bucket, edit IAM, write labels | no | no | once per solution per project, idempotent |
 | custom domain | yes | the deploying identity must have verified the domain or a parent | no | no | verification happens in Search Console, a browser step for the user; see below |
-| secrets list / get / set | yes | Secret Manager | no | no | |
+| secrets list / get / set | yes | Secret Manager | no | no | with `--deployment <name>` also `gh`, to read the fleet; no checkout needed |
 | status / list | yes | read-only | no | no | with no usable identity, `gapp status` returns `next_step: sign in` with the login command; it never consults CI |
 | deploy, local | yes | deploy roles | yes | no | clean tree |
 

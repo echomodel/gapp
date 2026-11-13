@@ -78,7 +78,7 @@ def test_setup_deploy_and_secrets_get_set_take_no_deployment_name():
 def test_secrets_list_takes_the_name_as_an_argument(monkeypatch):
     seen = {}
 
-    def fake_list(name=None):
+    def fake_list(name=None, deployment=None):
         seen["name"] = name
         raise RuntimeError("stop")
     monkeypatch.setattr(sec_mod, "list_secrets", fake_list)
@@ -91,9 +91,9 @@ def test_the_mcp_tools_mirror_the_cli():
         return list(inspect.signature(fn).parameters)
     assert params(server.gapp_status) == ["name", "project"]
     assert params(server.gapp_setup) == ["project_id"]
-    assert params(server.gapp_secret_list) == ["name"]
-    assert params(server.gapp_secret_get) == ["name", "plaintext"]
-    assert params(server.gapp_secret_set) == ["name", "value"]
+    assert params(server.gapp_secret_list) == ["name", "deployment"]
+    assert params(server.gapp_secret_get) == ["name", "plaintext", "deployment"]
+    assert params(server.gapp_secret_set) == ["name", "value", "deployment"]
     assert "solution" not in params(server.gapp_deploy)
 
 
