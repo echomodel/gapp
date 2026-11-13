@@ -7,6 +7,7 @@ from everything the operator reads. Plus the runner-side code the fleet
 repo's workflows execute.
 """
 
+import re
 import json
 import pathlib
 import shutil
@@ -109,7 +110,9 @@ def test_every_ci_command_gives_the_same_result_from_any_directory_and_only_invo
         fake_gh._next_run = 100
         for argv in commands:
             result = CliRunner().invoke(cli_main, argv)
-            outputs.setdefault(tuple(argv), []).append((result.exit_code, result.output))
+            # A run is dated when it starts, so the clock is not part of what must match.
+            output = re.sub(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", "<time>", result.output)
+            outputs.setdefault(tuple(argv), []).append((result.exit_code, output))
         assert all(cmd[0] == "gh" for cmd, _ in fake_gh.calls)
         # the copy made in this directory is undone so the next directory starts equal
         doc = fake_gh.deployments(FLEET)
