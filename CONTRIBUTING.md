@@ -837,11 +837,23 @@ Recorded as deferred, not overlooked:
   later `repos:` list).
 - Environments as a first-class concept.
 - Binding to or importing resources gapp did not create; a `--id` flag.
-- Setting secrets through CI (`gapp ci secrets set <deployment> <name>`:
-  stdin or hidden prompt, never an argument; a GitHub Environment secret
-  that a workflow writes to Secret Manager). Also needed because `gapp
-  secrets set` cannot find declared secrets for a fleet-configured
-  deployment with no local gapp.yaml. A separate ticket.
+- Setting secrets through CI (`gapp ci secrets set <deployment> <name>`,
+  the value on stdin, never an argument), for a machine with no gcloud
+  login. Storing the value as a GitHub Actions or Environment secret for
+  a workflow to copy does not work everywhere: a sandboxed agent session
+  may be refused GitHub's Actions secrets API, even the read of the
+  public key a value is encrypted with. The route that needs only a
+  workflow dispatch: project setup creates a key pair (private half in
+  the project's Environment, public half in a file in the fleet repo),
+  the command encrypts the value on the caller's machine and sends the
+  ciphertext as a workflow input, and the runner decrypts it and writes
+  it to Secret Manager. Deferred because every set waits for a runner
+  start, the key handling is a lot of machinery, and whoever can start
+  workflows could then set a secret to a value they know. `generate:
+  true` already covers secrets that only need to be random. That `gapp
+  secrets set` cannot find the declared secrets of a deployment
+  configured only in the fleet is a different matter, answered by
+  "Direction: one fleet".
 - Collision when the same name is also deployed to the same project from
   a laptop with the root commands (a custom domain maps to one service,
   so that second mapping is refused; otherwise the rule is documented,
@@ -1011,6 +1023,41 @@ Written in the present tense for brevity; all of it is intended, none of it buil
   so it can be found (a topic), and searching for it, stay out of every
   routine command. At most a `ci` command notes that the repo is not
   marked; the note never fails anything and can be turned off.
+- **Commands are split where the access, cost or frequency changes.**
+  Rare, privileged or slow steps get their own command; the frequent one
+  (deploy) needs the least access and runs in the most places. A step
+  that needs no more than its neighbour and always runs with it is not a
+  command of its own.
+- **So `gapp setup`, as a step per app, goes.** Today it mixes two kinds
+  of work. Turning on APIs, granting Cloud Build its permissions and
+  marking the project are once per project and need an Owner: they
+  belong to project setup. Creating and labelling the deployment's
+  bucket is cheap and per deployment: it belongs to deploy. Defining the
+  deployment is a fleet change that touches no cloud.
+- **Project setup is the one Owner step, and it is a contract.** Once
+  per project: the APIs, the build permissions, the hosted mark, and for
+  CI the sign-in trust and the deploy account. Today these are divided
+  between `gapp setup` and `gapp ci project setup`, and the second does
+  not turn on the APIs or grant the build permissions, which the runner
+  is deliberately not allowed to do; a project used only through CI
+  still needs a `gapp setup` from someone's checkout first. What project
+  setup guarantees is listed in one place, so an organisation that
+  prepares projects with its own tooling can meet it without gapp.
+- **Terraform for a deployment, not for the project.** A deployment is
+  about six linked resources that change on every deploy and sometimes
+  need removing: what Terraform is for. Project setup is a short fixed
+  list, set once, only ever added to: a few re-runnable checks do it,
+  with no state, no extra bucket and no Terraform on the Owner's
+  machine. A deploy that finds a piece missing says to run project
+  setup again. The runner applying the project's foundation was
+  rejected: changing a project's access policy is an Owner's power, and
+  the deploy identity must not be able to set up projects or escalate.
+- **`gapp ci X` means "do X on a runner"**, for the verbs that touch
+  Google Cloud (deploy, status). Anything about the fleet has one form
+  and no `ci` twin. `ci init` and `ci sources` exist only for CI.
+- **`status` reads the state with Terraform's own command**, the
+  supported way, then checks what is live: the service's health URL and
+  the domain mapping.
 
 What an operator is told, in this order: a local fleet to try gapp on one
 machine; a GitHub fleet so the records survive the machine, carry
@@ -1155,9 +1202,9 @@ Each step is a reason, and each rules out the design before it.
   runner path for it exists.
 - Moving the fleet to another repo means `gapp ci project setup` again
   for each project, because the trust names the repo.
-- CI runs on GitHub Actions only. GitHub Enterprise is untested. Other
-  git hosts can hold an app's code for a deploy from a checkout, and
-  nothing more.
+- CI runs on GitHub Actions only. GitHub Enterprise is untested. Until
+  other git hosts are supported in CI (see the open questions), an app
+  kept elsewhere deploys only from a checkout.
 
 ### Open questions
 
@@ -1180,3 +1227,24 @@ Each step is a reason, and each rules out the design before it.
   in step 1 above, as a later addition to `ci`.
 - For a team: whether fleet changes may be required to go through pull
   requests on the fleet repo, and how the commands report that.
+- The word for defining a deployment once `setup` prepares nothing
+  (`setup`, or a plainer one such as `add`), and whether the CI trust for
+  a project is `gapp ci project setup` or an option on project setup,
+  since an Owner runs it on their own machine.
+- One state bucket per project, created by project setup, holding each
+  deployment's state in its own folder, with Terraform creating the
+  deployment's data bucket (guarded against destroy). It ends the bucket
+  made outside Terraform and keeps state out of the app's reach; it
+  needs existing deployments adopted with no manual import, which is
+  unverified.
+- Today the app's service account is granted the whole bucket, state
+  included, though its mount is limited to `data/`. Restricting the
+  grant to `data/` closes that without moving anything.
+- A deeper check on `status` that asks Google Cloud about every resource
+  in the state (`terraform plan -refresh-only`), for "is it all still
+  there".
+- `status` calls a fixed `/health` path without credentials, so an app
+  with no such route, or one that is not public, reads as unhealthy.
+- CI deploys of public repos on other git hosts (a clone URL in the
+  definition, a host-aware allowed list); private ones need a stored key
+  or token per host.
