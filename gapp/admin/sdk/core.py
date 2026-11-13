@@ -66,6 +66,18 @@ class AmbiguousDeployment(RuntimeError):
 REGION = "us-central1"
 
 
+# The APIs every deployment needs. `gapp setup` enables them from the
+# operator's machine, and `gapp ci project setup` enables them for a
+# project used only through CI, where no one runs `gapp setup` as an Owner.
+# cloudresourcemanager backs the project reads the next steps make
+# (project number, labels), so it must be on before them.
+FOUNDATION_APIS = (
+    "cloudresourcemanager.googleapis.com",
+    "run.googleapis.com", "secretmanager.googleapis.com",
+    "artifactregistry.googleapis.com", "cloudbuild.googleapis.com",
+)
+
+
 class GappSDK:
     """The central management unit for gapp solutions."""
 
@@ -419,18 +431,7 @@ class GappSDK:
         manifest = load_manifest(repo_path) if repo_path else {}
 
         apis_enabled = []
-        for api in [
-            "run.googleapis.com", "secretmanager.googleapis.com",
-            "artifactregistry.googleapis.com", "cloudbuild.googleapis.com",
-            # cloudresourcemanager backs `gcloud projects describe` /
-            # `cloudresourcemanager.googleapis.com/v3/projects/...` — used
-            # by ensure_build_permissions, set_project_labels,
-            # get_project_labels, and ci.setup's _get_project_number.
-            # Without it enabled, the very next step in this function
-            # (ensure_build_permissions) fails on any project that
-            # doesn't happen to already have the API turned on.
-            "cloudresourcemanager.googleapis.com",
-        ] + get_required_apis(manifest):
+        for api in list(FOUNDATION_APIS) + get_required_apis(manifest):
             self.provider.enable_api(target_project, api)
             apis_enabled.append(api)
 
