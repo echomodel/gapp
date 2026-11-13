@@ -900,11 +900,17 @@ crashes; and a read GitHub refused is "couldn't check", in GitHub's words.
 
 ## Direction: one fleet
 
+**Not built. Nothing in this section describes how gapp behaves today.**
+For current behavior, read the sections above ("Two fleet systems",
+"Finding a deployment", "Resolution rules") and the code. The commands
+and behaviors named here that do not exist yet include `gapp fleet`,
+`recover`, the local fleet file, and root commands reading the fleet. Do
+not rely on them, document them as available, or start building them
+without the owner's go-ahead.
+
 This section records where the design is going and why, so the same
-questions are not argued again. The sections above ("Two fleet systems",
-"Finding a deployment", "Resolution rules") describe the code as it
-stands; where they differ from this section, this section is the
-direction and they are what it replaces.
+questions are not argued again. Where the sections above differ from it,
+this section is the direction and they are what it will replace.
 
 ### The problem with two fleet systems
 
@@ -951,7 +957,9 @@ them apart was deliberate, and it costs more than it saves:
 
 "Entry" in the sections above is the deployment definition.
 
-### The design
+### The intended design
+
+Written in the present tense for brevity; all of it is intended, none of it built.
 
 - **The fleet is the one authority.** Every command, root or `ci`, reads
   the deployment definition from the fleet and acts on that. Labels stop
