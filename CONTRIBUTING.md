@@ -1079,6 +1079,20 @@ went to redeploy a fix to the same place.
 | several | refuses, and prints the exact command for each, with its name and project |
 | none | treats the app as new and proposes the repo's name; refuses if that name belongs to another repo |
 
+**A folder's name may suggest, never select.** It is used in one place:
+as the proposed name of a deployment that does not exist yet, where the
+operator sees it before anything is made. It never picks an existing
+deployment. Anything that acts on an existing deployment (a deploy, a
+secret, a status) reaches it by the remote checked against the fleet, or
+by a name the operator gave. A folder's name is an accident of one
+machine; acting on it could land one app on another's service, data or
+secrets.
+
+**A remote names a repo, not a deployment.** One repo can have several
+deployments (a copy, a renamed one), and only the fleet knows how many.
+So the remote finds candidates and the fleet decides: one match is used,
+several are refused. The remote's repo name alone is never the answer.
+
 - A deployment can always be named outright, from any folder.
 - The remote read is `origin`. With no `origin` and exactly one remote,
   that one. With no `origin` and several, the command refuses and lists
