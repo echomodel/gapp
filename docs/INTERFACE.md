@@ -234,7 +234,9 @@ Each changes one definition and nothing else.
 |---|---|---|
 | `gapp ci deploy [--upgrade]` | The same deploy, on a runner | `gh` |
 | `gapp ci status [--live]` | The last run and what it deployed | `gh` |
-| `gapp ci sources add <owner>` / `remove <owner>` / `list` | Whose repos runners may deploy | `gh` |
+| `gapp ci sources add <owner>` | Lets runners deploy that owner's repos | `gh` |
+| `gapp ci sources remove <owner>` | Stops that | `gh` |
+| `gapp ci sources list` | Whose repos runners may deploy | `gh` |
 
 ### The fleet
 
@@ -250,7 +252,11 @@ Each changes one definition and nothing else.
 
 | Command | Does |
 |---|---|
-| `gapp config profile list` / `use <name>` / `add <name>` / `remove <name>` / `rename <old> <new>` | Profiles: separate fleets and accounts on one machine. `use` refuses a name that does not exist |
+| `gapp config profile list` | Profiles: separate fleets and accounts on one machine |
+| `gapp config profile use <name>` | Switches to one. Refused when it does not exist |
+| `gapp config profile add <name>` | Makes one |
+| `gapp config profile remove <name>` | Removes one |
+| `gapp config profile rename <old> <new>` | Renames one |
 | `gapp config account [<email>]` | Shows or sets the Google Cloud login the active profile uses |
 
 ## MCP tools

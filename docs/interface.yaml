@@ -1,0 +1,93 @@
+# The 4.0.0 interface, in a form a test can read. INTERFACE.md is the same
+# list for people. tests/unit/test_interface.py compares the real CLI and
+# MCP server to this file, and this file to INTERFACE.md.
+#
+# args:    positional arguments in order; <x> required, [x] optional.
+# options: long option names. Every command also takes --json.
+# one:     true when the command is about one deployment, and so takes
+#          --deployment / -d.
+# runs:    true when the command starts a run on a GitHub fleet, and so
+#          takes --no-watch.
+
+commands:
+  project setup: {args: ["<project>"]}
+
+  add:
+    args: ["[name]"]
+    options: [--project, --repo, --ref, --id, --copy-of]
+    runs: true
+  upgrade: {one: true, runs: true}
+  rename: {args: ["<old>", "<new>"], runs: true}
+  list: {}
+  show: {one: true}
+
+  set: {args: ["<key>", "<value>"], one: true, runs: true}
+  unset: {args: ["<key>"], one: true, runs: true}
+  apis add: {args: ["<api>"], one: true, runs: true}
+  apis remove: {args: ["<api>"], one: true, runs: true}
+  env set:
+    args: ["<name>", "[value]"]
+    options: [--secret, --generate, --data-path]
+    one: true
+    runs: true
+  env unset: {args: ["<name>"], one: true, runs: true}
+  apply: {args: ["<file>"], one: true, runs: true}
+
+  deploy:
+    options: [--dry-run, --rebuild, --replace-domain, --upgrade]
+    one: true
+  status: {one: true}
+  secrets list: {one: true}
+  secrets set: {args: ["<name>"], options: [--from-stdin], one: true}
+  secrets get: {args: ["<name>"], options: [--plaintext], one: true}
+
+  ci deploy: {options: [--upgrade], one: true, runs: true}
+  ci status: {options: [--live], one: true}
+  ci sources add: {args: ["<owner>"]}
+  ci sources remove: {args: ["<owner>"]}
+  ci sources list: {}
+
+  fleet: {}
+  fleet use: {args: ["<target>"], options: [--create]}
+  fleet export: {args: ["[file]"]}
+  fleet import: {args: ["<file>"]}
+  fleet recover: {}
+
+  config profile list: {}
+  config profile use: {args: ["<name>"]}
+  config profile add: {args: ["<name>"]}
+  config profile remove: {args: ["<name>"]}
+  config profile rename: {args: ["<old>", "<new>"]}
+  config account: {args: ["[email]"]}
+
+# Commands a workflow runs on a runner. People never type them, so they
+# are not in INTERFACE.md's tables; their shape is fixed all the same.
+runner:
+  prefix: ci runner
+
+mcp_tools:
+  - gapp_project_setup
+  - gapp_add
+  - gapp_upgrade
+  - gapp_rename
+  - gapp_list
+  - gapp_show
+  - gapp_set
+  - gapp_unset
+  - gapp_apis
+  - gapp_env_set
+  - gapp_env_unset
+  - gapp_apply
+  - gapp_deploy
+  - gapp_status
+  - gapp_secrets_list
+  - gapp_secrets_set
+  - gapp_secrets_get
+  - gapp_ci_deploy
+  - gapp_ci_status
+  - gapp_ci_sources
+  - gapp_fleet
+  - gapp_fleet_use
+  - gapp_fleet_export
+  - gapp_fleet_import
+  - gapp_fleet_recover
