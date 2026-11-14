@@ -1,92 +1,67 @@
 # Secrets
 
-Read this for anything about a solution's secrets: declaring them,
+Read this for anything about a deployment's secrets: naming them,
 checking readiness before a deploy, setting or reading values.
 
 ## How secrets work
 
-Secrets are values in GCP Secret Manager that gapp injects into the
-container as environment variables at runtime: API tokens, database
-credentials, shared auth keys. They are declared in `gapp.yaml` under
-`env` with a `secret` mapping:
+A secret is a value in Secret Manager, in the deployment's project,
+that gapp gives the container as a variable. The definition names it;
+the value never leaves Secret Manager.
 
-```yaml
-env:
-  - name: DB_PASSWORD          # env var the app reads at runtime
-    secret:
-      name: db-password        # Secret Manager id: <solution>-db-password
-      generate: true
-  - name: UPSTREAM_API_KEY
-    secret:
-      name: api-key
+```bash
+gapp env set UPSTREAM_API_KEY --secret
+gapp env set DB_PASSWORD --secret --generate
+gapp env set DB_URL --secret database-url
 ```
 
-Every secret has a short name (`secret.name`) and a Secret Manager id
-of the form `<solution>-<short-name>`, so two solutions in one project
-can both declare `db-password` without colliding. Every gapp command
-takes the short name and adds the prefix itself. The `name` field is
-required; a bare `secret: true` is rejected by validation.
+| Kind | Command | Its value |
+|---|---|---|
+| User-provided | `--secret` | Must exist before a deploy. For upstream API keys and third-party credentials |
+| Generated | `--secret --generate` | gapp makes a random value at the first deploy and never again. For anything that only needs to be random and stable |
 
-Two kinds:
-
-- **Generated** (`generate: true`): gapp creates a strong random value
-  on the first deploy if the secret does not exist. Use it for any
-  value that only needs to be random and stable: shared secrets,
-  signing keys, internal auth keys.
-- **User-provided** (no `generate`): the value must exist in Secret
-  Manager before the deploy. Use it for upstream API keys and
-  third-party credentials.
+The secret's name defaults to the variable's in lower case with dashes
+(`UPSTREAM_API_KEY` reads `upstream-api-key`); give another after
+`--secret`. In Secret Manager its id is `<deployment id>-<secret-name>`,
+so two deployments in one project never collide. Every gapp command
+takes the short name.
 
 ## Before a deploy
 
-Check readiness first; deploying with a missing user-provided secret
-fails partway through.
+A deploy with a user-provided secret that has no value is refused, so
+check first:
 
 ```bash
-gapp secrets list        # or the gapp_secret_list tool
+gapp secrets list
 ```
 
-- `generate: true`, any status: fine, deploy creates it.
-- user-provided, status `ready`: fine.
-- user-provided, missing or empty: not ready. Set it, then deploy.
+- Generated, any state: fine. The deploy makes it.
+- User-provided, `ready`: fine.
+- User-provided, `missing`: have the user set it, then deploy.
 
-Set a value with the short name; the CLI prompts for the value with
-hidden input, which keeps it out of shell history and transcripts:
+The user sets a value from a terminal. The command prompts with hidden
+input, which keeps the value out of shell history and transcripts:
 
 ```bash
-gapp secrets set api-key              # prompts; or --from-stdin
+gapp secrets set upstream-api-key --deployment my-app
 ```
 
-For a deployment with no checkout to stand in (one configured only in
-the fleet, or a copy), name it; the project and the declared secrets
-then come from the fleet, from any folder. It needs gcloud and `gh`:
+`--from-stdin` reads it from a pipe instead. There is no tool for this
+and no argument that takes the value. Never ask the user to paste a
+secret into chat, and never put one in a file, a plain variable or the
+fleet. On a machine with no gcloud login, hand this step off
+(`references/environment.md`).
 
-```bash
-gapp secrets list --deployment my-app-staging
-gapp secrets set api-key --deployment my-app-staging
-```
-
-The MCP form is `gapp_secret_set(name="api-key", value=...)`, with
-`deployment=` for the fleet form. Never
-ask the user to paste a secret into chat; point them at the prompt.
-
-The list output also reports `unattached`, `conflict`, and `orphan`
-states with remediation hints. Those come from gapp's label model:
-secrets gapp creates carry `gapp-solution=<name>`, and an existing
-unlabeled secret at the same id is never silently adopted. The repo's
+`secrets list` also reports `unattached`, `conflict` and orphans, each
+with what to run. Those come from ownership labels: gapp labels the
+secrets it creates and never adopts one it did not label. The repo's
 `docs/SECRETS.md` explains each state and its fix.
 
 ## After a deploy
 
-Read a secret when a post-deploy step needs it, for example to hand a
-generated admin key to the user or configure a client:
-
-```bash
-gapp secrets get db-password               # hash and length only
-gapp secrets get db-password --plaintext   # the value
-```
-
-The MCP form is `gapp_secret_get(name=, plaintext=)`. The default
-returns a hash and length so the value does not land in the
-conversation log unless it has to; ask for plaintext only when the
-operation needs the value, and hand it over out of band when you can.
+- Rotate a user-provided secret: `gapp secrets set <secret-name>`, then
+  redeploy so the service picks up the new version.
+- Check one without printing it: `gapp secrets get <secret-name>` gives
+  its length and a hash. `--plaintext` prints the value; use it only
+  when the user asks to see it.
+- A generated secret is never rotated by a deploy.

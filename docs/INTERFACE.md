@@ -66,9 +66,9 @@ deployments:
       max_instances: 2
       apis: [drive.googleapis.com]
       env:
-        AUTH_ISSUER: {value: "https://issuer.example.com/"}
-        SIGNING_KEY: {secret: signing-key, generate: true}
-        APP_USERS_PATH: {value: "{{DATA_PATH}}/users"}
+        LOG_LEVEL: {value: info}
+        APP_KEY: {secret: app-key, generate: true}
+        APP_DATA: {value: "{{DATA_PATH}}/users"}
 ```
 
 This file is the entry point for everything gapp keeps in a fleet.
@@ -311,7 +311,7 @@ no tool for `gapp secrets set`: a value is typed at its prompt or piped in.
   Everything else comes from the definition, so the way a workflow starts
   gapp has little reason to change.
 - **A secret's name** defaults to its variable's, in lower case with
-  dashes (`SIGNING_KEY`, `signing-key`). `--secret <name>` gives another.
+  dashes (`APP_KEY`, `app-key`). `--secret <name>` gives another.
 - **`gapp show` outside a clone** reads `app.json` from the repo, at the
   definition's ref, when it can. It tries briefly, never prompts and
   never fails for it: when the repo cannot be read it works from the

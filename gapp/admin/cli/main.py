@@ -880,10 +880,10 @@ def env_set_cmd(name, value, secret, generate, data_path, deployment, json_out):
     """Add or replace one variable.
 
     \b
-    gapp env set MAX_USERS 25
-    gapp env set SIGNING_KEY --secret --generate
-    gapp env set AUTH_ISSUER --secret auth-issuer
-    gapp env set APP_USERS_PATH --data-path users
+    gapp env set LOG_LEVEL info
+    gapp env set APP_KEY --secret --generate
+    gapp env set API_TOKEN --secret api-token
+    gapp env set APP_DATA --data-path users
     """
     _definition_command(json_out, f"Nothing to change: {name} is already that.",
                         lambda d: d.env_set, name, value, secret=secret, generate=generate,
@@ -913,7 +913,7 @@ def apply_cmd(file, dry_run, deployment, json_out):
       public: true
       domain: app.example.com
       env:
-        MAX_USERS: {value: "25"}
+        LOG_LEVEL: {value: info}
     A setting the file leaves out goes back to its default. Start the
     file from what is there now: `gapp show --json`, under `settings`.
     """
@@ -932,7 +932,7 @@ def secrets_group():
     \b
     A variable reads a secret once its definition says so:
       gapp env set API_KEY --secret                       you set the value
-      gapp env set SIGNING_KEY --secret --generate        gapp makes one on the first deploy
+      gapp env set APP_KEY --secret --generate        gapp makes one on the first deploy
     then:
       gapp secrets list            each secret's state, with the commands that fix it
       gapp secrets set api-key     store a value (prompts; --from-stdin to pipe)

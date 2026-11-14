@@ -58,7 +58,7 @@ def gapp_project_setup(project: str) -> dict:
 @_tool()
 def gapp_secrets_get(name: str, plaintext: bool = False, deployment: str | None = None) -> dict:
     """Whether a deployment's secret is set. `name` is the secret's short
-    name, as `gapp_secrets_list` shows it (for example "signing-key").
+    name, as `gapp_secrets_list` shows it (for example "app-key").
     By default returns a hash prefix and the length, enough to confirm it
     exists without exposing it. `plaintext=True` returns the value itself:
     use it only when the user asks for the value.

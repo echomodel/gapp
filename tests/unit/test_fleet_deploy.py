@@ -91,7 +91,7 @@ def test_a_deploy_builds_this_clones_commit_and_applies_the_definitions_settings
     definitions.set_value("memory", "1Gi", deployment="my-app")
     definitions.env_set("MAX_USERS", "25", deployment="my-app")
     definitions.env_set("APP_USERS_PATH", data_path="users", deployment="my-app")
-    definitions.env_set("SIGNING_KEY", secret="", generate=True, deployment="my-app")
+    definitions.env_set("APP_KEY", secret="", generate=True, deployment="my-app")
     result = sdk.deploy_definition()
     head = git(clone, "rev-parse", "HEAD")[:12]
     assert result["commit"] == head and result["image"].endswith(f"/gapp/my-app:{head}")
@@ -99,7 +99,7 @@ def test_a_deploy_builds_this_clones_commit_and_applies_the_definitions_settings
     vars = cloud.last_tfvars
     assert (vars["service_name"], vars["project_id"], vars["public"], vars["memory"]) == ("my-app", PROJECT, True, "1Gi")
     assert vars["env"] == {"MAX_USERS": "25", "APP_USERS_PATH": "/mnt/data/users"}
-    assert vars["secrets"] == {"SIGNING_KEY": "my-app-signing-key"}
+    assert vars["secrets"] == {"APP_KEY": "my-app-app-key"}
     assert vars["data_bucket"] == BUCKET
 
 
@@ -293,18 +293,18 @@ def secret_calls(monkeypatch, clone):
 
 
 def test_a_generated_secret_is_made_at_the_first_deploy_with_a_value_no_one_sees(sdk, cloud, secret_calls):
-    definitions.env_set("SIGNING_KEY", secret="", generate=True, deployment="my-app")
+    definitions.env_set("APP_KEY", secret="", generate=True, deployment="my-app")
     sdk.deploy_definition()
-    assert secret_calls["made"] == ["my-app-signing-key"] and secret_calls["versions"] == [("my-app-signing-key", 32)]
-    assert cloud.last_tfvars["secrets"] == {"SIGNING_KEY": "my-app-signing-key"}
+    assert secret_calls["made"] == ["my-app-app-key"] and secret_calls["versions"] == [("my-app-app-key", 32)]
+    assert cloud.last_tfvars["secrets"] == {"APP_KEY": "my-app-app-key"}
 
 
 def test_a_generated_secret_that_exists_is_never_written_again(sdk, cloud, secret_calls):
-    definitions.env_set("SIGNING_KEY", secret="", generate=True, deployment="my-app")
-    secret_calls["present"].add("my-app-signing-key")
+    definitions.env_set("APP_KEY", secret="", generate=True, deployment="my-app")
+    secret_calls["present"].add("my-app-app-key")
     sdk.deploy_definition()
     assert secret_calls["made"] == [] and secret_calls["versions"] == []
-    assert cloud.last_tfvars["secrets"] == {"SIGNING_KEY": "my-app-signing-key"}
+    assert cloud.last_tfvars["secrets"] == {"APP_KEY": "my-app-app-key"}
 
 
 def test_a_secret_with_no_value_stops_the_deploy_before_terraform(sdk, cloud, secret_calls):

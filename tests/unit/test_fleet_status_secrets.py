@@ -26,7 +26,7 @@ def fleet(monkeypatch, tmp_path):
     monkeypatch.chdir(elsewhere)
     definitions.add("my-app", project=PROJECT, repo="acme/my-app")
     definitions.env_set("API_KEY", secret="", deployment="my-app")
-    definitions.env_set("SIGNING_KEY", secret="", generate=True, deployment="my-app")
+    definitions.env_set("APP_KEY", secret="", generate=True, deployment="my-app")
     definitions.env_set("MAX_USERS", "25", deployment="my-app")
 
 
@@ -52,10 +52,10 @@ def test_list_takes_the_secrets_from_the_definition_and_names_them_by_the_id(gcp
     result = secrets.list_secrets("my-app")
     assert (result["deployment"], result["project_id"]) == ("my-app", PROJECT)
     found = by_name(result)
-    assert set(found) == {"api-key", "signing-key"}
+    assert set(found) == {"api-key", "app-key"}
     assert found["api-key"] == {"name": "api-key", "env_var": "API_KEY", "secret_id": "my-app-api-key",
                                 "generate": False, "status": "ready"}
-    assert found["signing-key"]["status"] == "missing-generate"
+    assert found["app-key"]["status"] == "missing-generate"
 
 
 def test_a_renamed_deployment_keeps_its_secrets_under_its_id(gcp):
@@ -89,7 +89,7 @@ def test_a_secret_the_definition_does_not_have_is_refused_with_the_ones_it_has(g
     with pytest.raises(Refused) as caught:
         secrets._find_secret("nope", "my-app")
     message = caught.value.message
-    assert "'my-app' has no secret 'nope'. Its secrets: api-key, signing-key." in message
+    assert "'my-app' has no secret 'nope'. Its secrets: api-key, app-key." in message
     assert "gapp env set <NAME> --secret nope --deployment my-app" in message
 
 

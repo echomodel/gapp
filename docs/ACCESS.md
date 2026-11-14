@@ -1,41 +1,56 @@
 # Access: what each command needs and touches
 
-gapp has two systems, and a wall between them:
+Three kinds of command, by what they reach:
 
-- **Root commands** (`gapp setup`, `deploy`, `status`, `list`, `secrets`) work on Google Cloud **from your machine**, with your gcloud login. They never read GitHub, except `gapp secrets ... --deployment <name>` (below).
-- **`gapp ci` commands** work on GitHub **from your machine**, with your `gh` login, and never use gcloud there. Google Cloud is reached only by a **runner**: a GitHub Actions job in your fleet repo, signing in to the project with its own deploy identity.
+- **Fleet commands** (`gapp add`, `set`, `env`, `apply`, `show`, `list`,
+  `fleet`, `config`) read and change your fleet. They touch no cloud. With
+  the fleet in a git repo they use git, with the access your machine has.
+- **Cloud commands** (`gapp project setup`, `deploy`, `status`, `secrets`)
+  work on Google Cloud from your machine, with your gcloud login.
+- **`gapp ci` commands** work on GitHub from your machine, with your `gh`
+  login. Google Cloud is reached by a runner: a GitHub Actions job in
+  your fleet repo that signs in to the project as its deploy identity.
 
-The one exception is `gapp ci project setup <project>`, run once per project. It creates the trust that lets the fleet repo's runners sign in to the project at all, so until it has run there is no runner that could do it: you do it yourself, as an Owner of the project.
+The one `gapp ci` command that touches Google Cloud from your machine is
+`gapp ci projects connect <project>`. It creates the trust that lets the
+fleet repo's runners sign in to the project at all, so no runner could do
+it: you do it once per project, as an Owner.
 
-So a machine with only `gh` (a cloud agent session, a teammate's laptop) can run the whole `ci` system after that one step, and never holds a Google Cloud credential.
+After that, a machine with only `gh` can deploy every deployment in the
+fleet and never holds a Google Cloud credential.
 
 ## Every command
 
-| Command | Your machine needs | Google Cloud touched by | GitHub touched by |
+| Command | Your machine needs | Google Cloud touched by | The fleet |
 |---|---|---|---|
-| `gapp init` | the app's folder | nothing | you, only if `gh` is signed in: adds the `gapp-solution` topic to the repo |
-| `gapp manifest ...` | the app's folder (or `--file`) | nothing | nothing |
-| `gapp setup` | gcloud | you | nothing |
-| `gapp deploy` | gcloud, Terraform | you (Cloud Build, then Terraform) | nothing |
-| `gapp status`, `gapp list` | gcloud (`status` also Terraform, to read state) | you, read-only | nothing |
-| `gapp secrets list\|get\|set` | gcloud, the app's folder | you | nothing |
-| `gapp secrets list\|get\|set --deployment <name>` | gcloud, `gh` | you | you, read-only (the fleet repo and the app repo) |
-| `gapp ci init`, `ci sources ...` | `gh` | nothing | you |
-| `gapp ci project setup <project>` | gcloud as an Owner, `gh` as an admin of the fleet repo | you, once per project | you |
-| `gapp ci setup`, `ci rename` | `gh` that can dispatch workflows | nothing | you dispatch; the register runner writes the fleet file |
-| `gapp ci manifest <name>`, `ci status <name>`, `ci list` | `gh` | nothing | you, read-only (the fleet repo) |
-| `gapp ci manifest <name> --merged` | `gh` | nothing | you, read-only (the fleet repo and the app repo) |
-| `gapp ci deploy` | `gh` that can dispatch workflows | the deploy runner | you dispatch; the deploy runner reads the app repo |
-| `gapp ci status <name> --live` | `gh` that can dispatch workflows | the status runner, read-only | you dispatch |
+| `gapp add`, `rename`, `set`, `unset`, `apis`, `env`, `apply`, `upgrade` | git, for a fleet in a repo | nothing | changed |
+| `gapp list`, `show`, `fleet`, `fleet export` | git, for a fleet in a repo | nothing | read |
+| `gapp fleet use`, `fleet import` | git; `gh` for `--create` | nothing | moved or replaced |
+| `gapp config ...` | nothing | nothing | not touched |
+| `gapp project setup <project>` | gcloud as an Owner | you | not touched |
+| `gapp deploy` | gcloud, Terraform, a clone of the app's repo | you (Cloud Build, then Terraform) | read |
+| `gapp status` | gcloud, Terraform (to read state) | you, read-only | read |
+| `gapp secrets list\|get\|set` | gcloud | you | read |
+| `gapp ci init`, `ci sources ...`, `ci projects list` | `gh` | nothing | read |
+| `gapp ci projects connect <project>` | gcloud as an Owner, `gh` as an admin of the fleet repo | you, once per project | not touched |
+| `gapp ci deploy` | `gh` that can start workflows | the deploy runner | read, by you and by the runner |
+| `gapp ci status` | `gh` | nothing | read |
+| `gapp ci status --live` | `gh` that can start workflows | the status runner, read-only | read, by you and by the runner |
 
-"You" means your own login on your machine. A runner signs in to Google Cloud as the project's `gapp-deploy` service account, and reads a private app repo with the fleet's read-only GitHub App (see [CI/CD setup](CI.md)).
+"You" means your own login on your machine. A runner signs in as the
+project's `gapp-deploy` service account, and reads a private
+app repo with a read-only GitHub App (see [CI](CI.md)).
 
 ## Which machine can do what
 
-- **A laptop with gcloud and Terraform:** the root commands, for an app checked out there.
-- **Any machine with `gh`:** every `ci` command except `ci project setup`, for every deployment in the fleet, with no checkout.
-- **A machine with gcloud as a project Owner and `gh` as a fleet repo admin:** `ci project setup`, once per project.
+| Machine | Can run |
+|---|---|
+| Any machine | The fleet commands, on a local fleet |
+| One with git access to the fleet repo | The fleet commands, on a fleet in a repo |
+| One with gcloud and Terraform | `deploy`, `status` and `secrets`, for any deployment in the fleet; `deploy` needs a clone of the app's repo |
+| One with `gh` | Every `gapp ci` command except `projects connect` |
+| One with gcloud as a project Owner | `project setup`; with `gh` as an admin of the fleet repo, `ci projects connect` |
 
-`gapp secrets ... --deployment <name>` is the one exception to the wall: a root command that reads the fleet. It does not use a runner, a workflow or Actions; it only reads the fleet file (and the app repo's gapp.yaml) with your `gh` login, and writes nothing to GitHub. A secret's value goes from your machine straight to Secret Manager, so it needs gcloud; the fleet only says which project and which secrets. It is how a deployment with no folder of its own (configured only in the fleet, or a copy) gets its secrets. If your `gh` login can't read the app repo, it works from the settings the fleet holds and says so.
-
-`gapp ci manifest --merged` reads the app repo with your own `gh` login, so it can fail where a deploy works: the runner reads with the fleet's own access.
+A secret's value goes from your machine straight to Secret Manager. No
+runner and no workflow is involved, and the fleet holds only the secret's
+name.
