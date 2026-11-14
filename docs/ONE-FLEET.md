@@ -121,7 +121,9 @@ deployments" to the ones on that project. It never creates anything.
 Each stage is a release candidate. Built so far: where the fleet lives
 and reading it there (`gapp fleet`, `gapp/admin/sdk/fleetstore.py`), and
 the rules for which deployment a command means
-(`gapp/admin/sdk/lookup.py`). No command acts on either yet.
+(`gapp/admin/sdk/lookup.py`); no command acts on either yet. The ref is
+part of a definition and no deploy takes one; until `gapp add` exists it
+is set with `gapp ci setup ... --ref <ref> --update`.
 
 1. The local fleet file; every root command reads it; existing
    deployments picked up from labels.

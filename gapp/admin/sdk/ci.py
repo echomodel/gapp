@@ -1186,7 +1186,7 @@ def _refusal_action(code: str) -> str:
     }.get(code, "fix the input")
 
 
-def _default_command(name, *, repo=None, project=None, domain=None, copy_of=None, manifest=None) -> str:
+def _default_command(name, *, repo=None, project=None, domain=None, copy_of=None, manifest=None, ref=None) -> str:
     parts = ["gapp ci setup", name]
     if copy_of:
         parts += ["--copy-of", copy_of]
@@ -1194,6 +1194,8 @@ def _default_command(name, *, repo=None, project=None, domain=None, copy_of=None
         parts += ["--repo", repo]
     if project:
         parts += ["--project", project]
+    if ref is not None:
+        parts += ["--ref", ref or '""']
     if domain is not None:
         parts += ["--domain", domain or '""']
     if manifest is not None:
@@ -1211,6 +1213,8 @@ def _entry_changes(before: dict, after: dict) -> list[str]:
     domain first, then each other key set, changed or removed (a key gapp.yaml
     does not have is "dropped")."""
     lines = []
+    if fleet.ref_of(before) != fleet.ref_of(after):
+        lines.append(f"ref: {fleet.ref_of(before) or '(default branch)'} → {fleet.ref_of(after) or '(default branch)'}")
     if before.get("domain") != after.get("domain"):
         lines.append(f"domain: {before.get('domain') or '(none)'} → {after.get('domain') or '(none)'}")
     lines += [f"would drop: {path}" for path in fleet.unknown_keys(fleet.manifest_keys(before))]
@@ -1238,13 +1242,14 @@ def _applied(line: str) -> str:
 
 def setup_deployment(name: str | None = None, *, repo: str | None = None, project: str | None = None,
                      domain: str | None = None, copy_of: str | None = None, manifest: dict | None = None,
-                     watch: bool = True, command: str | None = None, update: bool = False) -> dict:
+                     watch: bool = True, command: str | None = None, update: bool = False,
+                     ref: str | None = None) -> dict:
     """`gapp ci setup`: the outcome (see `_setup_outcome`) plus the text that
     describes it, built once here. `lines` is what a reader sees first,
     `lines_after` what follows any detail lines; the CLI prints both as
     given and MCP callers get the same words."""
     result = _setup_outcome(name, repo=repo, project=project, domain=domain, copy_of=copy_of,
-                            manifest=manifest, watch=watch, command=command, update=update)
+                            manifest=manifest, watch=watch, command=command, update=update, ref=ref)
     return _with_setup_text(result, copy_of=copy_of)
 
 
@@ -1276,6 +1281,8 @@ def _with_setup_text(result: dict, *, copy_of: str | None) -> dict:
         lines += ["  " + c for c in result["changes_shown"]]
     else:
         lines.append(f"{rp} is set up to deploy to {pj} as {nm}.")
+    if result.get("ref"):
+        lines.append(f"Builds: {result['ref']}")
     if result.get("domain"):
         lines.append(f"Domain: {result['domain']}")
     if result.get("action") in ("added", "updated", "unchanged"):
@@ -1286,8 +1293,14 @@ def _with_setup_text(result: dict, *, copy_of: str | None) -> dict:
 
 def _setup_outcome(name: str | None = None, *, repo: str | None = None, project: str | None = None,
                    domain: str | None = None, copy_of: str | None = None, manifest: dict | None = None,
-                   watch: bool = True, command: str | None = None, update: bool = False) -> dict:
+                   watch: bool = True, command: str | None = None, update: bool = False,
+                   ref: str | None = None) -> dict:
     """Add or update a deployment of the fleet (`gapp ci setup`). Never uses gcloud, never reads the cwd.
+
+    `ref` is the branch, tag or commit of the repo that a deploy of this
+    deployment builds (`""` removes it: the repo's default branch). It is
+    part of the definition and not a gapp.yaml key; a copy keeps its
+    source's unless one is given.
 
     The name defaults to the repo's name, derived only from `repo`. Same
     name and repo: the same request is "unchanged"; a request that would
@@ -1306,7 +1319,7 @@ def _setup_outcome(name: str | None = None, *, repo: str | None = None, project:
     lacks is removed. It is checked against the schema before anything else.
     `domain`, when also given, wins over the manifest's.
     """
-    result = {"ok": True, "name": None, "repo": None, "project": None, "domain": None, "id": None,
+    result = {"ok": True, "name": None, "repo": None, "project": None, "domain": None, "ref": None, "id": None,
               "fleet_repo": None, "copy_of": copy_of, "action": None, "changes": None,
               "changes_shown": [], "project_from_source": False,
               "workflow": REGISTER_WORKFLOW, "dispatched": False, "run_id": None, "run_url": None,
@@ -1314,6 +1327,8 @@ def _setup_outcome(name: str | None = None, *, repo: str | None = None, project:
     changes = {}
     if domain is not None:
         changes["domain"] = domain.strip() or None
+    if ref is not None:
+        changes["ref"] = ref.strip() or None
     result["changes"] = changes
     if manifest is not None:
         try:
@@ -1345,7 +1360,7 @@ def _setup_outcome(name: str | None = None, *, repo: str | None = None, project:
     project = (project or "").strip() or None
     result.update(name=name, repo=repo, project=project)
     command = command or _default_command(name, repo=repo, project=project, domain=domain, copy_of=copy_of,
-                                          manifest=manifest)
+                                          manifest=manifest, ref=ref)
 
     fleet_repo, stop = _require(result)
     if stop:
@@ -1362,6 +1377,8 @@ def _setup_outcome(name: str | None = None, *, repo: str | None = None, project:
         changes = fleet.replacement_changes(base, manifest)
         if domain is not None:
             changes["domain"] = domain.strip() or None
+        if ref is not None:
+            changes["ref"] = ref.strip() or None
         result["changes"] = changes
 
     try:
@@ -1387,7 +1404,7 @@ def _setup_outcome(name: str | None = None, *, repo: str | None = None, project:
                 + f"Run it again with --update to apply: {command} --update"
             ))}
     # The run confirms the action against the live file; only "unchanged" is final here.
-    result.update(id=entry["id"], domain=entry.get("domain"), project=entry["project"],
+    result.update(id=entry["id"], domain=entry.get("domain"), ref=fleet.ref_of(entry), project=entry["project"],
                   action=action if action == "unchanged" else None)
     if action == "unchanged":
         return result
@@ -1442,17 +1459,21 @@ def ref_label(ref: str | None) -> str:
     return f"ref {ref}" if ref else "default branch"
 
 
-def deploy_deployment(name: str, *, ref: str | None = None, watch: bool = True, progress=None) -> dict:
+def deploy_deployment(name: str, *, watch: bool = True, progress=None) -> dict:
     """Deploy one deployment through the fleet repo's deploy workflow (`gapp ci deploy <name>`).
 
-    Dispatches `gapp-deploy.yml` with the name and the ref and, when
-    `watch` is True, streams the run and reports its conclusion. Needs only
-    a `gh` that can dispatch workflows in the fleet repo. Without `ref`, the
-    run deploys the app repo's default branch, whatever it is named.
-    `progress`, when given, is called with "Deploying <name> (ref <ref>)."
-    (or "(default branch).") once the deployment is found and just before
-    the dispatch.
+    What is built is the deployment's ref, from its definition: a branch
+    (its tip), a tag or a commit; with none, the app repo's default branch,
+    whatever it is named. A deploy takes no ref of its own: whoever can
+    start one could otherwise build code the definition never named.
+    Dispatches `gapp-deploy.yml` with the name and that ref (the run
+    refuses a ref that is not the definition's) and, when `watch` is True,
+    streams the run and reports its conclusion. Needs only a `gh` that can
+    dispatch workflows in the fleet repo. `progress`, when given, is called
+    with "Deploying <name> (ref <ref>)." (or "(default branch).") once the
+    deployment is found and just before the dispatch.
     """
+    ref = None
     result = {"ok": True, "name": (name or "").strip(), "repo": None, "project": None, "fleet_repo": None,
               "workflow": DEPLOY_WORKFLOW, "ref": ref, "run_id": None, "run_url": None, "watched": False,
               "conclusion": None, "next_step": None}
@@ -1470,7 +1491,8 @@ def deploy_deployment(name: str, *, ref: str | None = None, watch: bool = True, 
             f"'{result['name']}' is not a deployment in {fleet_repo}, so there is nothing to deploy. Set it up: "
             f"gapp ci setup {result['name']} --repo <owner>/<repo> --project <project>. See the deployments: gapp ci list"
         ))}
-    result.update(repo=entry.get("repo"), project=entry.get("project"))
+    ref = fleet.ref_of(entry)
+    result.update(repo=entry.get("repo"), project=entry.get("project"), ref=ref)
     deploy = _read_file(fleet_repo, DEPLOY_WORKFLOW_PATH)
     if deploy.absent:
         return {**result, **_outcome("ci init", (
@@ -1540,7 +1562,7 @@ def status_deployment(name: str) -> dict:
             f"--repo <owner>/<repo> --project <project>.\nSee the deployments: gapp ci list"
         ))}
     result.update(id=entry.get("id"), repo=entry.get("repo"), project=entry.get("project"),
-                  domain=entry.get("domain"), overlay=fleet.manifest_keys(entry),
+                  ref=fleet.ref_of(entry), domain=entry.get("domain"), overlay=fleet.manifest_keys(entry),
                   live_hint=f"For the live service state: gapp ci status {result['name']} --live")
     if unknown := fleet.unknown_keys(fleet.manifest_keys(entry)):
         result["problem"] = (
@@ -1660,6 +1682,9 @@ def merged_manifest(name: str, *, ref: str | None = None) -> dict:
     fleet_repo, repo = result["fleet_repo"], result["repo"]
     doc, _ = _load_fleet(fleet_repo)
     entry = doc[result["name"]]
+    # With no ref given, the preview is of what a deploy builds: the definition's ref.
+    ref = ref or fleet.ref_of(entry)
+    result["ref"] = ref
 
     def unreadable(reason: str) -> dict:
         return {**result, **_outcome("read the app repo", (

@@ -204,7 +204,7 @@ def setup_cmd(sdk: GappSDK, project):
 
 
 @main.command()
-@click.option("--ref", default=None, help="Git ref (commit/tag/branch) to build from. Defaults to HEAD.")
+@click.option("--ref", default=None, hidden=True)
 @click.option("--project", help="Explicit GCP Project ID override.")
 @click.option("--dry-run", is_flag=True, help="Preview deployment.")
 @click.option("--rebuild", is_flag=True, help="Force docker build even if an image already exists for the resolved SHA.")
@@ -217,8 +217,9 @@ def setup_cmd(sdk: GappSDK, project):
 def deploy(sdk: GappSDK, ref, project, dry_run, rebuild, replace_domain):
     """Build the image with Cloud Build and apply Terraform; prints the service URL.
 
-    Needs a gcloud login, terraform on PATH, and a clean git tree: the
-    build ships `git archive HEAD`, so uncommitted changes never deploy.
+    Builds the commit this clone is on. Needs a gcloud login, terraform
+    on PATH, and a clean git tree: the build ships `git archive HEAD`, so
+    uncommitted changes never deploy.
     An image already built for this commit is reused. To deploy without
     gcloud or terraform on this machine, use the CI system instead
     (`gapp ci setup` once, then `gapp ci deploy`); a solution is deployed
@@ -228,6 +229,13 @@ def deploy(sdk: GappSDK, ref, project, dry_run, rebuild, replace_domain):
     domain is not verified by the deploying identity, or when it would
     replace or remove a live mapping and --replace-domain is not given.
     """
+    from gapp.admin.sdk.cloud.base import on_ci_runner
+    if ref and not on_ci_runner():
+        click.echo("  Error: `gapp deploy` takes no --ref: it builds the commit this clone is on. Check out what "
+                   "you want built and deploy again. Through your fleet, what a deploy builds is the "
+                   "deployment's ref: gapp ci setup <name> ... --ref <ref> --update, then gapp ci deploy <name>.",
+                   err=True)
+        raise SystemExit(2)
     try:
         result = sdk.deploy(
             ref=ref, dry_run=dry_run, project_id=project,
@@ -615,6 +623,9 @@ def ci_sources_list_cmd(verbose, json_out):
 @click.argument("name", required=False)
 @click.option("--repo", default=None, metavar="OWNER/REPO", help="The repo to deploy (never the fleet repo). The name defaults to its repo name.")
 @click.option("--project", default=None, metavar="PROJECT", help="GCP project id the deployment deploys to.")
+@click.option("--ref", default=None, metavar="REF",
+              help="The branch, tag or commit of the repo a deploy builds. Omit to keep the deployment's; "
+                   "pass \"\" to remove it (the repo's default branch).")
 @click.option("--domain", default=None, help="Custom domain the deploy maps (a gapp.yaml key). Omit to keep the entry's; pass \"\" to remove it.")
 @click.option("--copy-of", default=None, metavar="EXISTING", help="Start NAME as a copy of an existing deployment (same repo and keys; its own id; no domain).")
 @click.option("--manifest", "manifest_path", default=None, metavar="FILE",
@@ -623,7 +634,7 @@ def ci_sources_list_cmd(verbose, json_out):
 @click.option("--update", is_flag=True, help="Apply a change to an existing deployment's entry. Without it, setup shows the change and makes none.")
 @click.option("--no-watch", is_flag=True, help="Return after dispatching the register run instead of waiting for it.")
 @_ci_options
-def ci_setup_cmd(name, repo, project, domain, copy_of, manifest_path, update, no_watch, verbose, json_out):
+def ci_setup_cmd(name, repo, project, ref, domain, copy_of, manifest_path, update, no_watch, verbose, json_out):
     """Add or update a deployment: NAME deploys --repo to --project. Mirrors `gapp setup` for the fleet.
 
     Never uses gcloud and never reads the working directory: the repo is
@@ -645,10 +656,17 @@ def ci_setup_cmd(name, repo, project, domain, copy_of, manifest_path, update, no
     set ...`, and upload it with --manifest FILE --update. For a repo with
     no Dockerfile or Procfile, set `start` in it.
 
+    What a deploy builds is the deployment's ref (--ref): a branch (its
+    tip at each deploy), a tag or a commit. With none, it is the repo's
+    default branch. A release, a rollback and trying a branch are changes
+    to the ref; a copy keeps its source's unless --ref is given.
+
     \b
       gapp ci setup --repo me/my-app --project my-project
       gapp ci setup my-app-staging --copy-of my-app --project my-staging-project
       gapp ci setup my-app --repo me/my-app --project my-project --manifest my-app.yaml --update
+      gapp ci setup my-app --repo me/my-app --project my-project --ref v1.4.0 --update
+      gapp ci setup my-app-try --copy-of my-app --ref my-feature-branch
     """
     from gapp.admin.sdk.ci import setup_deployment
     manifest = None
@@ -664,7 +682,7 @@ def ci_setup_cmd(name, repo, project, domain, copy_of, manifest_path, update, no
             click.echo(f"  Error: {manifest_path}: {str(e).splitlines()[0]}", err=True)
             raise SystemExit(1)
     command = "gapp " + " ".join(sys.argv[1:]) if sys.argv and sys.argv[0] else None
-    result = setup_deployment(name, repo=repo, project=project, domain=domain, update=update,
+    result = setup_deployment(name, repo=repo, project=project, domain=domain, update=update, ref=ref,
                               copy_of=copy_of, manifest=manifest, watch=not no_watch, command=command)
     if json_out:
         _emit_json(result)
@@ -776,19 +794,34 @@ def _print_ci_deploy(result, verbose):
 
 @ci_group.command("deploy")
 @click.argument("name")
-@click.option("--ref", default=None, help="Git ref of the deployed repo to deploy (commit, tag or branch). Default: its default branch.")
+@click.option("--ref", default=None, hidden=True)
 @click.option("--no-watch", is_flag=True, help="Return after dispatch instead of streaming the run.")
 @_ci_options
 def ci_deploy_cmd(name, ref, no_watch, verbose, json_out):
     """Deploy NAME through your fleet's deploy workflow. Mirrors `gapp deploy` for the fleet.
 
-    Equivalent to "Run workflow" on the fleet repo's Actions tab with the
-    deployment's name. Streams the run until it finishes unless --no-watch
-    is given. Needs only a `gh` that can dispatch workflows in the fleet
-    repo; no gcloud or terraform on this machine.
+    Builds the deployment's ref: the branch, tag or commit in its
+    definition, or the app repo's default branch when it has none. A
+    deploy takes no ref of its own. To build something else, change the
+    definition first:
+
+    \b
+      gapp ci setup NAME --repo OWNER/REPO --project PROJECT --ref v1.4.0 --update
+      gapp ci deploy NAME
+
+    Streams the run until it finishes unless --no-watch is given. Needs
+    only a `gh` that can dispatch workflows in the fleet repo; no gcloud
+    or terraform on this machine.
     """
     from gapp.admin.sdk.ci import deploy_deployment
-    result = deploy_deployment(name, ref=ref, watch=not no_watch, progress=None if json_out else click.echo)
+    if ref:
+        click.echo(f"  Error: `gapp ci deploy` takes no --ref. A deploy builds the deployment's ref, which is part "
+                   f"of its definition. Set it, then deploy:\n"
+                   f"    gapp ci setup {name} --repo <owner>/<repo> --project <project> --ref {ref} --update\n"
+                   f"    gapp ci deploy {name}\n"
+                   f"  `gapp ci status {name}` shows its repo, project and current ref.", err=True)
+        raise SystemExit(2)
+    result = deploy_deployment(name, watch=not no_watch, progress=None if json_out else click.echo)
     if json_out:
         _emit_json(result)
     _print_ci_deploy(result, verbose)
@@ -796,13 +829,12 @@ def ci_deploy_cmd(name, ref, no_watch, verbose, json_out):
 
 @ci_group.command("trigger", hidden=True)
 @click.argument("name")
-@click.option("--ref", default=None)
 @click.option("--no-watch", is_flag=True)
-def ci_trigger_cmd(name, ref, no_watch):
+def ci_trigger_cmd(name, no_watch):
     """Former name of `gapp ci deploy`."""
     from gapp.admin.sdk.ci import deploy_deployment
     click.echo("`gapp ci trigger` is now `gapp ci deploy`; running it. This alias goes away in the next release.")
-    _print_ci_deploy(deploy_deployment(name, ref=ref, watch=not no_watch, progress=click.echo), False)
+    _print_ci_deploy(deploy_deployment(name, watch=not no_watch, progress=click.echo), False)
 
 
 @ci_group.command("status")

@@ -30,15 +30,25 @@ def ci(monkeypatch, fleet_repo, fake_gh):
 # -- deploy --
 
 
-def test_deploy_dispatches_the_generic_workflow_with_the_deployment_name(ci):
-    res = ci_mod.deploy_deployment("my-app", ref="v1.0.0", watch=False)
-    assert res["ok"] is True and res["workflow"] == "gapp-deploy.yml"
+def _set_ref(ci, name, ref):
+    """Give a deployment of the fake fleet a ref, as `gapp ci setup --ref` would."""
+    doc = ci.deployments(FLEET)
+    doc[name]["ref"] = ref
+    ci.files[(FLEET, ci_mod.DEPLOYMENTS_FILE)] = ci_mod.fleet.dump(doc)
+
+
+def test_deploy_builds_the_definitions_ref_and_takes_none_of_its_own(ci):
+    import inspect
+    assert "ref" not in inspect.signature(ci_mod.deploy_deployment).parameters
+    _set_ref(ci, "my-app", "v1.0.0")
+    res = ci_mod.deploy_deployment("my-app", watch=False)
+    assert res["ok"] is True and res["workflow"] == "gapp-deploy.yml" and res["ref"] == "v1.0.0"
     assert ci.dispatched == [(FLEET, "gapp-deploy.yml", {"deployment": "my-app", "ref": "v1.0.0"})]
     assert res["run_id"] == "100" and res["run_url"].endswith("/actions/runs/100") and res["next_step"] is None
     assert res["repo"] == "me/my-app" and res["project"] == "my-proj"
 
 
-def test_deploy_without_a_ref_leaves_it_to_the_run_to_take_the_default_branch(ci):
+def test_a_definition_with_no_ref_leaves_it_to_the_run_to_take_the_default_branch(ci):
     said = []
     res = ci_mod.deploy_deployment("my-app", watch=False, progress=said.append)
     assert ci.dispatched == [(FLEET, "gapp-deploy.yml", {"deployment": "my-app"})]        # no ref input sent
@@ -48,9 +58,10 @@ def test_deploy_without_a_ref_leaves_it_to_the_run_to_take_the_default_branch(ci
 
 def test_deploy_announces_itself_only_once_the_deployment_is_found(ci):
     said = []
-    ci_mod.deploy_deployment("nope", ref="v1.0.0", watch=False, progress=said.append)
+    _set_ref(ci, "my-app", "v1.0.0")
+    ci_mod.deploy_deployment("nope", watch=False, progress=said.append)
     assert said == [] and ci.dispatched == []
-    ci_mod.deploy_deployment("my-app", ref="v1.0.0", watch=False, progress=said.append)
+    ci_mod.deploy_deployment("my-app", watch=False, progress=said.append)
     assert said == ["Deploying my-app (ref v1.0.0)."] and len(ci.dispatched) == 1
 
 
@@ -126,12 +137,13 @@ def test_trigger_is_the_former_name_of_deploy(ci):
 
 
 def test_status_reports_one_deployment_with_its_last_deploy(ci):
-    ci_mod.deploy_deployment("my-app", ref="v1.0.0", watch=False)
+    _set_ref(ci, "my-app", "v1.0.0")
+    ci_mod.deploy_deployment("my-app", watch=False)
     ci_mod.deploy_deployment("other", watch=False) if ci.deploy(FLEET, "other", "me/other", "my-proj") is None else None
     res = ci_mod.status_deployment("my-app")
     assert res["ok"] is True and res["registered"] is True
     assert res["repo"] == "me/my-app" and res["project"] == "my-proj" and res["domain"] == "mcp.example.com"
-    assert res["id"] == "my-app" and res["overlay"] == {"domain": "mcp.example.com"}
+    assert res["id"] == "my-app" and res["overlay"] == {"domain": "mcp.example.com"} and res["ref"] == "v1.0.0"
     run = res["last_deploy"]["run"]
     assert run["conclusion"] == "success" and run["ref"] == "v1.0.0" and run["url"].endswith("/actions/runs/100")
     assert "environment_record" not in res
