@@ -52,28 +52,36 @@ fleet, at `gapp/deployments.yaml` in a GitHub fleet. Nobody edits it by
 hand; every change has a command.
 
 ```yaml
-my-app:
-  id: my-app
-  repo: github.com/owner/my-app
-  project: my-project
-  ref: main
-  settings:
-    public: true
-    domain: app.example.com
-    start: my-app serve --port 8080
-    memory: 1Gi
-    cpu: "1"
-    max_instances: 2
-    apis: [drive.googleapis.com]
-    env:
-      AUTH_ISSUER: {value: "https://issuer.example.com/"}
-      SIGNING_KEY: {secret: signing-key, generate: true}
-      APP_USERS_PATH: {value: "{{DATA_PATH}}/users"}
+format: 1
+deployments:
+  my-app:
+    id: my-app
+    repo: github.com/owner/my-app
+    project: my-project
+    ref: main
+    settings:
+      public: true
+      domain: app.example.com
+      start: my-app serve --port 8080
+      memory: 1Gi
+      cpu: "1"
+      max_instances: 2
+      apis: [drive.googleapis.com]
+      env:
+        AUTH_ISSUER: {value: "https://issuer.example.com/"}
+        SIGNING_KEY: {secret: signing-key, generate: true}
+        APP_USERS_PATH: {value: "{{DATA_PATH}}/users"}
 ```
+
+This file is the entry point for everything gapp keeps in a fleet.
+`format` says how the fleet is laid out. gapp refuses a format newer than
+it knows, and says to install a newer gapp. Today the file holds every
+definition; a later format may have it point to other files, and a gapp
+that knows both reads both.
 
 | Field | Meaning | Changes after creation |
 |---|---|---|
-| The key (`my-app`) | The name. Unique in the fleet. The word you type | `gapp rename` |
+| The key under `deployments` (`my-app`) | The name. Unique in the fleet. The word you type | `gapp rename` |
 | `id` | The prefix on the deployment's cloud resources. The name by default | Never |
 | `repo` | Where the code is. Absent for an app with no remote | `gapp set repo` |
 | `project` | The Google Cloud project | Never |
@@ -228,6 +236,13 @@ No tool takes a secret's value or a path on the server's machine.
    later; it adds a command and changes none.
 6. **`app.json` in 4.0.0 or the release after.** Proposed: 4.0.0, as the
    last stage.
-7. **Updating the workflows in a fleet repo.** `gapp fleet upgrade` as
-   above, or `gapp fleet use <repo>` doing both jobs. Proposed: the
-   separate command.
+7. **Updating the workflows in a fleet repo.** Proposed: `gapp fleet
+   upgrade` is its own command, and `gapp fleet use` only chooses where
+   the fleet lives. Every command that starts a run compares the fleet
+   repo's gapp version to this one first. The same: it runs. The fleet is
+   older: refused, nothing started, and `gapp fleet upgrade` is printed.
+   The fleet is newer: refused, with a line to install the newer gapp. No
+   confirm flag.
+8. **The file's name.** It is the entry point, not only a list, so
+   `deployments.yaml` may be too narrow a name. Proposed: `fleet.yaml`.
+   A rename after 4.0.0 would be a break.
