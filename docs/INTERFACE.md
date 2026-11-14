@@ -191,7 +191,7 @@ GitHub Actions; `gapp ci deploy` starts a run and takes `--no-watch`.
 
 | Command | Does | Needs |
 |---|---|---|
-| `gapp project setup <project>` | Once per project: enables APIs, grants Cloud Build its permissions, marks the project. With a GitHub fleet, also lets runners deploy there | gcloud as an Owner; `gh` as an admin of the fleet repo for a GitHub fleet |
+| `gapp project setup <project>` | Once per project: enables APIs, grants Cloud Build its permissions, marks the project. Nothing about CI | gcloud as an Owner |
 
 ### Definitions
 
@@ -229,10 +229,18 @@ Each changes one definition and nothing else.
 | `gapp secrets set <secret-name> [--from-stdin]` | Stores a value, typed at a prompt or piped | gcloud |
 | `gapp secrets get <secret-name> [--plaintext]` | Shows whether it is set; the value only with `--plaintext` | gcloud |
 
-### Runners (a GitHub fleet only)
+### GitHub Actions (optional)
+
+Everything about GitHub Actions is under `gapp ci`, and nothing else knows
+it exists. Keeping a fleet in a repo does not need it, and any other CI
+tool deploys by running `gapp deploy`. These need the fleet to be in a
+GitHub repo.
 
 | Command | Does | Needs |
 |---|---|---|
+| `gapp ci init` | Installs the workflows in the fleet repo | `gh` as an admin of it |
+| `gapp ci projects connect <project>` | Lets the fleet repo's runners sign in to that project and deploy. Refused on a project that is not set up | gcloud as an Owner; `gh` as an admin of the fleet repo |
+| `gapp ci projects list` | The projects they can deploy to, from the fleet repo's record | `gh` |
 | `gapp ci deploy [--upgrade]` | The same deploy, on a runner | `gh` |
 | `gapp ci status [--live]` | The last run and what it deployed | `gh` |
 | `gapp ci sources add <owner>` | Lets runners deploy that owner's repos | `gh` |
@@ -244,7 +252,7 @@ Each changes one definition and nothing else.
 | Command | Does |
 |---|---|
 | `gapp fleet` | Where the fleet lives |
-| `gapp fleet use <owner>/<repo> [--create]` | Moves the fleet to that repo and installs the workflows there, if it has none |
+| `gapp fleet use <owner>/<repo> [--create]` | Moves the fleet to that repo. Installs nothing else there |
 | `gapp fleet use local` | Moves it to this machine |
 | `gapp fleet export [<file>]` / `gapp fleet import <file>` | Copies the fleet out or in. Import keeps a backup first |
 
@@ -267,7 +275,8 @@ deployment is always the `deployment` argument.
 `gapp_project_setup`, `gapp_add`, `gapp_upgrade`, `gapp_rename`, `gapp_list`, `gapp_show`,
 `gapp_set`, `gapp_unset`, `gapp_apis`, `gapp_env_set`, `gapp_env_unset`,
 `gapp_apply`, `gapp_deploy`, `gapp_status`, `gapp_secrets_list`,
-`gapp_secrets_set`, `gapp_secrets_get`, `gapp_ci_deploy`, `gapp_ci_status`,
+`gapp_secrets_set`, `gapp_secrets_get`, `gapp_ci_init`, `gapp_ci_projects`,
+`gapp_ci_deploy`, `gapp_ci_status`,
 `gapp_ci_sources`, `gapp_fleet`, `gapp_fleet_use`,
 `gapp_fleet_export`, `gapp_fleet_import`.
 
@@ -282,6 +291,7 @@ No tool takes a secret's value or a path on the server's machine.
 - A shortcut for choosing among several deployments of one repo.
 - Reading more of a repo, such as a Compose file.
 - Rebuilding a lost fleet from what is deployed (`gapp fleet recover`).
+- Disconnecting a project from the runners (`gapp ci projects disconnect`).
 - A command that describes gapp to an agent (`gapp guide`).
 - A gapp version chosen per deployment ahead of an upgrade, and upgrading
   every definition at once.
