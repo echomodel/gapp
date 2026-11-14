@@ -1,13 +1,10 @@
 # The 4.0.0 interface
 
-**Proposed, for markup. Not built.** This page lists every command, flag,
-MCP tool and file gapp reads or writes in 4.0.0. Once agreed it is frozen:
-a test compares the real CLI to this page and fails on any difference, and
-nothing here changes meaning before the next major version. Later releases
-may only add.
-
-Where this page and [ONE-FLEET.md](ONE-FLEET.md) differ, this page wins.
-Lines marked **Open** are not decided; each has a proposed answer.
+**Agreed. Being built on the `one-fleet` branch.** This page lists every
+command, flag, MCP tool and file gapp reads or writes in 4.0.0. A test
+compares the real CLI to this page and fails on any difference. Nothing
+here changes meaning before the next major version; later releases may
+only add.
 
 ## Words
 
@@ -47,9 +44,9 @@ import`.
 
 ## The fleet file
 
-One YAML file, `deployments.yaml`: in the config directory for a local
-fleet, at `gapp/deployments.yaml` in a GitHub fleet. Nobody edits it by
-hand; every change has a command.
+One YAML file, `gapp.yaml`: in the config directory for a local fleet, at
+the root of the repo for a GitHub fleet. The name says only that gapp
+starts here. Nobody edits it by hand; every change has a command.
 
 ```yaml
 format: 1
@@ -275,27 +272,23 @@ No tool takes a secret's value or a path on the server's machine.
 - Secrets from a machine with no gcloud.
 - A shortcut for choosing among several deployments of one repo.
 - Reading more of a repo, such as a Compose file.
+- A command that describes gapp to an agent (`gapp guide`).
+- A gapp version chosen per deployment ahead of an upgrade, and upgrading
+  every definition at once.
 
-## Open
+## Rules that hold everywhere
 
-1. **Secret names.** A secret has its own short name (`signing-key`),
-   separate from the variable that reads it (`SIGNING_KEY`). Proposed: keep
-   both, with the secret's name defaulting to the variable's in lower case
-   with dashes, so most people type one name.
-2. **`gapp apply`.** Proposed: in 4.0.0, as above. It is the only way to
-   make several changes at once.
-3. **`gapp show` with no clone.** Proposed: it works from the definition
-   alone and says `app.json` was not read.
-4. **Exit codes.** Proposed: 0 done, 1 failed, 2 refused with nothing
-   changed. The same for every command.
-5. **A self-describing command for agents** (`gapp guide`). Proposed:
-   later; it adds a command and changes none.
-6. **`app.json` in 4.0.0 or the release after.** Proposed: 4.0.0, as the
-   last stage.
-7. **The flag's name.** `--upgrade` on `gapp deploy` and `gapp ci deploy`
-   (see "Versions"). Proposed: `--upgrade`.
-8. **The file's name and place.** It is the entry point for whatever
-   gapp keeps in a repo, so its name should assume nothing about what is
-   inside: not that it is a list of deployments, and not that there is one
-   fleet. Proposed: `gapp.yaml` at the repo's root, with the same name for
-   the local file. A rename after 4.0.0 would be a break.
+- **Exit codes.** 0: done. 1: failed. 2: refused, and nothing changed.
+- **A deployment belongs to one fleet.** Two fleets that both define the
+  same deployment are not supported, and gapp does not try to reconcile
+  them.
+- **A release starts strict.** A newer gapp asks for `gapp upgrade` before
+  it changes an older definition or deploys it from this machine. A
+  release may choose to allow more for the versions it names.
+- **A runner is started with the deployment's name and nothing else.**
+  Everything else comes from the definition, so the way a workflow starts
+  gapp has little reason to change.
+- **A secret's name** defaults to its variable's, in lower case with
+  dashes (`SIGNING_KEY`, `signing-key`). `--secret <name>` gives another.
+- **`gapp show` outside a clone** works from the definition and says
+  `app.json` was not read.
