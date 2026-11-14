@@ -296,6 +296,47 @@ Run tests: `python -m pytest tests/unit/ -v`
 
 Each solution's service account gets `roles/secretmanager.secretAccessor` only on its own declared secrets — not project-wide. This prevents solution A from reading solution B's secrets when sharing a GCP project.
 
+## What gapp owns
+
+gapp sets up and wires the Google Cloud resources a deployment needs, in
+its project, using Google Cloud access. It hands the app what it needs to
+use them: environment variables, secrets and permissions.
+
+The boundary is the platform and its credentials, not a category of
+feature:
+
+- gapp works with one kind of access, Google Cloud: the operator's own
+  login, or the project's deploy account on a runner.
+- A Google Cloud resource in the deployment's project is something gapp
+  can own.
+- Anything that needs another company's account and credentials is
+  outside. gapp has no access to it, and holding that access would be a
+  second set of credentials to protect, with its own ways to go wrong.
+  For those, gapp only delivers their values to the app, as environment
+  variables and secrets.
+
+| Thing | A Google Cloud resource in the project? | gapp's? |
+|---|---|---|
+| The service, the data bucket, secrets | yes | yes |
+| The domain mapping; a DNS record in Cloud DNS | yes | yes |
+| A document or key-value store on Google Cloud | yes | yes, once gapp supports one |
+| A DNS record at an outside registrar | no | no |
+| An identity provider run by another company | no | no |
+| A payment processor, a messaging service, an outside API | no | no |
+
+So the list of what gapp sets up is not fixed. It is whichever
+Google Cloud resources gapp has learned to set up, it grows as apps need
+more, and it is bounded by the platform. How the app talks to a resource (a
+mounted folder, an environment variable, the provider's own library) does
+not decide whose it is; where the resource lives does.
+
+Considered and set aside as the line: "what every app needs" (a custom
+domain is optional and still gapp's); "what gapp can do knowing nothing
+about the app" (gapp knows how it starts, what it reads and where its
+data goes); "what the app uses without a vendor's library" and "what the
+app makes no network request to" (both put a store on Google Cloud
+outside, and neither is why an outside identity provider is).
+
 ## External Framework Awareness
 
 gapp is a deployment tool. It deploys containers, manages secrets,
