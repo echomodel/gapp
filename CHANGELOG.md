@@ -48,8 +48,16 @@ Breaking changes:
   refused when none is pending; `--dry-run` says which. `gapp list` lists
   the fleet's definitions, with no search of cloud projects. New: `gapp
   project setup <project>`, once per project, which sets up nothing about
-  CI. (MCP: `gapp_deploy`, `gapp_list`, `gapp_project_setup`.) `gapp
-  status` and `gapp secrets` still work the earlier way until they follow.
+  CI. (MCP: `gapp_deploy`, `gapp_list`, `gapp_project_setup`.)
+- `gapp status` and `gapp secrets list|get|set` take their deployment from
+  the fleet: `--deployment`, or the one the clone's remote has. `status`
+  no longer takes a name or `--project`, and reports which gapp last
+  deployed it and whether the next deploy would apply an upgrade.
+  `secrets list` no longer takes a name. `secrets set` no longer takes the
+  value as an argument: it prompts, or reads stdin with `--from-stdin`.
+  All take `--json`, and a refusal exits 2. MCP: `gapp_secret_list` and
+  `gapp_secret_get` are now `gapp_secrets_list` and `gapp_secrets_get`,
+  and `gapp_secret_set` is gone: no tool takes a secret's value.
 - Releasing no longer needs a tag pushed by hand: a workflow tags the
   commit and publishes the GitHub release when the version changes on
   `main`.

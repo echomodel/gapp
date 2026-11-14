@@ -275,12 +275,13 @@ deployment is always the `deployment` argument.
 `gapp_project_setup`, `gapp_add`, `gapp_upgrade`, `gapp_rename`, `gapp_list`, `gapp_show`,
 `gapp_set`, `gapp_unset`, `gapp_apis`, `gapp_env_set`, `gapp_env_unset`,
 `gapp_apply`, `gapp_deploy`, `gapp_status`, `gapp_secrets_list`,
-`gapp_secrets_set`, `gapp_secrets_get`, `gapp_ci_init`, `gapp_ci_projects`,
+`gapp_secrets_get`, `gapp_ci_init`, `gapp_ci_projects`,
 `gapp_ci_deploy`, `gapp_ci_status`,
 `gapp_ci_sources`, `gapp_fleet`, `gapp_fleet_use`,
 `gapp_fleet_export`, `gapp_fleet_import`.
 
-No tool takes a secret's value or a path on the server's machine.
+No tool takes a secret's value or a path on the server's machine. There is
+no tool for `gapp secrets set`: a value is typed at its prompt or piped in.
 
 ## Not in 4.0.0, and addable without a break
 

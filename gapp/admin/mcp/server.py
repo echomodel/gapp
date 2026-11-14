@@ -258,110 +258,44 @@ def gapp_project_setup(project: str) -> dict:
 
 
 @_tool()
-def gapp_secret_get(name: str, plaintext: bool = False, deployment: str | None = None) -> dict:
-    """Get a secret from GCP Secret Manager.
-
-    Use this to retrieve secrets that gapp manages for a deployed solution —
-    any secret declared in gapp.yaml's env section, including auto-generated
-    ones (`generate: true`) whose values you may need post-deploy.
-
-    Pass the secret's short name as declared in gapp.yaml's secret.name
-    field (e.g. "app-key"). gapp prefixes this with the solution name
-    to produce the full Secret Manager ID automatically.
-
-    By default returns a SHA-256 hash prefix and length — enough to confirm
-    the secret exists and verify identity without exposing the value. Set
-    plaintext=True to get the actual value (e.g. when you need to pass it
-    to an admin CLI for user management).
-
-    Default response:  {"name": "app-key", "secret_id": "my-app-app-key", "hash": "a1b2...", "length": 43}
-    With plaintext:    {"name": "app-key", "secret_id": "my-app-app-key", "value": "the-actual-value"}
-
-    IMPORTANT: Before deploying, use gapp_secret_list to confirm all
-    non-generated secrets have values. Deploying with missing secrets
-    will fail.
-
-    Args:
-        name: The secret's short name from gapp.yaml (e.g. "app-key").
-        plaintext: If True, return the actual secret value. Default False.
-        deployment: A deployment of the fleet, instead of the app in the
-            current folder (see gapp_secret_set).
+def gapp_secrets_get(name: str, plaintext: bool = False, deployment: str | None = None) -> dict:
+    """Whether a deployment's secret is set. `name` is the secret's short
+    name, as `gapp_secrets_list` shows it (for example "signing-key").
+    By default returns a hash prefix and the length, enough to confirm it
+    exists without exposing it. `plaintext=True` returns the value itself:
+    use it only when the user asks for the value.
     """
+    from gapp.admin.sdk.definitions import Refused
     from gapp.admin.sdk.secrets import get_secret
-    return get_secret(name, plaintext=plaintext, deployment=deployment)
+    try:
+        return get_secret(name, plaintext=plaintext, deployment=deployment)
+    except Refused as e:
+        return {"refused": True, "message": e.message}
 
 
 @_tool()
-def gapp_secret_set(name: str, value: str, deployment: str | None = None) -> dict:
-    """Store a secret value in GCP Secret Manager for a deployed solution.
+def gapp_secrets_list(deployment: str | None = None) -> dict:
+    """A deployment's secrets and whether each has a value. Call it before
+    `gapp_deploy`: a deploy fails when a secret that is not generated has
+    no value.
 
-    Use this to populate secrets that the solution needs at runtime but
-    that gapp does not auto-generate — for example, an upstream API key
-    or third-party credential. The secret must be declared in gapp.yaml's
-    env section with a secret.name field.
+    Each entry has `name` (the secret's short name), `env_var` (the
+    variable that reads it), `secret_id`, `generate` (gapp makes it on the
+    first deploy) and `status`: "ready", "missing", "missing-generate"
+    (will be made on deploy), "unattached" (exists in Google Cloud without
+    gapp's label) or "conflict" (belongs to another deployment). `orphans`
+    are secrets labelled for this deployment that no variable reads.
+    `hints` give the commands that fix each case.
 
-    For secrets with generate: true, gapp creates the value automatically
-    during deploy — you don't need this tool for those.
-
-    Pass the secret's short name as declared in gapp.yaml's secret.name
-    field (e.g. "api-key"). gapp prefixes this with the solution name
-    to produce the full Secret Manager ID automatically.
-
-    Which app: by default the one in the current folder. Pass deployment
-    to name a deployment of the fleet instead, from any folder: its project
-    and declared secrets are then read from the fleet (the fleet's settings
-    for it merged over the app repo's gapp.yaml), so this also works for a
-    deployment configured only in the fleet and for a copy made with
-    copy_of. That read needs gh; storing the secret needs gcloud.
-
-    Args:
-        name: The secret's short name from gapp.yaml (e.g. "api-key").
-        value: The secret value to store.
-        deployment: A deployment of the fleet (see gapp_ci_list), instead
-            of the app in the current folder. Reads the fleet with gh; no
-            runner is used. The one root tool argument that reads the fleet.
+    No tool stores a secret's value. The user stores one themselves, at a
+    prompt: `gapp secrets set <name> --deployment <deployment>`.
     """
-    from gapp.admin.sdk.secrets import set_secret
-    return set_secret(name, value, deployment=deployment)
-
-
-@_tool()
-def gapp_secret_list(name: str | None = None, deployment: str | None = None) -> dict:
-    """List all secret-backed env vars and whether they are ready for deploy.
-
-    Shows each secret's env var name, resolved Secret Manager ID, whether
-    it has a value set, and whether gapp auto-generates it on deploy.
-
-    IMPORTANT: Call this BEFORE gapp_deploy. Secrets with generate: true
-    are created automatically by gapp during deploy. All other secrets
-    must be populated in advance with gapp_secret_set — deploying with
-    missing secrets will fail.
-
-    Each secret in the response has:
-    - env_var: the name in gapp.yaml (what the app reads at runtime)
-    - secret_id: the resolved Secret Manager ID
-    - generate: true if gapp auto-creates this on deploy
-    - status: one of "ready", "missing", "missing-generate" (will be
-              created on deploy), "unattached" (a secret with this ID
-              exists in GCP but lacks the gapp-solution label),
-              "conflict" (the ID is owned by a different solution), or
-              "no-project" (no GCP project resolved yet).
-
-    The response also includes:
-    - orphans: secret IDs labeled for this solution but not in gapp.yaml
-    - hints: structured remediation entries for unattached / conflict /
-             orphan scenarios — each with a message and concrete `gcloud`
-             commands, which are the whole fix for that scenario.
-
-    Args:
-        name: Deployment name. Defaults to the current directory's app.
-        deployment: A deployment of the fleet, instead of the app in the
-            current folder: its declared secrets and project are read from
-            the fleet (see gapp_secret_set). `notes` says when the app
-            repo's gapp.yaml could not be read. Not with name.
-    """
+    from gapp.admin.sdk.definitions import Refused
     from gapp.admin.sdk.secrets import list_secrets
-    return list_secrets(name=name, deployment=deployment)
+    try:
+        return list_secrets(deployment=deployment)
+    except Refused as e:
+        return {"refused": True, "message": e.message}
 
 
 @_tool()
@@ -624,24 +558,22 @@ def gapp_ci_list(repo: str | None = None, verbose: bool = False) -> dict:
 
 
 @_tool()
-def gapp_status(name: str | None = None, project: str | None = None) -> dict:
-    """Infrastructure health check for a gapp solution (the direct system).
-
-    Reads deployment labels and Terraform state; never GitHub, never the CI
-    system (use gapp_ci_status for that). Returns initialized,
-    deployment.project, deployment.pending, deployment.services, domain
-    (the live custom domain mapping's state: pending_dns, pending_cert,
-    active, or error, with the CNAME target to set), and next_step with
-    the recommended action. It never fails for a missing or unusable
-    Google Cloud identity: that comes back as next_step "sign in" with
-    the login command.
-
-    Args:
-        name: Deployment name. Defaults to the current directory's app.
-        project: Optional explicit GCP project id, skipping the hosted-project search.
+def gapp_status(deployment: str | None = None) -> dict:
+    """What is live for a deployment of the fleet. Returns `deployed`,
+    `url` and `healthy` (an HTTP check of the URL), `domain` (the custom
+    domain's state: pending_dns with the CNAME to add, pending_cert,
+    active or error), `last_deployed_by` (the gapp version that last
+    deployed it), `upgrade_pending` (its definition is on a newer gapp
+    than that), and `next_step`, a sentence naming the command to run when
+    there is one. A missing or unusable Google Cloud login comes back as
+    `next_step` with the login command, not as an error.
     """
     from gapp.admin.sdk.core import GappSDK
-    return GappSDK().status(name=name, project=project).model_dump()
+    from gapp.admin.sdk.definitions import Refused
+    try:
+        return GappSDK().status_definition(deployment)
+    except Refused as e:
+        return {"refused": True, "message": e.message}
 
 
 @_tool()

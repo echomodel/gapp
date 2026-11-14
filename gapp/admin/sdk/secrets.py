@@ -6,28 +6,15 @@ Listing and pre-deploy validation use a single label-filtered
 `gcloud secrets list` call instead of N per-secret describes.
 See issue #27 for the full design rationale.
 
-Two ways to say which deployment a secret belongs to. From the app's
-folder (the default): its gapp.yaml names it and declares the secrets, and
-the project is found from the labels in GCP. With `deployment` (`--deployment
-<name>`): the fleet names it, and its id, project and declared secrets come
-from the fleet (`ci.deployment_env`), so a deployment configured only in
-the fleet, or a copy whose id is not the repo's name, can have its secrets
-set from any folder. This is the one root command that reads the fleet.
-
-Project resolution from the folder: every entry point that needs the GCP project for a
-solution MUST go through `GappSDK.resolve_solution_with_project(...)`,
-not `resolve_solution(...)` alone. `resolve_solution` returns shape only
-and always sets `project_id=None`; calling it without the chained
-discovery step is the trap that produced issue #39, where every secrets
-command saw `project_id=None` even when `gapp status` and `gapp deploy`
-resolved the same project correctly.
+Which deployment a secret belongs to comes from the fleet: its definition
+gives the id that prefixes each secret, the project, and the variables
+that read a secret. Nothing is read from the app's repo.
 """
 
 import subprocess
 from pathlib import Path
 
 from gapp.admin.sdk.cloud.base import on_ci_runner
-from gapp.admin.sdk.core import GappSDK
 from gapp.admin.sdk.manifest import get_env_vars, load_manifest
 from gapp.admin.sdk.util import run_gcloud
 
@@ -60,62 +47,46 @@ def set_secret(name: str, value: str, deployment: str | None = None) -> dict:
     }
 
 
-def _deployment_context(deployment: str) -> dict:
-    """The fleet's answer for `--deployment`: id, project, env entries."""
-    from gapp.admin.sdk.ci import deployment_env
-    ctx = deployment_env(deployment)
-    if ctx.get("ok") is False:
-        raise RuntimeError(ctx["next_step"]["hint"])
-    return ctx
+def _deployment_context(deployment: str | None, command: str) -> dict:
+    """The deployment a secrets command means, from the fleet: its name,
+    id, project and the variables its definition declares."""
+    from gapp.admin.sdk import definitions, entryfile, settings as settings_mod
+
+    @definitions._guard
+    def read():
+        _, deployments = definitions._load()
+        name = definitions.which(deployments, deployment, None, command)
+        definition = deployments[name]
+        if entryfile.standing(definition, name) == "newer":
+            entryfile.require_current(definition, name, "work with its secrets")
+        manifest = settings_mod.as_manifest(definition["id"], definition.get("settings"))
+        return {"name": name, "id": definition["id"], "project": definition["project"],
+                "env": manifest.get("env", [])}
+
+    return read()
 
 
-def _unread_repo_note(ctx: dict) -> str | None:
-    """Says that only the fleet's own settings were looked at, when the app
-    repo's gapp.yaml could not be read."""
-    if ctx.get("repo_checked") is False:
-        return (f"{ctx['repo']}'s gapp.yaml could not be read from here, so only the settings the fleet holds "
-                f"for {ctx['name']} were checked. {ctx.get('repo_note') or ''}").strip()
-    return None
-
-
-def list_secrets(name: str | None = None, deployment: str | None = None) -> dict:
-    """List secret-backed env vars and diff them against what exists in GCP.
+def list_secrets(deployment: str | None = None) -> dict:
+    """List a deployment's secret-backed variables and compare them with what exists in GCP.
 
     First does a single label-filtered `gcloud secrets list` to enumerate
-    secrets gapp manages for this solution. For each declared secret that
+    secrets gapp manages for this deployment. For each declared secret that
     didn't appear in the labeled set, follows up with one `gcloud secrets
     describe` to distinguish:
-        ready       — declared and present, labeled for this solution
+        ready       — declared and present, labeled for this deployment
         missing     — declared but no secret with that ID exists in GCP
         unattached  — secret exists at the expected ID but has no gapp label
-        conflict    — secret exists labeled for a different solution
+        conflict    — secret exists labeled for a different deployment
         orphan      — present in GCP with our label but no longer declared
 
     Each non-ready scenario produces a structured hint with concrete
-    `gcloud` commands the operator can run to resolve. Hints are surfaced
-    in the top-level `hints` array; CLI renderers can emit them as
-    footnotes after the table.
+    commands the operator can run to resolve. Hints are surfaced in the
+    top-level `hints` array.
     """
     notes = []
-    if deployment:
-        if name:
-            raise RuntimeError("Give a name or --deployment, not both.")
-        fleet_ctx = _deployment_context(deployment)
-        solution_name, project_id, env_entries = fleet_ctx["id"], fleet_ctx["project"], fleet_ctx["env"]
-        if note := _unread_repo_note(fleet_ctx):
-            notes.append(note)
-    else:
-        ctx = GappSDK().resolve_solution_with_project(name)
-        if not ctx:
-            raise RuntimeError(
-                "Not inside an app's folder. Run this in the app's repo, or name a deployment of your fleet "
-                "with --deployment <name>."
-            )
-        solution_name = ctx["name"]
-        project_id = ctx.get("project_id")
-        repo_path = ctx.get("repo_path")
-        manifest = load_manifest(Path(repo_path).expanduser()) if repo_path else {}
-        env_entries = get_env_vars(manifest)
+    fleet_ctx = _deployment_context(deployment, "gapp secrets list")
+    deployment = fleet_ctx["name"]
+    solution_name, project_id, env_entries = fleet_ctx["id"], fleet_ctx["project"], fleet_ctx["env"]
 
     present_ids = set()
     if project_id:
@@ -222,15 +193,8 @@ def _hint_unattached(project_id: str, solution_name: str, secret_id: str) -> dic
 
 
 def _declare_command(env_var: str, secret_short_name: str, deployment: str | None) -> str:
-    """How to declare (or re-point) an env var read from a secret: a gapp
-    command, never a hand edit. For a deployment of the fleet the
-    declaration can live in the app repo or in the fleet's settings."""
-    command = f"gapp manifest env set {env_var} --secret {secret_short_name}"
-    if not deployment:
-        return command
-    return (f"{command}   (in the app's repo; or in the fleet's settings for {deployment}: "
-            f"`gapp ci manifest {deployment}` prints them, `gapp ci setup {deployment} --manifest FILE --update` "
-            f"replaces them)")
+    """The command that declares (or re-points) a variable read from a secret."""
+    return f"gapp env set {env_var} --secret {secret_short_name} --deployment {deployment}"
 
 
 def _hint_conflict(project_id: str, solution_name: str, secret_id: str,
@@ -421,66 +385,29 @@ def materialize_generated_secrets(project_id: str, solution_name: str, manifest:
 
 
 def _find_secret(name: str, deployment: str | None = None) -> dict:
-    """Look up a secret by its short name: as declared for a deployment of
-    the fleet when `deployment` is given, else in the checkout's gapp.yaml."""
-    if deployment:
-        fleet_ctx = _deployment_context(deployment)
-        known = []
-        for entry in fleet_ctx["env"]:
-            secret_cfg = entry.get("secret")
-            if not isinstance(secret_cfg, dict):
-                continue
-            known.append(secret_cfg["name"])
-            if secret_cfg["name"] == name:
-                return {
-                    "name": name,
-                    "env_var": entry["name"],
-                    "secret_id": f"{fleet_ctx['id']}-{name}",
-                    "solution": fleet_ctx["id"],
-                    "generate": secret_cfg.get("generate", False),
-                    "project_id": fleet_ctx["project"],
-                }
-        message = (f"No secret '{name}' is declared for {fleet_ctx['name']}. "
-                   f"Declared: {', '.join(known) or '(none)'}.")
-        if note := _unread_repo_note(fleet_ctx):
-            message += " " + note
-        raise RuntimeError(message)
-
-    ctx = GappSDK().resolve_solution_with_project()
-    if not ctx:
-        raise RuntimeError(
-            "Not inside an app's folder. Run this in the app's repo, or name a deployment of your fleet "
-            "with --deployment <name>."
-        )
-
-    repo_path = ctx.get("repo_path")
-    if not repo_path:
-        raise RuntimeError("No repo path found for this solution.")
-
-    manifest = load_manifest(Path(repo_path).expanduser())
-    env_entries = get_env_vars(manifest)
-
+    """Look up a secret by its short name, as declared in the deployment's definition."""
+    from gapp.admin.sdk.definitions import Refused
+    fleet_ctx = _deployment_context(deployment, f"gapp secrets set {name}")
     known = []
-    for entry in env_entries:
+    for entry in fleet_ctx["env"]:
         secret_cfg = entry.get("secret")
         if not isinstance(secret_cfg, dict):
             continue
-        secret_name = secret_cfg["name"]
-        known.append(secret_name)
-
-        if secret_name == name:
+        known.append(secret_cfg["name"])
+        if secret_cfg["name"] == name:
             return {
                 "name": name,
                 "env_var": entry["name"],
-                "secret_id": f"{ctx['name']}-{name}",
-                "solution": ctx["name"],
+                "secret_id": f"{fleet_ctx['id']}-{name}",
+                "solution": fleet_ctx["id"],
                 "generate": secret_cfg.get("generate", False),
-                "project_id": ctx.get("project_id"),
+                "project_id": fleet_ctx["project"],
+                "deployment": fleet_ctx["name"],
             }
-
-    raise RuntimeError(
-        f"No secret '{name}' found in gapp.yaml. "
-        f"Known secrets: {', '.join(known) or '(none)'}"
+    raise Refused(
+        f"'{fleet_ctx['name']}' has no secret '{name}'. Its secrets: {', '.join(known) or 'none'}. "
+        f"A variable reads a secret once you say so: gapp env set <NAME> --secret {name} "
+        f"--deployment {fleet_ctx['name']}"
     )
 
 

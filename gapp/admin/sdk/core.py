@@ -967,6 +967,49 @@ class GappSDK:
         return {**plan, "image": image, "service_url": outputs.get("service_url"),
                 "upgraded_from": last if standing == "upgrade" else None}
 
+    def status_definition(self, deployment: Optional[str] = None, *, cwd: Optional[Path] = None) -> dict:
+        """What is live for a deployment of the fleet: its URL and health, the
+        domain's state, which gapp last deployed it, and the next step."""
+        from gapp.admin.sdk import definitions, entryfile, settings as settings_mod
+
+        @definitions._guard
+        def find():
+            _, deployments = definitions._load()
+            name = definitions.which(deployments, deployment, cwd, "gapp status")
+            definition = deployments[name]
+            if entryfile.standing(definition, name) == "newer":
+                entryfile.require_current(definition, name, "read its status")
+            return name, definition
+
+        name, definition = find()
+        deployment_id, project = definition["id"], definition["project"]
+        bucket = self.get_bucket_name(deployment_id, project)
+        result = {"deployment": name, "project": project, "deployed": False, "url": None, "healthy": None,
+                  "domain": None, "gapp": definition.get("gapp"), "last_deployed_by": None,
+                  "upgrade_pending": False, "next_step": None}
+        try:
+            has_bucket = self.provider.bucket_exists(project, bucket)
+            label = (self.provider.list_bucket_labels(project).get(bucket) or {}).get(VERSION_LABEL) if has_bucket else None
+        except CloudAccessError:
+            result["next_step"] = self._identity_hint(project)
+            return result
+        last = settings_mod.label_version(label)
+        result["last_deployed_by"] = last
+        outputs = self.provider.get_infrastructure_outputs(
+            _get_staging_dir(deployment_id), bucket, "terraform/state") if has_bucket else None
+        if outputs and (url := outputs.get("service_url")):
+            result.update(deployed=True, url=url, healthy=self.provider.check_http_health(url))
+        if outputs and (live := (outputs.get("custom_domain") or "").strip()):
+            result["domain"] = self._domain_status(project, live).model_dump()
+        if last and definition.get("gapp"):
+            result["upgrade_pending"] = entryfile.version_key(last) < entryfile.version_key(definition["gapp"])
+        if not result["deployed"]:
+            result["next_step"] = f"It is not deployed yet. From a clone of its repo: gapp deploy --deployment {name}"
+        elif result["upgrade_pending"]:
+            result["next_step"] = (f"It was last deployed by gapp {last}, and its definition is on gapp "
+                                   f"{definition['gapp']}. Apply that: gapp deploy --deployment {name} --upgrade")
+        return result
+
     def list_definitions(self) -> dict:
         """Every definition in the fleet, with how its version stands against this gapp."""
         from gapp.admin.sdk import definitions, entryfile, fleetstore

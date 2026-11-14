@@ -44,4 +44,5 @@ Built so far: where the fleet lives and reading it there
 means (`gapp/admin/sdk/lookup.py`), the ref as part of a definition, the
 test that holds the CLI to the page, the entry file, and the definition
 and settings commands on a local fleet (`gapp/admin/sdk/definitions.py`),
-and `deploy`, `list` and `project setup` on a local fleet.
+and `deploy`, `status`, `secrets`, `list` and `project setup` on a local
+fleet.
