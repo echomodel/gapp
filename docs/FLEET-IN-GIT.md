@@ -82,3 +82,10 @@ can be added without changing the first: a fleet that is a file in a
 clone you point gapp at, where gapp writes the file and stops. It is not
 the better way waiting to be built. It is a heavier way, for the one case
 that needs it.
+
+Review is not the same as protection. Reviewing fleet changes guards
+nothing while anyone who can push a branch to the fleet repo can also run
+a workflow there that signs in to Google Cloud. Review becomes a control
+only together with the rest: the repo's main branch takes changes only by
+merged pull request, Google Cloud trusts only that branch, and deploys
+build only merged refs. All of it, or none.
