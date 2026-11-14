@@ -5,6 +5,11 @@ source is `gapp/__init__.py`.
 
 ## Unreleased
 
+- `gapp fleet` (MCP: `gapp_fleet`) says where your fleet lives and how
+  many deployments it holds. With no fleet repo set, the fleet is a file
+  on this machine, one per profile; with one set, it is that repo. Nothing
+  reads the local file yet: the root commands still find deployments by
+  their labels.
 - Releasing no longer needs a tag pushed by hand: a workflow tags the
   commit and publishes the GitHub release when the version changes on
   `main`.

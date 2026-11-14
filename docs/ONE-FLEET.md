@@ -118,7 +118,9 @@ deployments" to the ones on that project. It never creates anything.
 
 ## Build order
 
-Each stage is a release candidate.
+Each stage is a release candidate. Built so far: where the fleet lives
+and reading it there (`gapp fleet`, `gapp/admin/sdk/fleetstore.py`). No
+command acts on it yet.
 
 1. The local fleet file; every root command reads it; existing
    deployments picked up from labels.
