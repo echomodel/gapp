@@ -1058,6 +1058,262 @@ def fleet_group(ctx, json_out):
         click.echo(f"The copy from before its last change: {result['backup']}")
 
 
+# --- definitions and their settings (the fleet; no cloud) ---
+
+_DEPLOYMENT = click.option("--deployment", "-d", "deployment", default=None, metavar="NAME",
+                           help="The deployment. Left out inside a clone: the one this repo has.")
+_JSON = click.option("--json", "json_out", is_flag=True, help="Machine-readable output.")
+_NO_WATCH = click.option("--no-watch", is_flag=True,
+                         help="On a GitHub fleet: start the run and return without waiting for it.")
+
+
+def _json(result):
+    click.echo(json_mod.dumps(result, indent=2, default=str))
+
+
+def _refused(e, json_out):
+    """A refusal: nothing was changed. Exit code 2."""
+    if json_out:
+        _json({"refused": True, "message": e.message})
+    else:
+        click.echo(e.message, err=True)
+    raise SystemExit(2)
+
+
+def _say_changes(result, json_out, nothing):
+    if json_out:
+        _json(result)
+        return
+    if not result["changed"]:
+        click.echo(nothing)
+        return
+    for change in result["changes"]:
+        click.echo(f"{result['deployment']}: {change['key']}: {change['before']} -> {change['after']}")
+    if result.get("next"):
+        click.echo(f"Set its value: {result['next']}")
+
+
+def _definition_command(json_out, nothing, fn, *args, **kwargs):
+    from gapp.admin.sdk import definitions
+    try:
+        result = fn(definitions)(*args, **kwargs)
+    except definitions.Refused as e:
+        _refused(e, json_out)
+    _say_changes(result, json_out, nothing)
+    return result
+
+
+@main.command("add")
+@click.argument("name", required=False)
+@click.option("--project", default=None, metavar="PROJECT", help="The Google Cloud project it runs in.")
+@click.option("--repo", default=None, metavar="REPO", help="Where its code is. Inside a clone: the clone's remote.")
+@click.option("--ref", default=None, metavar="REF", help="The branch, tag or commit a deploy builds. Left out: the default branch.")
+@click.option("--id", "id_", default=None, metavar="ID", help="The prefix on its cloud resources. Left out: the name.")
+@click.option("--copy-of", default=None, metavar="EXISTING", help="Make it a second deployment of that one's repo, with its settings.")
+@_NO_WATCH
+@_JSON
+def add_cmd(name, project, repo, ref, id_, copy_of, no_watch, json_out):
+    """Define a deployment. Touches no cloud.
+
+    \b
+    gapp add --project my-project                 in a clone: named after the repo
+    gapp add my-app --project my-project --repo owner/my-app
+    gapp add my-app-staging --copy-of my-app --project my-staging --ref develop
+    """
+    from gapp.admin.sdk import definitions
+    try:
+        result = definitions.add(name, project=project, repo=repo, ref=ref, id=id_, copy_of=copy_of)
+    except definitions.Refused as e:
+        _refused(e, json_out)
+    if json_out:
+        _json(result)
+        return
+    d = result["definition"]
+    click.echo(f"{result['deployment']} is defined: {d.get('repo') or 'no repo'}, on {d['project']}, "
+               f"building {d.get('ref') or 'the default branch'}.")
+    if result["copied_from"]:
+        click.echo(f"Its settings are {result['copied_from']}'s, without the domain.")
+    click.echo(f"Nothing is deployed yet. See it: gapp show --deployment {result['deployment']}")
+
+
+@main.command("rename")
+@click.argument("old")
+@click.argument("new")
+@_NO_WATCH
+@_JSON
+def rename_cmd(old, new, no_watch, json_out):
+    """Change a deployment's name. Its cloud resources keep theirs."""
+    _definition_command(json_out, "", lambda d: d.rename, old, new)
+
+
+@main.command("show")
+@_DEPLOYMENT
+@_JSON
+def show_cmd(deployment, json_out):
+    """One deployment's definition and the settings a deploy would use."""
+    from gapp.admin.sdk import definitions
+    try:
+        result = definitions.show(deployment)
+    except definitions.Refused as e:
+        _refused(e, json_out)
+    if json_out:
+        _json(result)
+        return
+    click.echo(f"{result['deployment']}")
+    click.echo(f"  repo     {result['repo'] or 'none'}")
+    click.echo(f"  project  {result['project']}")
+    click.echo(f"  builds   {result['ref'] or 'the default branch'}")
+    click.echo(f"  gapp     {result['gapp']}" + (
+        f"  (this is gapp {result['this_gapp']}; upgrade available: gapp upgrade --deployment {result['deployment']})"
+        if result["upgrade"] else ""))
+    click.echo("  settings")
+    for row in result["settings"]:
+        click.echo(f"    {row['key']}: {row['value']}  ({row['from']})")
+
+
+@main.command("upgrade")
+@_DEPLOYMENT
+@_NO_WATCH
+@_JSON
+def upgrade_cmd(deployment, no_watch, json_out):
+    """Bring one deployment's definition to this gapp's version.
+
+    Changes the definition only. The next deploy applies it, and needs
+    --upgrade.
+    """
+    from gapp.admin.sdk import definitions
+    try:
+        result = definitions.upgrade(deployment)
+    except definitions.Refused as e:
+        _refused(e, json_out)
+    if json_out:
+        _json(result)
+        return
+    change = result["changes"][0]
+    click.echo(f"{result['deployment']}: gapp {change['before']} -> {change['after']}")
+    click.echo("No other changes are needed.")
+    click.echo("The next deploy applies it: add --upgrade to that deploy.")
+
+
+@main.command("set")
+@click.argument("key")
+@click.argument("value")
+@_DEPLOYMENT
+@_NO_WATCH
+@_JSON
+def set_cmd(key, value, deployment, no_watch, json_out):
+    """Set one value of a deployment's definition.
+
+    \b
+    KEY is one of: ref, repo, public, domain, start, memory, cpu, max_instances
+    """
+    _definition_command(json_out, f"Nothing to change: {key} is already that.",
+                        lambda d: d.set_value, key, value, deployment=deployment)
+
+
+@main.command("unset")
+@click.argument("key")
+@_DEPLOYMENT
+@_NO_WATCH
+@_JSON
+def unset_cmd(key, deployment, no_watch, json_out):
+    """Clear one value of a deployment's definition; its default applies again."""
+    _definition_command(json_out, f"Nothing to change: {key} is not set.",
+                        lambda d: d.unset_value, key, deployment=deployment)
+
+
+@main.group("apis")
+def apis_group():
+    """The extra Google Cloud APIs a deployment's app uses."""
+
+
+@apis_group.command("add")
+@click.argument("api")
+@_DEPLOYMENT
+@_NO_WATCH
+@_JSON
+def apis_add_cmd(api, deployment, no_watch, json_out):
+    """Add an API, such as drive.googleapis.com."""
+    _definition_command(json_out, f"Nothing to change: {api} is already listed.",
+                        lambda d: d.apis_add, api, deployment=deployment)
+
+
+@apis_group.command("remove")
+@click.argument("api")
+@_DEPLOYMENT
+@_NO_WATCH
+@_JSON
+def apis_remove_cmd(api, deployment, no_watch, json_out):
+    """Remove an API from the list."""
+    _definition_command(json_out, f"Nothing to change: {api} is not listed.",
+                        lambda d: d.apis_remove, api, deployment=deployment)
+
+
+@main.group("env")
+def env_group():
+    """The variables a deployment's app reads."""
+
+
+@env_group.command("set")
+@click.argument("name")
+@click.argument("value", required=False)
+@click.option("--secret", default=None, is_flag=False, flag_value="", metavar="[SECRET]",
+              help="Read it from a secret. SECRET left out: the variable's name in lower case with dashes.")
+@click.option("--generate", is_flag=True, help="With --secret: gapp makes the value on the first deploy.")
+@click.option("--data-path", default=None, is_flag=False, flag_value="", metavar="[SUBFOLDER]",
+              help="Point it at the deployment's data folder, which survives restarts.")
+@_DEPLOYMENT
+@_NO_WATCH
+@_JSON
+def env_set_cmd(name, value, secret, generate, data_path, deployment, no_watch, json_out):
+    """Add or replace one variable.
+
+    \b
+    gapp env set MAX_USERS 25
+    gapp env set SIGNING_KEY --secret --generate
+    gapp env set AUTH_ISSUER --secret auth-issuer
+    gapp env set APP_USERS_PATH --data-path users
+    """
+    _definition_command(json_out, f"Nothing to change: {name} is already that.",
+                        lambda d: d.env_set, name, value, secret=secret, generate=generate,
+                        data_path=data_path, deployment=deployment)
+
+
+@env_group.command("unset")
+@click.argument("name")
+@_DEPLOYMENT
+@_NO_WATCH
+@_JSON
+def env_unset_cmd(name, deployment, no_watch, json_out):
+    """Remove one variable. A secret it read is left in place."""
+    _definition_command(json_out, f"Nothing to change: {name} is not set.",
+                        lambda d: d.env_unset, name, deployment=deployment)
+
+
+@main.command("apply")
+@click.argument("file", type=click.Path(dir_okay=False))
+@_DEPLOYMENT
+@_NO_WATCH
+@_JSON
+def apply_cmd(file, deployment, no_watch, json_out):
+    """Replace a deployment's settings with a file's, all at once.
+
+    \b
+    FILE holds the settings and nothing else, for example:
+      public: true
+      domain: app.example.com
+      env:
+        MAX_USERS: {value: "25"}
+    A setting the file leaves out goes back to its default.
+    """
+    from gapp.admin.sdk import definitions
+    path = Path(file)
+    if not path.is_file():
+        _refused(definitions.Refused(f"{file} is not a file."), json_out)
+    _definition_command(json_out, "Nothing to change: the settings are already the file's.",
+                        lambda d: d.apply, path.read_text(), deployment=deployment, source=file)
+
+
 @main.group("manifest")
 @click.option("--file", "manifest_file", default=None, metavar="FILE",
               help="Show or change FILE, a gapp.yaml-shaped file such as a deployment's fleet-side manifest "

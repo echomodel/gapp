@@ -41,4 +41,6 @@ same reason.
 
 Built so far: where the fleet lives and reading it there
 (`gapp/admin/sdk/fleetstore.py`), the rules for which deployment a command
-means (`gapp/admin/sdk/lookup.py`), and the ref as part of a definition.
+means (`gapp/admin/sdk/lookup.py`), the ref as part of a definition, the
+test that holds the CLI to the page, the entry file, and the definition
+and settings commands on a local fleet (`gapp/admin/sdk/definitions.py`).
