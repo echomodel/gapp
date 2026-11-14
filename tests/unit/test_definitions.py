@@ -323,13 +323,6 @@ def test_a_change_to_one_definition_leaves_a_newer_one_beside_it_untouched(my_ap
 # --- a GitHub fleet ---
 
 
-def test_on_a_github_fleet_the_commands_say_they_do_not_work_there_yet(monkeypatch):
-    monkeypatch.setattr(fleetstore, "get_fleet_repo", lambda: ("acme/fleet", "profile"))
-    with pytest.raises(Refused) as caught:
-        definitions.add("my-app", project="my-project")
-    assert "does not work on a GitHub fleet yet" in caught.value.message
-
-
 # --- the commands ---
 
 

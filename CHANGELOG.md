@@ -58,6 +58,17 @@ Breaking changes:
   All take `--json`, and a refusal exits 2. MCP: `gapp_secret_list` and
   `gapp_secret_get` are now `gapp_secrets_list` and `gapp_secrets_get`,
   and `gapp_secret_set` is gone: no tool takes a secret's value.
+- A fleet can be kept in a git repo: `gapp fleet use <owner>/<repo>`
+  (MCP: `gapp_fleet_use`), and `gapp fleet use local` to bring it back.
+  It is one file, `gapp.yaml` at the repo's root, and every change to the
+  fleet is one commit to it, pushed with whatever git access the machine
+  has. Nothing else is put in the repo and no CI is involved. The repo can
+  be on any git host (`host/path`, or a git address). The fleet is carried
+  across when the place it is going holds none; when both hold
+  deployments the move is refused. `--create` makes the repo on GitHub
+  first. Every fleet command, `deploy`, `status` and `secrets` included,
+  now works on a fleet kept either way. The earlier `gapp ci` commands
+  still read `gapp/deployments.yaml` and are not connected to this yet.
 - Releasing no longer needs a tag pushed by hand: a workflow tags the
   commit and publishes the GitHub release when the version changes on
   `main`.

@@ -605,6 +605,26 @@ def gapp_fleet() -> dict:
     return describe_fleet()
 
 
+@_tool()
+def gapp_fleet_use(target: str, create: bool = False) -> dict:
+    """Move the fleet to a git repo, or back to this machine. `target` is
+    `owner/repo` on GitHub, `host/path` on another git host, a git address,
+    or "local". In a repo the fleet is one file, `gapp.yaml` at its root,
+    and each later change is one commit to it; nothing else is put in the
+    repo and no CI is set up. The fleet is carried across when the place
+    it is going holds none; when both hold deployments the move is refused.
+    `create` makes the repo on GitHub first, private, when it is not there.
+    """
+    from gapp.admin.sdk import fleetstore
+    from gapp.admin.sdk.fleet import FleetRefusal
+    try:
+        return fleetstore.use(target, create=create)
+    except FleetRefusal as e:
+        return {"refused": True, "message": e.message}
+    except fleetstore.FleetUnavailable as e:
+        return {"refused": True, "message": str(e)}
+
+
 # --- definitions and their settings (the fleet; no cloud) ---
 
 
