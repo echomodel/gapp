@@ -24,6 +24,8 @@ Breaking changes:
   on this machine, one per profile; with one set, it is that repo. Nothing
   reads the local file yet: the root commands still find deployments by
   their labels.
+  The local file is `gapp.yaml`, and starts with `format: 1`: a gapp that
+  does not know a file's format stops there and changes nothing.
 - Releasing no longer needs a tag pushed by hand: a workflow tags the
   commit and publishes the GitHub release when the version changes on
   `main`.

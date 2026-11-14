@@ -23,7 +23,7 @@ def local_machine(monkeypatch, tmp_path):
 def test_with_no_fleet_repo_set_the_fleet_is_a_file_under_the_config_dir_for_the_profile(local_machine):
     where = fleetstore.location()
     assert where.kind == "local" and where.repo is None
-    assert where.path == local_machine / "fleets" / "default" / "deployments.yaml"
+    assert where.path == local_machine / "fleets" / "default" / "gapp.yaml"
 
 
 def test_a_local_fleet_with_no_file_yet_is_empty_and_reading_creates_nothing(local_machine):
@@ -40,11 +40,11 @@ def test_each_local_change_keeps_the_copy_it_replaced(local_machine):
     fleetstore.write_local({"my-app": ENTRY})
     backup = fleetstore.write_local({"my-app": ENTRY, "other": {**ENTRY, "id": "other"}})
     where = fleetstore.location()
-    assert backup == where.backup_path and backup.name == "deployments.yaml.bak"
-    assert fleetstore.fleet.parse(backup.read_text()) == {"my-app": ENTRY}
+    assert backup == where.backup_path and backup.name == "gapp.yaml.bak"
+    assert fleetstore.entryfile.parse(backup.read_text())["deployments"] == {"my-app": ENTRY}
     assert sorted(fleetstore.read()) == ["my-app", "other"]
     fleetstore.write_local({})
-    assert sorted(fleetstore.fleet.parse(backup.read_text())) == ["my-app", "other"]
+    assert sorted(fleetstore.entryfile.parse(backup.read_text())["deployments"]) == ["my-app", "other"]
 
 
 def test_each_profile_has_its_own_local_fleet(local_machine):
@@ -53,7 +53,7 @@ def test_each_profile_has_its_own_local_fleet(local_machine):
     cfg["profiles"]["work"] = {"discovery": "on"}
     cfg["active"] = "work"
     config_mod.save_config(cfg)
-    assert fleetstore.location().path == local_machine / "fleets" / "work" / "deployments.yaml"
+    assert fleetstore.location().path == local_machine / "fleets" / "work" / "gapp.yaml"
     assert fleetstore.read() == {}
 
 
