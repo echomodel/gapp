@@ -2,11 +2,12 @@ name: Tag release
 
 # When the version in gapp/__init__.py changes on main, tag that commit
 # `v<version>` and publish a GitHub release for it. A release then needs
-# only its pull request merged: nobody types or pushes a tag.
+# only its pull request merged: nobody types or pushes a tag. `one-fleet`
+# is listed because its release candidates are cut from that branch.
 
 on:
   push:
-    branches: [main]
+    branches: [main, one-fleet]
     paths: [gapp/__init__.py]
 
 permissions:
