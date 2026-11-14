@@ -87,7 +87,7 @@ that knows both reads both.
 | `repo` | Where the code is. Absent for an app with no remote | `gapp set repo` |
 | `project` | The Google Cloud project | Never |
 | `ref` | The branch, tag or commit a deploy builds. Absent: the default branch | `gapp set ref` |
-| `gapp` | The gapp version that deploys it. Set to the installed version by `gapp add` | `gapp set gapp`, forward only |
+| `gapp` | The gapp version this definition was written by, and the one that deploys it. Never typed | `gapp upgrade` |
 | `settings` | Everything below | The settings commands |
 
 Settings:
@@ -145,6 +145,7 @@ Every command takes `--json`. Commands that start a run on GitHub take
 |---|---|
 | `gapp add [<name>] --project <p> [--repo <r>] [--ref <r>] [--id <id>]` | Defines a deployment. Touches no cloud. Refused if the name exists. Inside a clone, name and repo default to the clone's |
 | `gapp add <name> --copy-of <existing> [--project <p>] [--ref <r>]` | A second deployment of the same repo. Copies settings except `domain`. Project and ref default to the original's |
+| `gapp upgrade` | Brings one definition to the installed gapp's version, converting it if that is needed. Takes no version. Prints what changes. Refused when the definition is newer than this gapp, or older than this gapp can convert; the refusal names the gapp to install |
 | `gapp rename <old> <new>` | Changes the name only. The id and the cloud resources stay |
 | `gapp list` | Every definition: name, repo, project, ref. Says where the fleet lives |
 | `gapp show` | One definition, and the settings a deploy would use, each marked as from the definition, from `app.json`, or a default |
@@ -155,7 +156,7 @@ Each changes one definition and nothing else.
 
 | Command | Does |
 |---|---|
-| `gapp set <key> <value>` | Sets `ref`, `gapp`, `repo`, `public`, `domain`, `start`, `memory`, `cpu`, `max_instances` |
+| `gapp set <key> <value>` | Sets `ref`, `repo`, `public`, `domain`, `start`, `memory`, `cpu`, `max_instances` |
 | `gapp unset <key>` | Clears one of those. `repo`, `project` and `id` cannot be cleared |
 | `gapp apis add <api>` / `gapp apis remove <api>` | Changes the extra APIs |
 | `gapp env set <NAME> <value>` | A plain variable |
@@ -204,7 +205,7 @@ Each changes one definition and nothing else.
 One tool per command, named after it, with the same arguments. A
 deployment is always the `deployment` argument.
 
-`gapp_project_setup`, `gapp_add`, `gapp_rename`, `gapp_list`, `gapp_show`,
+`gapp_project_setup`, `gapp_add`, `gapp_upgrade`, `gapp_rename`, `gapp_list`, `gapp_show`,
 `gapp_set`, `gapp_unset`, `gapp_apis`, `gapp_env_set`, `gapp_env_unset`,
 `gapp_apply`, `gapp_deploy`, `gapp_status`, `gapp_secrets_list`,
 `gapp_secrets_set`, `gapp_secrets_get`, `gapp_ci_deploy`, `gapp_ci_status`,
@@ -238,19 +239,28 @@ No tool takes a secret's value or a path on the server's machine.
    later; it adds a command and changes none.
 6. **`app.json` in 4.0.0 or the release after.** Proposed: 4.0.0, as the
    last stage.
-7. **Which gapp deploys a deployment.** Proposed: the definition says,
-   in `gapp`. A runner installs exactly that version and deploys with it,
-   whatever is installed on the machine that asked. So a deployment keeps
-   being deployed the way it was set up until its definition changes, and
-   a gapp upgrade on a workstation changes nothing by itself. Moving a
-   deployment to a newer gapp is `gapp set gapp <version>`, then a deploy;
-   a lower version is refused. `gapp deploy` from this machine is refused
-   when the installed gapp is not the definition's, and prints that
-   command. Changes to the fleet itself (`add`, `rename`, the settings
-   commands) run with the gapp of whoever asked. There is no fleet-wide
-   version and no upgrade command. What this depends on: the way a
-   workflow starts a gapp on a runner stays the same across releases, and
-   a test holds it there.
+7. **Which gapp deploys a deployment.** Proposed: the definition records
+   the gapp version that wrote it, in `gapp`. `gapp add` writes the
+   version of the gapp that ran it. A runner installs exactly that
+   version and deploys with it, whatever is installed on the machine that
+   asked. So a gapp upgrade on a workstation changes nothing by itself.
+
+   A newer gapp can still work with an older definition, within the range
+   it supports: it can start a runner deploy, read it, and change settings
+   that the definition's version knows. A setting that version does not
+   know is refused, and so is `gapp deploy` from this machine; both print
+   `gapp upgrade`.
+
+   `gapp upgrade` is the only thing that changes the version. It takes no
+   version: the target is always the gapp running it, because that is the
+   only gapp that knows how to convert to itself. It never goes down.
+   When a definition is too old for the installed gapp, the path is to
+   install the version the refusal names, upgrade, and repeat.
+
+   Changes to the fleet itself (`add`, `rename`) run with the gapp of
+   whoever asked. There is no fleet-wide version. What this depends on:
+   the way a workflow starts a gapp on a runner stays the same across
+   releases, and a test holds it there.
 8. **The file's name and place.** It is the entry point for whatever
    gapp keeps in a repo, so its name should assume nothing about what is
    inside: not that it is a list of deployments, and not that there is one
