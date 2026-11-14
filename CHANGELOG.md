@@ -5,105 +5,82 @@ source is `gapp/__init__.py`.
 
 ## Unreleased
 
+One fleet. Every deployment is defined once, in your fleet, and every
+command works from that definition. `docs/INTERFACE.md` lists every
+command, file and MCP tool.
+
 Breaking changes:
 
-- `gapp ci deploy` and `gapp deploy` take no `--ref` (MCP: `gapp_ci_deploy`,
-  `gapp_ci_trigger` and `gapp_deploy` take no `ref`). What a deploy builds
-  is the deployment's ref, part of its definition: a branch (its tip at
-  each deploy), a tag or a commit, set with `gapp ci setup <name> --repo
-  <owner>/<repo> --project <project> --ref <ref> --update` (MCP:
-  `gapp_ci_setup(..., ref=, update=True)`); with none, the app repo's
-  default branch. A release, a rollback and trying a branch are changes to
-  the ref, and a copy keeps its source's unless one is given. `gapp deploy`
-  from a clone builds the commit the clone is on. Re-run `gapp ci init` so
-  the fleet repo's deploy workflow reads the ref from the entry: it then
-  refuses a run that asks for any other.
+- **The fleet.** A deployment's definition (its repo, project, ref, the
+  gapp version that wrote it, and its settings) is kept in your fleet: a
+  file on this machine by default, or `gapp.yaml` at the root of a git
+  repo once you choose one with `gapp fleet use <owner>/<repo>` (any git
+  host; `--create` makes it on GitHub; `gapp fleet use local` brings it
+  back). In a repo, every change is one commit, pushed with the git
+  access the machine has; no CI is involved. `gapp fleet` says where it
+  is. `gapp fleet export [<file>]` copies it out and `gapp fleet import
+  <file>` replaces it, keeping the one it replaced. The file starts with
+  `format: 1`: a gapp that does not know a file's format stops there and
+  changes nothing.
+- **Defining deployments.** `gapp add` (with `--copy-of`), `gapp rename`,
+  `gapp list`, `gapp show`, `gapp set`, `gapp unset`, `gapp apis
+  add|remove`, `gapp env set|unset` and `gapp apply <file> [--dry-run]`.
+  None touches the cloud. Each names its deployment with `--deployment`,
+  or inside a clone takes the one its remote has; a folder's name is
+  never used. A refusal changes nothing and exits 2, and every command
+  takes `--json`.
+- **`gapp.yaml` in an app's repo is no longer read**, and `gapp init`,
+  `gapp setup` and `gapp manifest` are gone. gapp reads only a repo's
+  Dockerfile or Procfile. Everything a `gapp.yaml` held is a setting of
+  the definition.
+- **Deploying.** `gapp project setup <project>` prepares a project, once.
+  `gapp deploy` builds the definition's ref from a clone of its repo,
+  checked out at that ref, and deploys with the definition's settings. It
+  takes no `--project` and no `--ref`: a release, a rollback and trying a
+  branch are `gapp set ref`. The first deploy creates the deployment's
+  bucket.
+- **gapp versions.** A definition records the gapp version that wrote it,
+  a runner installs exactly that version, and the deployment's bucket
+  records the version that last deployed it. `gapp upgrade` brings a
+  definition to the installed gapp's version and changes nothing else;
+  the next deploy applies it and needs `--upgrade`, which is refused when
+  no upgrade is pending. `gapp show`, `gapp status` and `gapp deploy
+  --dry-run` say in advance.
+- **`gapp status` and `gapp secrets list|get|set`** take their deployment
+  from the fleet. `status` reports which gapp last deployed it and
+  whether the next deploy would apply an upgrade. `secrets set` no longer
+  takes the value as an argument: it prompts, or reads stdin with
+  `--from-stdin`.
+- **`gapp ci`** is everything gapp does with GitHub Actions, and nothing
+  else in gapp needs it. It works on a fleet kept in a GitHub repo, whose
+  workflows read `gapp.yaml` there: `gapp ci init`, `gapp ci projects
+  connect <project>` (which needs `gapp project setup <project>` first),
+  `gapp ci projects list`, `gapp ci sources add|remove|list`, `gapp ci
+  deploy [--upgrade] [--no-watch]` and `gapp ci status [--live]`. A run
+  is started with the deployment's name and nothing else. `gapp ci`
+  never changes the fleet. Gone: `gapp ci setup`, `gapp ci project
+  setup`, `gapp ci rename`, `gapp ci list`, `gapp ci manifest`, the
+  register workflow and `gapp/deployments.yaml`. Run `gapp ci init` again
+  to install the two workflows this gapp uses.
+- **`gapp config`** is `gapp config profile list|use|add|remove|rename`
+  and `gapp config account [<email>]`. A profile is a separate fleet and
+  a separate Google Cloud login on one machine. `gapp config discovery`
+  is gone: nothing searches cloud projects for deployments any more.
+- **MCP tools** are one per command, named after it, with the same
+  arguments (`gapp_add`, `gapp_show`, `gapp_apply`, `gapp_deploy`,
+  `gapp_status`, `gapp_fleet_use`, `gapp_ci_deploy` and the rest). Gone:
+  `gapp_init`, `gapp_setup`, `gapp_schema`, `gapp_manifest_*`,
+  `gapp_user`, `gapp_ci_setup`, `gapp_ci_project_setup`,
+  `gapp_ci_rename`, `gapp_ci_list`, `gapp_ci_manifest` and
+  `gapp_ci_trigger`. `gapp_secret_list` and `gapp_secret_get` are now
+  `gapp_secrets_list` and `gapp_secrets_get`, and no tool takes a
+  secret's value.
 
-- `gapp fleet` (MCP: `gapp_fleet`) says where your fleet lives and how
-  many deployments it holds. With no fleet repo set, the fleet is a file
-  on this machine, one per profile; with one set, it is that repo. Nothing
-  reads the local file yet: the root commands still find deployments by
-  their labels.
-  The local file is `gapp.yaml`, and starts with `format: 1`: a gapp that
-  does not know a file's format stops there and changes nothing.
-- New commands that define deployments and change their settings in a
-  fleet kept on this machine, none of which touches the cloud: `gapp add`
-  (with `--copy-of`), `gapp rename`, `gapp show`, `gapp upgrade`, `gapp
-  set`, `gapp unset`, `gapp apis add|remove`, `gapp env set|unset` and
-  `gapp apply <file>` (MCP: `gapp_add`, `gapp_rename`, `gapp_show`,
-  `gapp_upgrade`, `gapp_set`, `gapp_unset`, `gapp_apis`, `gapp_env_set`,
-  `gapp_env_unset`, `gapp_apply`). Each names its deployment with
-  `--deployment`, or inside a clone takes the one its remote has. A
-  refusal changes nothing and exits 2. A definition records the gapp
-  version that wrote it; only `gapp upgrade` moves it. Nothing deploys
-  from these definitions yet, and they do not work on a GitHub fleet yet.
-- `gapp ci` works on the one fleet. The fleet repo is the repo the fleet
-  is kept in (`gapp fleet use <owner>/<repo>`), and its workflows read
-  `gapp.yaml` there. The commands are `gapp ci init`, `gapp ci projects
-  connect <project>`, `gapp ci projects list`, `gapp ci sources
-  add|remove|list`, `gapp ci deploy [--upgrade] [--no-watch]` and `gapp
-  ci status [--live]` (MCP: `gapp_ci_init`, `gapp_ci_projects`,
-  `gapp_ci_sources`, `gapp_ci_deploy`, `gapp_ci_status`). A run is started
-  with the deployment's name and nothing else: it checks out the
-  definition's ref, installs the gapp version the definition names, and
-  runs the deploy `gapp deploy` runs. `gapp ci` never changes the fleet;
-  a definition is changed with `gapp add`, `gapp set` and the other
-  fleet commands, on a fleet in a repo as on a local one.
-  Removed: `gapp ci setup`, `gapp ci project setup`, `gapp ci rename`,
-  `gapp ci list`, `gapp ci manifest` and `gapp ci init <repo>` (MCP:
-  `gapp_ci_setup`, `gapp_ci_project_setup`, `gapp_ci_rename`,
-  `gapp_ci_list`, `gapp_ci_manifest`, `gapp_ci_trigger`), and the fleet
-  repo's register workflow and `gapp/deployments.yaml`. Run `gapp ci
-  init` again to install the two workflows this gapp uses.
-- `gapp ci projects connect <project>` lets the fleet repo's runners sign
-  in to a project and nothing more. Preparing a project for deployments
-  is `gapp project setup <project>`, which it requires first.
-- `gapp apply <file> --dry-run` prints each setting that would change,
-  before and after, and changes nothing (MCP: `gapp_apply(...,
-  dry_run=True)`). `gapp show --json` (MCP: `gapp_show`) gives the
-  definition's settings object under `settings`, as `gapp apply` takes
-  it; the list of settings a deploy would use, each with where it comes
-  from, is under `effective`.
-- `gapp deploy` deploys a deployment from its definition in a fleet kept
-  on this machine, and reads nothing from the repo but its Dockerfile or
-  Procfile. Run it in a clone of the definition's repo, checked out at
-  what the definition builds; `--deployment` names it, or the clone's
-  remote does. It takes no `--project` and no `--ref`. The first deploy
-  creates the deployment's bucket. The bucket's `gapp-version` label now
-  holds the full version of the gapp that last deployed it, and a deploy
-  that would apply a gapp upgrade is refused without `--upgrade`, which is
-  refused when none is pending; `--dry-run` says which. `gapp list` lists
-  the fleet's definitions, with no search of cloud projects. New: `gapp
-  project setup <project>`, once per project, which sets up nothing about
-  CI. (MCP: `gapp_deploy`, `gapp_list`, `gapp_project_setup`.)
-- `gapp status` and `gapp secrets list|get|set` take their deployment from
-  the fleet: `--deployment`, or the one the clone's remote has. `status`
-  no longer takes a name or `--project`, and reports which gapp last
-  deployed it and whether the next deploy would apply an upgrade.
-  `secrets list` no longer takes a name. `secrets set` no longer takes the
-  value as an argument: it prompts, or reads stdin with `--from-stdin`.
-  All take `--json`, and a refusal exits 2. MCP: `gapp_secret_list` and
-  `gapp_secret_get` are now `gapp_secrets_list` and `gapp_secrets_get`,
-  and `gapp_secret_set` is gone: no tool takes a secret's value.
-- A fleet can be kept in a git repo: `gapp fleet use <owner>/<repo>`
-  (MCP: `gapp_fleet_use`), and `gapp fleet use local` to bring it back.
-  It is one file, `gapp.yaml` at the repo's root, and every change to the
-  fleet is one commit to it, pushed with whatever git access the machine
-  has. Nothing else is put in the repo and no CI is involved. The repo can
-  be on any git host (`host/path`, or a git address). The fleet is carried
-  across when the place it is going holds none; when both hold
-  deployments the move is refused. `--create` makes the repo on GitHub
-  first. Every fleet command, `deploy`, `status` and `secrets` included,
-  now works on a fleet kept either way. The earlier `gapp ci` commands
-  still read `gapp/deployments.yaml` and are not connected to this yet.
+Other changes:
+
 - Releasing no longer needs a tag pushed by hand: a workflow tags the
   commit and publishes the GitHub release when the version changes on
   `main`.
-- The advice `gapp secrets list` prints for an orphan or a conflicting
-  secret names the `gapp manifest env set` command where it said to edit
-  gapp.yaml by hand, and no longer says the declaration is missing "in
-  gapp.yaml": with `--deployment` it can come from the fleet's settings,
-  and the advice then says where either can be changed.
 
 ## 4.0.0rc13 (pre-release of 4.0.0)
 

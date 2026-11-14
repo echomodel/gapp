@@ -3,8 +3,8 @@
 A command names its deployment outright, or runs in a clone and means the
 deployment of that clone's repo. Two rules hold throughout:
 
-- A folder's name may suggest, never select. It is only ever the proposed
-  name of a deployment that does not exist yet.
+- A folder's name is never used: not to pick a deployment, and not to
+  name a new one.
 - A remote names a repo, not a deployment. The remote finds candidates and
   the fleet decides: one match is used, several are refused.
 
@@ -108,7 +108,7 @@ class Found:
     meant; otherwise `proposed` is the name a new deployment would get."""
     name: str | None = None
     entry: dict | None = None
-    how: str | None = None              # "named", "remote", "gapp.yaml"
+    how: str | None = None              # "named" or "remote"
     proposed: str | None = None
     repo: str | None = None             # the clone's repo, as a definition would record it
     candidates: list[str] = field(default_factory=list)
@@ -124,18 +124,12 @@ def _command_lines(doc: dict, names: list[str], command: str) -> str:
 
 
 def find(doc: dict, *, name: str | None = None, remotes: dict[str, Remote] | None = None,
-         manifest_name: str | None = None, folder_name: str | None = None, project: str | None = None,
          command: str = "gapp deploy") -> Found:
     """The deployment a command means.
 
     name: given outright. It must be a deployment of the fleet.
-    remotes: the clone's remotes when the command runs in one.
-    manifest_name: `name:` from the clone's gapp.yaml. Used only when the
-        clone has no remote, and then it matches only a definition that has
-        no repo.
-    folder_name: the clone's folder. Only ever the proposed name of a new
-        deployment in a clone with no remote and no `name:`.
-    project: narrows a repo's deployments to those on this project.
+    remotes: the clone's remotes when the command runs in one. With none,
+        nothing is found: a folder's name never picks a deployment.
     command: the command being run, for the lines printed when several match.
     """
     if name:
@@ -145,17 +139,9 @@ def find(doc: dict, *, name: str | None = None, remotes: dict[str, Remote] | Non
 
     remote = pick_remote(remotes or {})
     if remote is None:
-        return _find_without_remote(doc, manifest_name, folder_name)
+        return Found()
 
     names = sorted(n for n, entry in doc.items() if _same_repo(entry.get("repo"), remote))
-    if project:
-        on_project = [n for n in names if doc[n].get("project") == project]
-        if names and not on_project:
-            raise LookupRefusal(
-                f"{remote.repo} has no deployment on {project}. Its deployments:\n"
-                f"{_command_lines(doc, names, command)}"
-            )
-        names = on_project
     if len(names) == 1:
         return Found(name=names[0], entry=doc[names[0]], how="remote", repo=remote.repo)
     if names:
@@ -171,27 +157,6 @@ def find(doc: dict, *, name: str | None = None, remotes: dict[str, Remote] | Non
             f"(on {taken.get('project')}). Give this repo's deployment another name."
         )
     return Found(proposed=proposed, repo=remote.repo)
-
-
-def _find_without_remote(doc: dict, manifest_name: str | None, folder_name: str | None) -> Found:
-    if manifest_name:
-        entry = doc.get(manifest_name)
-        if entry is None:
-            return Found(proposed=manifest_name)
-        if entry.get("repo"):
-            raise LookupRefusal(
-                f"This clone has no remote, and gapp.yaml names '{manifest_name}', which is {entry['repo']}'s "
-                f"deployment. A deployment tied to a repo is only reached from a clone of that repo, or by "
-                f"naming it on the command."
-            )
-        return Found(name=manifest_name, entry=entry, how="gapp.yaml")
-    without_repo = sorted(n for n, entry in doc.items() if not entry.get("repo"))
-    if without_repo:
-        raise LookupRefusal(
-            "This clone has no remote and its gapp.yaml has no `name:`, so gapp cannot tell which deployment "
-            "it is. Name one on the command. Deployments with no repo: " + ", ".join(without_repo) + "."
-        )
-    return Found(proposed=folder_name)
 
 
 def _not_a_deployment(doc: dict, name: str) -> str:

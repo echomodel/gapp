@@ -27,19 +27,6 @@ class DummyCloudProvider(CloudProvider):
         self.services = {}  # (project_id, service_name) -> labels
         self.label_writes = []  # ("project" | "bucket", target, labels) in call order
 
-    def host(self, project_id: str, deployment: str, version: str = "4", service: bool = True,
-             hosted: bool = True) -> str:
-        """Test setup: a deployment as gapp leaves it, on a project marked
-        gapp=hosted (unless hosted=False). Returns the bucket name."""
-        labels = self.project_labels.setdefault(project_id, {})
-        if hosted:
-            labels["gapp"] = "hosted"
-        dep_labels = {"gapp-deployment": deployment, "gapp-version": version}
-        bucket = f"gapp-{deployment}-{project_id}".lower()
-        self.buckets[bucket] = {"project": project_id, "labels": dict(dep_labels)}
-        if service:
-            self.services[(project_id, deployment)] = dict(dep_labels)
-        return bucket
 
     # -- GCP Foundation --
 
@@ -62,41 +49,6 @@ class DummyCloudProvider(CloudProvider):
         self.label_writes.append(("project", project_id, dict(labels)))
         self.project_labels[project_id] = labels
 
-    def list_projects(self, filter_query: Optional[str] = None, limit: Optional[int] = None) -> List[Dict]:
-        """Mimic the subset of gcloud filter syntax gapp uses.
-
-        Supported forms:
-          labels.<key>=<value>     — exact key/value match
-          labels:<key>             — key exists (any value)
-          labels:<prefix>*         — at least one key starts with prefix
-        """
-        def matches(labels: Dict[str, str]) -> bool:
-            if not filter_query:
-                return True
-            q = filter_query.strip()
-            # labels.<key>=<value>
-            if q.startswith("labels.") and "=" in q:
-                key, _, val = q[len("labels."):].partition("=")
-                val = val.strip("'\"")
-                return labels.get(key) == val
-            # labels:<rest>
-            if q.startswith("labels:"):
-                rest = q[len("labels:"):]
-                if rest.endswith("*"):
-                    prefix = rest[:-1]
-                    return any(k.startswith(prefix) for k in labels.keys())
-                # exact key existence
-                return rest in labels
-            return True
-
-        results = []
-        for pid, labels in self.project_labels.items():
-            if not matches(labels):
-                continue
-            results.append({"projectId": pid, "labels": labels})
-            if limit and len(results) >= limit:
-                break
-        return results
 
     # -- Deployment labels on buckets and services --
 
@@ -109,9 +61,6 @@ class DummyCloudProvider(CloudProvider):
         meta = self.buckets.setdefault(bucket_name, {"project": project_id, "labels": {}})
         meta.setdefault("labels", {}).update(labels)
 
-    def get_service_labels(self, project_id: str, region: str, service_name: str) -> Optional[Dict[str, str]]:
-        labels = self.services.get((project_id, service_name))
-        return dict(labels) if labels is not None else None
 
     # -- Custom domains --
 

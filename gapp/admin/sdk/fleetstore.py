@@ -68,7 +68,7 @@ def location() -> Location:
     named = os.environ.get(FLEET_FILE_ENV)
     if named:
         return Location("local", path=Path(named))
-    repo, _ = get_fleet_repo()
+    repo = get_fleet_repo()
     if repo:
         return Location("github", repo=repo)
     return Location("local", path=local_path())
@@ -103,14 +103,16 @@ def _local_unreadable(where: Location, why: str) -> str:
     return text
 
 
-def write(doc: dict, where: Location | None = None, message: str = "gapp: change the fleet") -> Path | None:
+def write(doc: dict, where: Location | None = None, message: str = "gapp: change the fleet",
+          other_keys: dict | None = None) -> Path | None:
     """Replace the fleet's deployments with `doc`.
 
     A local fleet: the file is replaced, and the one it replaces is kept
     beside it as the backup, whose path is returned (None for the first
     write). A fleet in a repo: one commit with `message`, pushed.
-    Top-level keys this gapp does not know are kept either way, and a file
-    this gapp cannot read is never written over.
+    Top-level keys this gapp does not know are kept either way (or, for
+    an import, replaced by `other_keys`), and a file this gapp cannot read
+    is never written over.
     """
     where = where or location()
     if not isinstance(doc, dict) or not all(isinstance(entry, dict) for entry in doc.values()):
@@ -118,7 +120,7 @@ def write(doc: dict, where: Location | None = None, message: str = "gapp: change
     if where.kind != "local":
         try:
             whole = entryfile.parse(fleetrepo.read_text(where.repo), f"{entryfile.FILE_NAME} in {where.repo}")
-            whole["deployments"] = doc
+            whole = _with(whole, doc, other_keys)
             fleetrepo.write_text(where.repo, entryfile.dump(whole), message)
         except EntryFileRefusal as e:
             raise FleetUnavailable(e.message) from e
@@ -131,8 +133,7 @@ def write(doc: dict, where: Location | None = None, message: str = "gapp: change
             whole = entryfile.parse(where.path.read_text(), f"Your fleet file {where.path}")
         except EntryFileRefusal as e:                    # never write over a file this gapp cannot read
             raise FleetUnavailable(_local_unreadable(where, e.message)) from e
-    whole["deployments"] = doc
-    text = entryfile.dump(whole)
+    text = entryfile.dump(_with(whole, doc, other_keys))
     where.path.parent.mkdir(parents=True, exist_ok=True)
     backup = None
     if where.path.exists():
@@ -149,7 +150,68 @@ def write(doc: dict, where: Location | None = None, message: str = "gapp: change
     return backup
 
 
-write_local = write
+def _with(whole: dict, deployments: dict, other_keys: dict | None) -> dict:
+    if other_keys is not None:
+        whole = {"format": whole.get("format", entryfile.FORMAT), **other_keys}
+    whole["deployments"] = deployments
+    return whole
+
+
+# --- copying the fleet out and in ---
+
+
+def export_text(where: Location | None = None) -> str:
+    """The whole fleet as the text of an entry file."""
+    where = where or location()
+    try:
+        if where.kind == "local":
+            text = where.path.read_text() if where.path.exists() else None
+            return entryfile.dump(entryfile.parse(text, f"Your fleet file {where.path}"))
+        return entryfile.dump(entryfile.parse(fleetrepo.read_text(where.repo), f"{entryfile.FILE_NAME} in {where.repo}"))
+    except EntryFileRefusal as e:
+        raise FleetUnavailable(e.message) from e
+    except (OSError, fleetrepo.FleetRepoError) as e:
+        raise FleetUnavailable(f"Your fleet could not be read: {e}") from e
+
+
+def import_text(text: str, source: str = "The file") -> dict:
+    """Replace the fleet with the one in `text`, all of it or none of it.
+
+    Every definition is checked first. The fleet it replaces is kept: a
+    local fleet's file as the backup beside it, a fleet in a repo as the
+    commit before this one.
+    """
+    from gapp.admin.sdk import fleet, settings as settings_mod
+    if not (text or "").strip():
+        raise FleetRefusal("bad-file", f"{source} is empty, so nothing was imported.")
+    try:
+        whole = entryfile.parse(text, source)
+    except EntryFileRefusal as e:
+        raise FleetRefusal(e.code, e.message) from e
+    deployments = whole["deployments"]
+    ids = {}
+    for name, definition in deployments.items():
+        try:
+            fleet.validate_name(str(name))
+            for key in ("id", "project", "gapp"):
+                if not definition.get(key):
+                    raise FleetRefusal("bad-file", f"it has no '{key}'.")
+            fleet.validate_project(str(definition["project"]))
+            entryfile.version_key(definition["gapp"])
+            settings_mod.validate(definition.get("settings"))
+        except (FleetRefusal, EntryFileRefusal, settings_mod.SettingsRefusal) as e:
+            raise FleetRefusal("bad-file", f"{source}: '{name}' cannot be imported: {e.message} Nothing was imported.") from e
+        other = ids.setdefault((definition["project"], definition["id"]), name)
+        if other != name:
+            raise FleetRefusal("bad-file", (
+                f"{source}: '{name}' and '{other}' have the same id, '{definition['id']}', on {definition['project']}, "
+                f"so they would be one deployment. Nothing was imported."))
+    where = location()
+    before = read(where)
+    other_keys = {k: v for k, v in whole.items() if k not in ("format", "deployments")}
+    backup = write(deployments, where, "gapp: import the fleet", other_keys=other_keys)
+    return {"where": where.describe(), "deployments": len(deployments), "replaced": len(before),
+            "backup": str(backup) if backup else None, "kind": where.kind}
 
 
 def use(target: str, *, create: bool = False) -> dict:
@@ -179,7 +241,7 @@ def use(target: str, *, create: bool = False) -> dict:
         ))
     if here:
         write(here, then, "gapp: the fleet moves here")
-    set_fleet_repo(then.repo if then.kind == "github" else None, "fleet use")
+    set_fleet_repo(then.repo if then.kind == "github" else None)
     if here and now.kind == "local" and now.path.exists():
         os.replace(now.path, now.backup_path)            # the fleet is in one place; keep the old file as a backup
     return {"moved": True, "where": then.describe(), "deployments": len(here or there), "created": created,

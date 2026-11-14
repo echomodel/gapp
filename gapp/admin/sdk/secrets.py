@@ -15,7 +15,7 @@ import subprocess
 from pathlib import Path
 
 from gapp.admin.sdk.cloud.base import on_ci_runner
-from gapp.admin.sdk.manifest import get_env_vars, load_manifest
+from gapp.admin.sdk.manifest import get_env_vars
 from gapp.admin.sdk.util import run_gcloud
 
 GAPP_SOLUTION_LABEL = "gapp-solution"
@@ -32,7 +32,7 @@ def set_secret(name: str, value: str, deployment: str | None = None) -> dict:
     resolved = _find_secret(name, deployment)
     project_id = resolved["project_id"]
     if not project_id:
-        raise RuntimeError("No GCP project attached. Run 'gapp setup --project <project-id>' first.")
+        raise RuntimeError("The deployment's definition names no project.")
 
     secret_id = resolved["secret_id"]
     solution_name = resolved["solution"]
@@ -343,7 +343,7 @@ def validate_declared_secrets(project_id: str, solution_name: str, manifest: dic
             lines.append(f"    Status: labeled for solution '{p['owner']}', not '{solution_name}'")
             lines.append(
                 f"    Resolve: give the secret another name "
-                f"(gapp manifest env set <ENV_VAR> --secret <new-name>), or if '{p['owner']}' is gone, "
+                f"(gapp env set <ENV_VAR> --secret <new-name>), or if '{p['owner']}' is gone, "
                 f"re-label: gcloud secrets update {p['secret_id']} "
                 f"--update-labels={GAPP_SOLUTION_LABEL}={solution_name} --project={project_id}"
             )
@@ -419,7 +419,7 @@ def get_secret(name: str, plaintext: bool = False, deployment: str | None = None
     resolved = _find_secret(name, deployment)
     project_id = resolved["project_id"]
     if not project_id:
-        raise RuntimeError("No GCP project attached. Run 'gapp setup --project <project-id>' first.")
+        raise RuntimeError("The deployment's definition names no project.")
 
     secret_id = resolved["secret_id"]
     value = _read_secret_version(project_id, secret_id)

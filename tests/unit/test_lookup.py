@@ -89,47 +89,14 @@ def test_several_deployments_of_one_repo_are_refused_with_the_command_for_each()
         "  gapp secrets list --deployment my-app-test    (ME/My-App on test-proj)")
 
 
-def test_a_project_narrows_several_to_the_one_on_it():
-    doc = {**FLEET, "my-app-test": {"id": "my-app", "repo": "me/my-app", "project": "test-proj"}}
-    assert find(doc, remotes={"origin": APP}, project="test-proj").name == "my-app-test"
-
-
-def test_a_project_the_repo_is_not_on_is_refused_and_never_treated_as_new():
-    with pytest.raises(LookupRefusal) as exc:
-        find(FLEET, remotes={"origin": APP}, project="elsewhere")
-    assert str(exc.value).startswith("me/my-app has no deployment on elsewhere. Its deployments:\n  gapp deploy my-app")
-
-
 def test_a_repo_with_no_deployment_is_new_and_takes_its_repo_name():
     found = find(FLEET, remotes={"origin": Remote("github.com", "me/fresh")})
     assert found.is_new and found.proposed == "fresh" and found.repo == "me/fresh"
 
 
-def test_a_clone_with_no_remote_is_matched_by_gapp_yaml_name_only_to_a_definition_with_no_repo():
-    doc = {**FLEET, "scratch": {"id": "scratch", "project": "prod-proj"}}
-    found = find(doc, manifest_name="scratch", folder_name="whatever")
-    assert found.name == "scratch" and found.how == "gapp.yaml"
-
-
-def test_a_name_alone_never_reaches_a_deployment_tied_to_a_repo():
-    with pytest.raises(LookupRefusal) as exc:
-        find(FLEET, manifest_name="my-app", folder_name="my-app")
-    assert "which is me/my-app's deployment" in str(exc.value)
-
-
-def test_a_folders_name_never_selects_an_existing_deployment():
-    doc = {**FLEET, "scratch": {"id": "scratch", "project": "prod-proj"}}
-    with pytest.raises(LookupRefusal) as exc:
-        find(doc, folder_name="scratch")
-    assert "cannot tell which deployment it is" in str(exc.value) and "Deployments with no repo: scratch." in str(exc.value)
-    with pytest.raises(LookupRefusal):
-        find(doc, folder_name="my-app")
-
-
-def test_with_no_remote_and_nothing_to_confuse_it_with_the_folder_only_proposes_a_name():
-    found = find(FLEET, folder_name="experiment")
-    assert found.is_new and found.proposed == "experiment" and found.entry is None
-    assert find(FLEET, manifest_name="brand-new", folder_name="experiment").proposed == "brand-new"
+def test_with_no_remote_nothing_is_found_and_no_name_is_proposed():
+    found = find(FLEET)
+    assert found.is_new and found.proposed is None and found.entry is None
 
 
 def test_clone_remotes_reads_the_fetch_urls_of_a_real_clone(tmp_path):

@@ -81,15 +81,6 @@ class CloudProvider(ABC):
         """Replace or update labels on a GCP project."""
         pass
 
-    @abstractmethod
-    def list_projects(self, filter_query: Optional[str] = None, limit: Optional[int] = None) -> List[Dict]:
-        """Find projects matching a filter.
-
-        Returns a list of dicts with 'projectId' and 'labels' keys. An
-        empty list means no project matched; a failed listing raises
-        CloudAccessError instead.
-        """
-        pass
 
     # -- Deployment labels on buckets and services --
 
@@ -104,11 +95,6 @@ class CloudProvider(ABC):
         """Add or update the given labels on a bucket, keeping its others."""
         pass
 
-    @abstractmethod
-    def get_service_labels(self, project_id: str, region: str, service_name: str) -> Optional[Dict[str, str]]:
-        """A Cloud Run service's labels, or None when the service does not exist.
-        Any other failure raises CloudAccessError."""
-        pass
 
     # -- Custom domains --
 

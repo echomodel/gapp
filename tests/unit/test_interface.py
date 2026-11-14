@@ -1,14 +1,9 @@
 """The real CLI and MCP server against the agreed interface.
 
-`docs/interface.yaml` lists every command, argument, option and MCP tool
-of 4.0.0, and `docs/INTERFACE.md` says the same for people. These tests
-hold the three together.
-
-While 4.0.0 is being built the CLI is not there yet. PENDING, LEAVING and
-DIFFERENT below say exactly how far off it is. They are compared for
-equality, so they can only be changed on purpose: building a command
-means deleting its line here, and nothing can be added to the CLI without
-adding it to the page first. When all five sets are empty, delete them.
+`docs/interface.yaml` lists every command, argument, option and MCP tool,
+and `docs/INTERFACE.md` says the same for people. These tests hold the
+three together: nothing can be added to the CLI or the MCP server without
+adding it to the page first, and nothing on the page can go missing.
 """
 
 import asyncio
@@ -23,37 +18,6 @@ from gapp.admin.mcp import server
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = yaml.safe_load((ROOT / "docs" / "interface.yaml").read_text())
 PAGE = (ROOT / "docs" / "INTERFACE.md").read_text()
-
-# In the page, not built yet.
-PENDING = {
-    "fleet export", "fleet import",
-    "config profile list", "config profile use", "config profile add",
-    "config profile remove", "config profile rename",
-}
-
-# Built, not in the page: to be removed.
-LEAVING = {
-    "setup", "init",
-    "manifest show", "manifest set", "manifest unset", "manifest env set",
-    "manifest env unset", "manifest example", "manifest schema",
-    "config", "config profile", "config discovery",
-}
-
-# In both, but the arguments or options are not the page's yet.
-DIFFERENT = {
-    "config account",
-}
-
-MCP_PENDING = {
-    "gapp_fleet_export", "gapp_fleet_import",
-}
-
-MCP_LEAVING = {
-    "gapp_schema", "gapp_manifest_example", "gapp_manifest_show",
-    "gapp_manifest_set", "gapp_manifest_unset", "gapp_manifest_env_set",
-    "gapp_manifest_env_unset", "gapp_user", "gapp_init", "gapp_setup",
-}
-
 
 def _wanted(entry: dict) -> tuple:
     """A spec entry as (arguments, options), in the form `_built` gives."""
@@ -102,50 +66,26 @@ def _mcp_tools() -> set:
     return {t.name for t in asyncio.run(server.mcp.list_tools())}
 
 
-def test_every_page_command_is_built_or_listed_as_pending():
+def test_every_page_command_is_built():
     missing = set(SPEC["commands"]) - set(_built())
-    assert missing == PENDING, (
-        "Commands in docs/interface.yaml that the CLI lacks differ from PENDING.\n"
-        f"  built since (delete from PENDING): {sorted(PENDING - missing)}\n"
-        f"  missing and not listed: {sorted(missing - PENDING)}"
-    )
+    assert not missing, f"In docs/interface.yaml but not in the CLI: {sorted(missing)}"
 
 
 def test_the_cli_has_no_command_the_page_lacks():
     extra = set(_built()) - set(SPEC["commands"])
-    assert extra == LEAVING, (
-        "Commands the CLI has that docs/interface.yaml lacks differ from LEAVING.\n"
-        f"  removed since (delete from LEAVING): {sorted(LEAVING - extra)}\n"
-        f"  new and not in the page (add it to the page first): {sorted(extra - LEAVING)}"
-    )
+    assert not extra, f"In the CLI but not in docs/interface.yaml (add it to the page first): {sorted(extra)}"
 
 
-def test_shared_commands_take_the_pages_arguments_and_options():
+def test_commands_take_the_pages_arguments_and_options():
     built = _built()
-    off = {
-        name for name, entry in SPEC["commands"].items()
-        if name in built and built[name] != _wanted(entry)
-    }
-    detail = "\n".join(
-        f"  {n}: page {_wanted(SPEC['commands'][n])}, built {built[n]}"
-        for n in sorted(off ^ DIFFERENT) if n in built
-    )
-    assert off == DIFFERENT, (
-        "Commands whose arguments or options differ from the page are not the "
-        f"ones in DIFFERENT.\n{detail}"
-    )
+    off = [f"{name}: page {_wanted(entry)}, built {built[name]}"
+           for name, entry in SPEC["commands"].items() if name in built and built[name] != _wanted(entry)]
+    assert not off, "Arguments or options differ from the page:\n  " + "\n  ".join(off)
 
 
 def test_mcp_tools_are_the_pages():
     wanted, built = set(SPEC["mcp_tools"]), _mcp_tools()
-    assert wanted - built == MCP_PENDING, (
-        f"built since: {sorted(MCP_PENDING - (wanted - built))}; "
-        f"missing and not listed: {sorted((wanted - built) - MCP_PENDING)}"
-    )
-    assert built - wanted == MCP_LEAVING, (
-        f"removed since: {sorted(MCP_LEAVING - (built - wanted))}; "
-        f"new and not in the page: {sorted((built - wanted) - MCP_LEAVING)}"
-    )
+    assert wanted == built, f"missing: {sorted(wanted - built)}; not in the page: {sorted(built - wanted)}"
 
 
 def test_every_command_in_the_spec_is_in_the_page():
@@ -156,11 +96,3 @@ def test_every_command_in_the_spec_is_in_the_page():
 def test_every_tool_in_the_spec_is_in_the_page():
     absent = [t for t in SPEC["mcp_tools"] if f"`{t}`" not in PAGE]
     assert not absent, f"In docs/interface.yaml but not in INTERFACE.md: {absent}"
-
-
-def test_the_pending_lists_only_name_things_in_the_spec():
-    assert PENDING <= set(SPEC["commands"])
-    assert DIFFERENT <= set(SPEC["commands"])
-    assert MCP_PENDING <= set(SPEC["mcp_tools"])
-    assert not (LEAVING & set(SPEC["commands"]))
-    assert not (MCP_LEAVING & set(SPEC["mcp_tools"]))
