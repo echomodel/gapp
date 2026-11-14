@@ -3,6 +3,14 @@
 Notable changes to gapp. Versions are git tags (`vX.Y.Z`); the version
 source is `gapp/__init__.py`.
 
+## Unreleased
+
+- The advice `gapp secrets list` prints for an orphan or a conflicting
+  secret names the `gapp manifest env set` command where it said to edit
+  gapp.yaml by hand, and no longer says the declaration is missing "in
+  gapp.yaml": with `--deployment` it can come from the fleet's settings,
+  and the advice then says where either can be changed.
+
 ## 4.0.0rc13 (pre-release of 4.0.0)
 
 - `gapp ci project setup <project>` also enables the APIs a deployment

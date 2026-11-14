@@ -89,7 +89,7 @@ def list_secrets(name: str | None = None, deployment: str | None = None) -> dict
         missing     — declared but no secret with that ID exists in GCP
         unattached  — secret exists at the expected ID but has no gapp label
         conflict    — secret exists labeled for a different solution
-        orphan      — present in GCP with our label but not in gapp.yaml
+        orphan      — present in GCP with our label but no longer declared
 
     Each non-ready scenario produces a structured hint with concrete
     `gcloud` commands the operator can run to resolve. Hints are surfaced
@@ -149,6 +149,7 @@ def list_secrets(name: str | None = None, deployment: str | None = None) -> dict
                 status = "conflict"
                 hints.append(_hint_conflict(
                     project_id, solution_name, secret_id, classification["owner"], secret_name,
+                    env_var=entry["name"], deployment=deployment,
                 ))
 
         secrets.append({
@@ -161,7 +162,7 @@ def list_secrets(name: str | None = None, deployment: str | None = None) -> dict
 
     orphans = sorted(present_ids - declared_ids)
     for orphan_id in orphans:
-        hints.append(_hint_orphan(project_id, solution_name, orphan_id))
+        hints.append(_hint_orphan(project_id, solution_name, orphan_id, deployment=deployment))
 
     return {
         "solution": solution_name,
@@ -220,8 +221,21 @@ def _hint_unattached(project_id: str, solution_name: str, secret_id: str) -> dic
     }
 
 
+def _declare_command(env_var: str, secret_short_name: str, deployment: str | None) -> str:
+    """How to declare (or re-point) an env var read from a secret: a gapp
+    command, never a hand edit. For a deployment of the fleet the
+    declaration can live in the app repo or in the fleet's settings."""
+    command = f"gapp manifest env set {env_var} --secret {secret_short_name}"
+    if not deployment:
+        return command
+    return (f"{command}   (in the app's repo; or in the fleet's settings for {deployment}: "
+            f"`gapp ci manifest {deployment}` prints them, `gapp ci setup {deployment} --manifest FILE --update` "
+            f"replaces them)")
+
+
 def _hint_conflict(project_id: str, solution_name: str, secret_id: str,
-                   owner: str, secret_short_name: str) -> dict:
+                   owner: str, secret_short_name: str, *, env_var: str = "<ENV_VAR>",
+                   deployment: str | None = None) -> dict:
     return {
         "secret_id": secret_id,
         "issue": "conflict",
@@ -231,8 +245,9 @@ def _hint_conflict(project_id: str, solution_name: str, secret_id: str,
         ),
         "options": [
             {
-                "label": f"Use a different secret name in this solution's gapp.yaml (rename '{secret_short_name}')",
-                "command": "(edit gapp.yaml; gapp constructs the secret_id as <solution>-<name>)",
+                "label": (f"Give this secret another name than '{secret_short_name}' "
+                          f"(gapp stores it as {solution_name}-<name>)"),
+                "command": _declare_command(env_var, "<new-name>", deployment),
             },
             {
                 "label": f"Re-label for '{solution_name}' if '{owner}' is gone (manual takeover)",
@@ -246,14 +261,16 @@ def _hint_conflict(project_id: str, solution_name: str, secret_id: str,
     }
 
 
-def _hint_orphan(project_id: str, solution_name: str, secret_id: str) -> dict:
+def _hint_orphan(project_id: str, solution_name: str, secret_id: str, *,
+                 deployment: str | None = None) -> dict:
+    prefix = f"{solution_name}-"
+    short = secret_id[len(prefix):] if secret_id.startswith(prefix) else secret_id
     return {
         "secret_id": secret_id,
         "issue": "orphan",
         "message": (
-            f"Secret '{secret_id}' is labeled for solution '{solution_name}' but no "
-            f"matching declaration exists in gapp.yaml. It is not consumed by any "
-            f"deployed env var."
+            f"Secret '{secret_id}' is labeled for solution '{solution_name}' but "
+            f"'{deployment or solution_name}' no longer declares it. No deployed env var reads it."
         ),
         "options": [
             {
@@ -261,8 +278,8 @@ def _hint_orphan(project_id: str, solution_name: str, secret_id: str) -> dict:
                 "command": f"gcloud secrets delete {secret_id} --project={project_id}",
             },
             {
-                "label": "Re-add the declaration to gapp.yaml under env: with a matching name",
-                "command": "(edit gapp.yaml)",
+                "label": "Declare it again, as an env var read from it",
+                "command": _declare_command("<ENV_VAR>", short, deployment),
             },
         ],
     }
@@ -361,7 +378,8 @@ def validate_declared_secrets(project_id: str, solution_name: str, manifest: dic
         else:  # conflict
             lines.append(f"    Status: labeled for solution '{p['owner']}', not '{solution_name}'")
             lines.append(
-                f"    Resolve: rename in gapp.yaml, or if '{p['owner']}' is gone, "
+                f"    Resolve: give the secret another name "
+                f"(gapp manifest env set <ENV_VAR> --secret <new-name>), or if '{p['owner']}' is gone, "
                 f"re-label: gcloud secrets update {p['secret_id']} "
                 f"--update-labels={GAPP_SOLUTION_LABEL}={solution_name} --project={project_id}"
             )
