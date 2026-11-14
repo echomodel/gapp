@@ -645,6 +645,20 @@ def gapp_list(project_limit: int = 50) -> dict:
     return GappSDK().list_apps(project_limit=project_limit)
 
 
+@_tool()
+def gapp_fleet() -> dict:
+    """Where the fleet lives: a file on this machine (`kind: local`, `path`)
+    or a GitHub repo (`kind: github`, `repo`), and how many deployments it
+    holds. The fleet is the record of the deployments (each one's name,
+    repo, project and settings) and lives in exactly one place. `problem`
+    is set, and `deployments` is null, when it could not be read: an
+    unreadable fleet is never reported as empty. `backup` is the copy a
+    local fleet keeps from before its last change.
+    """
+    from gapp.admin.sdk.fleetstore import describe_fleet
+    return describe_fleet()
+
+
 def main():
     """Run the MCP server on stdio."""
     mcp.run(transport="stdio")

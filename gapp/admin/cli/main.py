@@ -996,6 +996,36 @@ _new_deployment_option = click.option(
          "so the new name is a new, empty deployment.")
 
 
+@main.group("fleet", invoke_without_command=True)
+@click.option("--json", "json_out", is_flag=True, help="Machine-readable output.")
+@click.pass_context
+def fleet_group(ctx, json_out):
+    """Where your fleet lives.
+
+    \b
+    Your fleet is the record of your deployments: for each, its name, the
+    repo it runs, its project and its settings. It lives in one place: a
+    file on this machine, or a GitHub repo once you set one with
+    `gapp ci init`. There is never a second copy.
+    """
+    if ctx.invoked_subcommand is not None:
+        return
+    from gapp.admin.sdk.fleetstore import describe_fleet
+    result = describe_fleet()
+    if json_out:
+        _emit_json(result)
+        return
+    click.echo(f"Your fleet is kept in {result['where']}.")
+    if result["problem"]:
+        click.echo(f"  Error: {result['problem']}", err=True)
+        raise SystemExit(1)
+    count = result["deployments"]
+    click.echo("It holds no deployments yet." if not count
+               else f"It holds {count} deployment{'' if count == 1 else 's'}.")
+    if result["backup"]:
+        click.echo(f"The copy from before its last change: {result['backup']}")
+
+
 @main.group("manifest")
 @click.option("--file", "manifest_file", default=None, metavar="FILE",
               help="Show or change FILE, a gapp.yaml-shaped file such as a deployment's fleet-side manifest "
