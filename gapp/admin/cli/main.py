@@ -949,28 +949,21 @@ def ci_runner_group():
     """Commands the fleet repo's workflows run on the runner (not for people)."""
 
 
-@ci_runner_group.command("register")
-def ci_runner_register_cmd():
-    """Validate and write one change to gapp/deployments.yaml; inputs come from the environment."""
-    from gapp.admin.sdk.ci import runner_register
-    raise SystemExit(runner_register())
+@ci_runner_group.command("deploy")
+@click.argument("deployment")
+@click.option("--upgrade", is_flag=True, help="Apply a pending gapp upgrade.")
+def ci_runner_deploy_cmd(deployment, upgrade):
+    """Deploy DEPLOYMENT from the app checkout the run stands in; the fleet file is named by GAPP_FLEET_FILE."""
+    from gapp.admin.sdk.ci_runner import runner_deploy
+    raise SystemExit(runner_deploy(deployment, upgrade=upgrade))
 
 
 @ci_runner_group.command("status")
-def ci_runner_status_cmd():
-    """Print the root `gapp status` result for SOLUTION_ID on PROJECT as one line for `ci status --live`."""
+@click.argument("deployment")
+def ci_runner_status_cmd(deployment):
+    """Print what is live for DEPLOYMENT as one line for `gapp ci status --live`."""
     from gapp.admin.sdk.ci_runner import runner_status
-    raise SystemExit(runner_status())
-
-
-@ci_runner_group.command("overlay")
-@click.argument("path", default="gapp.yaml")
-def ci_runner_overlay_cmd(path):
-    """Merge the deployment's gapp.yaml keys (OVERLAY, a JSON object; DOMAIN) over PATH."""
-    import os
-    from gapp.admin.sdk.ci import runner_overlay
-    merged = runner_overlay(path, os.environ.get("OVERLAY"), os.environ.get("DOMAIN"))
-    click.echo(f"gapp-deploy: gapp.yaml for '{merged.get('name')}' with the fleet's keys applied.")
+    raise SystemExit(runner_status(deployment))
 
 
 # -- gapp manifest --

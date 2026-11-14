@@ -57,8 +57,17 @@ def local_path(profile: str | None = None) -> Path:
     return get_config_dir() / "fleets" / (profile or get_active_profile()) / LOCAL_FILE_NAME
 
 
+FLEET_FILE_ENV = "GAPP_FLEET_FILE"
+
+
 def location() -> Location:
-    """Where the active profile's fleet lives: its fleet repo when one is set, else the local file."""
+    """Where the fleet lives: the profile's fleet repo when one is set, else
+    the local file. A workflow on a runner has already checked the fleet
+    repo out, and names the file there with GAPP_FLEET_FILE; nothing is
+    fetched and nothing is written back."""
+    named = os.environ.get(FLEET_FILE_ENV)
+    if named:
+        return Location("local", path=Path(named))
     repo, _ = get_fleet_repo()
     if repo:
         return Location("github", repo=repo)
