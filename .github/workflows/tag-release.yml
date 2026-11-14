@@ -1,0 +1,40 @@
+name: Tag release
+
+# When the version in gapp/__init__.py changes on main, tag that commit
+# `v<version>` and publish a GitHub release for it. A release then needs
+# only its pull request merged: nobody types or pushes a tag. `one-fleet`
+# is listed because its release candidates are cut from that branch.
+
+on:
+  push:
+    branches: [main, one-fleet]
+    paths: [gapp/__init__.py]
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag the version, if it has no tag yet
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' gapp/__init__.py)"
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(rc[0-9]+)?$'; then
+            echo "::error::gapp/__init__.py has no release version (found '$version')."
+            exit 1
+          fi
+          tag="v$version"
+          if gh release view "$tag" >/dev/null 2>&1 || git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "$tag already exists. Nothing to do."
+            exit 0
+          fi
+          flags=()
+          case "$version" in *rc*) flags+=(--prerelease) ;; esac
+          gh release create "$tag" --target "$GITHUB_SHA" --title "$tag" \
+            --notes "See CHANGELOG.md." "${flags[@]}"
+          echo "Tagged $GITHUB_SHA as $tag."

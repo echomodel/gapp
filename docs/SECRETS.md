@@ -145,15 +145,14 @@ Resolution options
       $ gcloud secrets delete my-app-api-token --project=my-project
 
 [2] my-app-stale-key — orphan
-    Secret 'my-app-stale-key' is labeled for solution 'my-app' but no
-    matching declaration exists in gapp.yaml. It is not consumed by
-    any deployed env var.
+    Secret 'my-app-stale-key' is labeled for solution 'my-app' but
+    'my-app' no longer declares it. No deployed env var reads it.
 
     Option: Delete it (recommended if no longer needed)
       $ gcloud secrets delete my-app-stale-key --project=my-project
 
-    Option: Re-add the declaration to gapp.yaml under env: with a matching name
-      $ (edit gapp.yaml)
+    Option: Declare it again, as an env var read from it
+      $ gapp manifest env set <ENV_VAR> --secret stale-key
 ```
 
 ### Reading the output
@@ -292,8 +291,8 @@ Resolution options
     Secret 'my-app-api-token' is labeled for solution 'other-app',
     not 'my-app'. gapp will not modify another solution's secret.
 
-    Option: Use a different secret name in this solution's gapp.yaml (rename 'api-token')
-      $ (edit gapp.yaml; gapp constructs the secret_id as <solution>-<name>)
+    Option: Give this secret another name than 'api-token' (gapp stores it as my-app-<name>)
+      $ gapp manifest env set API_TOKEN --secret <new-name>
 
     Option: Re-label for 'my-app' if 'other-app' is gone (manual takeover)
       $ gcloud secrets update my-app-api-token \
@@ -347,15 +346,14 @@ gcloud secrets update my-app-api-token \
 Resolution options
 
 [1] my-app-old-key — orphan
-    Secret 'my-app-old-key' is labeled for solution 'my-app' but no
-    matching declaration exists in gapp.yaml. It is not consumed by
-    any deployed env var.
+    Secret 'my-app-old-key' is labeled for solution 'my-app' but
+    'my-app' no longer declares it. No deployed env var reads it.
 
     Option: Delete it (recommended if no longer needed)
       $ gcloud secrets delete my-app-old-key --project=my-project
 
-    Option: Re-add the declaration to gapp.yaml under env: with a matching name
-      $ (edit gapp.yaml)
+    Option: Declare it again, as an env var read from it
+      $ gapp manifest env set <ENV_VAR> --secret old-key
 ```
 
 This is a leftover. The yaml declaration that produced this secret
