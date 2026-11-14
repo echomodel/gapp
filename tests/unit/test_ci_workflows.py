@@ -1,10 +1,10 @@
 """The two workflows `gapp ci init` installs in the fleet repo, and gapp's
-reusable deploy workflow they call.
+reusable deploy workflow the first one calls.
 
-Their shape is checked from the YAML. The deploy workflow's lookup step is
-run for real with the Go yq pre-installed on GitHub's Ubuntu runners and a
-stub `gh` (skipped where that yq is not installed); the register workflow
-runs gapp itself, whose code `test_ci_rules.py` exercises directly.
+Their shape is checked from the YAML. Each workflow's lookup step is run
+for real with the Go yq pre-installed on GitHub's Ubuntu runners and a stub
+`gh` (skipped where that yq is not installed). What runs after gapp is
+installed is gapp itself, which `test_ci_runner.py` exercises.
 """
 
 import json
@@ -19,144 +19,144 @@ import pytest
 import yaml
 
 from gapp.admin.sdk import ci as ci_mod
-from gapp.admin.sdk import fleet
+from gapp.admin.sdk import entryfile
 
 GAPP_REPO = "example-org/gapp"
 GAPP_REF = "v4.0.0"
 FLEET = "acme/fleet"
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+PIP = 'pip install --quiet "gapp @ git+https://github.com/{repo}.git@${{GAPP_REF}}"'
 
 
 def _rendered(name):
-    return ci_mod._render_template(name, GAPP_REPO, GAPP_REF)
+    return yaml.safe_load(ci_mod._render_template(name, GAPP_REPO, GAPP_REF))
+
+
+def _reusable():
+    return yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "deploy.yml").read_text())
+
+
+def _runs(steps):
+    return [s for s in steps if "run" in s]
 
 
 # -- shape --
 
 
-def test_the_reusable_workflow_deploys_the_default_branch_when_no_ref_is_given():
-    import pathlib
-    doc = yaml.safe_load((pathlib.Path(__file__).resolve().parents[2] / ".github" / "workflows" / "deploy.yml").read_text())
-    assert doc[True]["workflow_call"]["inputs"]["ref"]["default"] == ""
-    steps = doc["jobs"]["deploy"]["steps"]
-    clone = next(s for s in steps if s.get("name") == "Clone solution repo")
-    assert clone["with"]["ref"] == "${{ inputs.ref }}"               # empty: actions/checkout takes the default branch
-    run = next(s for s in steps if s.get("name") == "Setup and deploy")
-    assert run["env"]["REF_FLAG"] == "${{ inputs.ref != '' && format('--ref {0}', inputs.ref) || '' }}"
-    assert "gapp deploy $REF_FLAG $PROJECT_FLAG" in run["run"]        # no bare --ref swallowing the next flag
+def test_init_installs_exactly_the_deploy_and_status_workflows():
+    files = ci_mod._workflow_files(GAPP_REPO, GAPP_REF)
+    assert set(files) == {".github/workflows/gapp-deploy.yml", ".github/workflows/gapp-status.yml"}
+    assert all("__GAPP_" not in text for text in files.values())
 
 
-def test_deploy_workflow_resolves_the_entry_then_calls_the_reusable_workflow_in_the_project_environment():
-    doc = yaml.safe_load(_rendered(ci_mod.DEPLOY_WORKFLOW))
-    assert set(doc[True]["workflow_dispatch"]["inputs"]) == {"request_id", "deployment", "ref"}
-    assert doc["run-name"] == "Deploy ${{ inputs.deployment }} (${{ inputs.ref || 'default branch' }}) ${{ inputs.request_id }}"
-    assert doc[True]["workflow_dispatch"]["inputs"]["ref"]["default"] == ""        # empty: the app repo's default branch
+def test_the_deploy_workflow_is_started_with_a_name_and_whether_to_upgrade():
+    doc = _rendered(ci_mod.DEPLOY_WORKFLOW)
+    assert set(doc[True]["workflow_dispatch"]["inputs"]) == {"request_id", "deployment", "upgrade"}
+    assert doc["run-name"] == "Deploy ${{ inputs.deployment }} ${{ inputs.request_id }}"
+    assert doc["permissions"] == {}
+
+
+def test_the_deploy_workflow_passes_the_definition_to_the_reusable_workflow():
+    doc = _rendered(ci_mod.DEPLOY_WORKFLOW)
     resolve, deploy = doc["jobs"]["resolve"], doc["jobs"]["deploy"]
-    assert set(resolve["outputs"]) == {"repo", "project", "id", "ref", "overlay", "app_id"}
-    assert deploy["needs"] == "resolve"
+    assert set(resolve["outputs"]) == {"repo", "project", "ref", "gapp_ref", "app_id"}
+    assert resolve["steps"][0]["with"]["sparse-checkout"] == entryfile.FILE_NAME
+    assert deploy["needs"] == "resolve" and deploy["permissions"] == {"id-token": "write", "contents": "read"}
     assert deploy["uses"] == f"{GAPP_REPO}/.github/workflows/deploy.yml@{GAPP_REF}"
-    assert deploy["with"]["environment"] == "${{ needs.resolve.outputs.project }}"
-    assert deploy["with"]["solution-repo"] == "${{ needs.resolve.outputs.repo }}"
-    assert deploy["with"]["solution-name"] == "${{ needs.resolve.outputs.id }}"
-    assert deploy["with"]["overlay"] == "${{ needs.resolve.outputs.overlay }}"
-    assert deploy["with"]["ref"] == "${{ needs.resolve.outputs.ref }}"             # the entry's ref, never the input
-    assert deploy["with"]["gapp-repo"] == GAPP_REPO and deploy["with"]["gapp-ref"] == GAPP_REF
-    assert deploy["secrets"] == {"solution-repo-app-private-key": "${{ secrets.HOSTING_GITHUB_APP_PRIVATE_KEY }}"}
-    assert deploy["permissions"] == {"id-token": "write", "contents": "read"}
-    step = resolve["steps"][1]
-    assert step["env"]["DEPLOYMENT"] == "${{ inputs.deployment }}" and "${{" not in step["run"]
-    assert resolve["steps"][0]["with"]["sparse-checkout"] == fleet.DEPLOYMENTS_FILE
+    assert deploy["with"] == {
+        "deployment": "${{ inputs.deployment }}", "upgrade": "${{ inputs.upgrade }}",
+        "app-repo": "${{ needs.resolve.outputs.repo }}", "ref": "${{ needs.resolve.outputs.ref }}",
+        "environment": "${{ needs.resolve.outputs.project }}", "gapp-repo": GAPP_REPO,
+        "gapp-ref": "${{ needs.resolve.outputs.gapp_ref }}", "app-repo-app-id": "${{ needs.resolve.outputs.app_id }}",
+    }
+    assert deploy["secrets"] == {"app-repo-key": "${{ secrets.HOSTING_GITHUB_APP_PRIVATE_KEY }}"}
+    assert set(deploy["with"]) == set(_reusable()[True]["workflow_call"]["inputs"])
 
 
-def test_register_workflow_installs_gapp_and_runs_the_runner_with_inputs_through_env():
-    doc = yaml.safe_load(_rendered(ci_mod.REGISTER_WORKFLOW))
-    assert set(doc[True]["workflow_dispatch"]["inputs"]) == {"request_id", "operation", "name", "repo", "project", "changes", "source"}
-    assert doc["run-name"] == "Register ${{ inputs.name }} ${{ inputs.request_id }}"
-    job = doc["jobs"]["register"]
-    assert job["permissions"] == {"contents": "write", "actions": "read"}
-    for key in ("OPERATION", "NAME", "REPO", "PROJECT", "CHANGES", "SOURCE"):
-        assert job["env"][key].startswith("${{ inputs."), key
-    assert job["env"]["ALLOWED_SOURCES"] == "${{ vars.GAPP_ALLOWED_SOURCES }}"
-    assert job["env"]["APP_KEY_SET"] == "${{ secrets.HOSTING_GITHUB_APP_PRIVATE_KEY != '' }}"
-    assert job["env"]["FLEET_REPO"] == "${{ github.repository }}"
-    runs = [s["run"] for s in job["steps"]]
-    assert runs[0] == f'pip install --quiet "gapp @ git+https://github.com/{GAPP_REPO}.git@{GAPP_REF}"'
-    assert runs[1] == "gapp ci runner register"
-    for step in job["steps"]:
-        assert "${{" not in step["run"]
-    assert "__GAPP_" not in _rendered(ci_mod.REGISTER_WORKFLOW)
+def test_the_reusable_workflow_runs_gapp_with_the_deployments_name_and_nothing_else():
+    doc = _reusable()
+    job = doc["jobs"]["deploy"]
+    assert job["environment"] == "${{ inputs.environment }}" and job["permissions"] == {"id-token": "write", "contents": "read"}
+    names = [s.get("name") for s in job["steps"]]
+    assert names == ["Check the deploy identity", "Check out the fleet", "Check the app repo credential",
+                     "Mint a read-only token for the app repo", "Check out the app", "Sign in to Google Cloud",
+                     "Set up gcloud", "Install Terraform", "Install gapp", "Deploy"]
+    install, run = job["steps"][-2], job["steps"][-1]
+    assert install["run"] == PIP.format(repo="${GAPP_REPO}")
+    assert install["env"] == {"GAPP_REPO": "${{ inputs.gapp-repo }}", "GAPP_REF": "${{ inputs.gapp-ref }}"}
+    assert run["run"] == 'gapp ci runner deploy "$DEPLOYMENT" $UPGRADE_FLAG' and run["working-directory"] == "app"
+    assert run["env"] == {"GAPP_FLEET_FILE": "${{ github.workspace }}/fleet/gapp.yaml",
+                          "DEPLOYMENT": "${{ inputs.deployment }}",
+                          "UPGRADE_FLAG": "${{ inputs.upgrade && '--upgrade' || '' }}"}
 
 
-def test_status_workflow_is_read_only_and_asks_the_project_as_the_deploy_identity():
-    doc = yaml.safe_load(_rendered(ci_mod.STATUS_WORKFLOW))
+def test_the_reusable_workflow_checks_out_the_definitions_ref_of_the_app_beside_the_fleet():
+    steps = {s.get("name"): s for s in _reusable()["jobs"]["deploy"]["steps"]}
+    fleet, app = steps["Check out the fleet"]["with"], steps["Check out the app"]["with"]
+    assert fleet["path"] == "fleet" and fleet["sparse-checkout"] == entryfile.FILE_NAME and fleet["persist-credentials"] is False
+    assert app["path"] == "app" and app["repository"] == "${{ inputs.app-repo }}" and app["ref"] == "${{ inputs.ref }}"
+    assert app["token"] == "${{ steps.app-token.outputs.token || github.token }}" and app["persist-credentials"] is False
+
+
+def test_a_private_app_repo_gets_a_read_only_token_for_that_one_repo():
+    steps = {s.get("name"): s for s in _reusable()["jobs"]["deploy"]["steps"]}
+    mint = steps["Mint a read-only token for the app repo"]
+    assert mint["if"] == "inputs.app-repo-app-id != ''" and mint["with"]["permission-contents"] == "read"
+    assert mint["with"]["repositories"] == "${{ steps.app-repo.outputs.name }}"
+    check = steps["Check the app repo credential"]
+    env = {**os.environ, "APP_REPO_KEY": "", "APP_REPO": "me/my-app", "GITHUB_OUTPUT": os.devnull}
+    res = subprocess.run(["bash", "-c", check["run"]], env=env, capture_output=True, text=True)
+    assert res.returncode == 1 and "the app-repo-key secret is empty" in res.stdout
+
+
+@pytest.mark.parametrize("load, job", [(_reusable, "deploy"), (lambda: _rendered(ci_mod.STATUS_WORKFLOW), "status")])
+def test_a_missing_deploy_identity_is_named_with_the_command_that_records_it(load, job):
+    step = next(s for s in load()["jobs"][job]["steps"] if s.get("name") == "Check the deploy identity")
+    env = {**os.environ, "ENVIRONMENT": "my-proj", "WIF_PROVIDER": "", "DEPLOY_SA": "sa"}
+    res = subprocess.run(["bash", "-c", step["run"]], env=env, capture_output=True, text=True)
+    assert res.returncode == 1 and "has no GAPP_WIF_PROVIDER" in res.stdout
+    assert "Run: gapp ci projects connect my-proj" in res.stdout
+    env.update(WIF_PROVIDER="projects/1/x")
+    assert subprocess.run(["bash", "-c", step["run"]], env=env, capture_output=True, text=True).returncode == 0
+
+
+def test_the_status_workflow_is_read_only_and_asks_the_project_as_the_deploy_identity():
+    doc = _rendered(ci_mod.STATUS_WORKFLOW)
     assert set(doc[True]["workflow_dispatch"]["inputs"]) == {"request_id", "deployment"}
     assert doc["run-name"] == "Status ${{ inputs.deployment }} ${{ inputs.request_id }}"
     assert doc["permissions"] == {}
     resolve, status = doc["jobs"]["resolve"], doc["jobs"]["status"]
-    assert resolve["permissions"] == {"contents": "read"}
-    assert status["permissions"] == {"id-token": "write", "contents": "read"}      # read-only: no contents write
-    assert status["environment"] == "${{ needs.resolve.outputs.project }}"
-    assert status["needs"] == "resolve"
+    assert resolve["permissions"] == {"contents": "read"} and set(resolve["outputs"]) == {"project", "gapp_ref"}
+    assert status["permissions"] == {"id-token": "write", "contents": "read"}
+    assert status["environment"] == "${{ needs.resolve.outputs.project }}" and status["needs"] == "resolve"
     names = [s.get("name") for s in status["steps"]]
-    assert names == ["Check the deploy identity", "Authenticate to Google Cloud", "Set up gcloud", "Install Terraform",
-                     "Install gapp", "Ask gapp status"]
-    auth = status["steps"][1]["with"]
-    assert auth == {"workload_identity_provider": "${{ vars.GAPP_WIF_PROVIDER }}", "service_account": "${{ vars.GAPP_DEPLOY_SERVICE_ACCOUNT }}"}
-    ask = status["steps"][-1]
-    assert ask["run"] == "gapp ci runner status"
-    assert ask["env"]["SOLUTION_ID"] == "${{ needs.resolve.outputs.id }}" and ask["env"]["PROJECT"] == "${{ needs.resolve.outputs.project }}"
-    assert status["steps"][4]["run"] == f'pip install --quiet "gapp @ git+https://github.com/{GAPP_REPO}.git@{GAPP_REF}"'
-    for step in [s for s in resolve["steps"] + status["steps"] if "run" in s]:
-        assert "${{" not in step["run"]
-    assert not any("PUT" in (s.get("run") or "") or "gh api -X" in (s.get("run") or "") for s in status["steps"])
+    assert names == ["Check the deploy identity", "Check out the fleet", "Sign in to Google Cloud", "Set up gcloud",
+                     "Install Terraform", "Install gapp", "Ask gapp"]
+    install, ask = status["steps"][-2], status["steps"][-1]
+    assert install["run"] == PIP.format(repo=GAPP_REPO)
+    assert install["env"] == {"GAPP_REF": "${{ needs.resolve.outputs.gapp_ref }}"}
+    assert ask["run"] == 'gapp ci runner status "$DEPLOYMENT"'
+    assert ask["env"] == {"GAPP_FLEET_FILE": "${{ github.workspace }}/fleet/gapp.yaml", "DEPLOYMENT": "${{ inputs.deployment }}"}
 
 
-def test_status_workflow_installs_terraform_like_the_deploy_workflow():
-    """`gapp status` reads the deployment's Terraform outputs, so the runner needs terraform."""
-    status_steps = yaml.safe_load(_rendered(ci_mod.STATUS_WORKFLOW))["jobs"]["status"]["steps"]
-    deploy_steps = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "deploy.yml").read_text())["jobs"]["deploy"]["steps"]
-    uses = lambda steps: [s.get("uses") for s in steps if "terraform" in (s.get("uses") or "")]
-    assert uses(status_steps) == uses(deploy_steps) == ["hashicorp/setup-terraform@v3"]
-    names = [s.get("name") for s in status_steps]
-    assert names.index("Install Terraform") < names.index("Ask gapp status")
+def test_no_script_interpolates_an_input_and_none_writes_to_github():
+    jobs = [*_rendered(ci_mod.DEPLOY_WORKFLOW)["jobs"].values(), *_rendered(ci_mod.STATUS_WORKFLOW)["jobs"].values(),
+            *_reusable()["jobs"].values()]
+    for step in [s for job in jobs for s in _runs(job.get("steps") or [])]:
+        assert "${{" not in step["run"], step.get("name")
+        assert "gh api -X" not in step["run"] and "git push" not in step["run"], step.get("name")
+    for job in jobs:
+        assert "write" not in {v for k, v in (job.get("permissions") or {}).items() if k != "id-token"}
 
 
-def test_templates_ship_with_the_package():
-    assert "__GAPP_REPO__" not in _rendered(ci_mod.DEPLOY_WORKFLOW)
-    files = ci_mod._operator_files(GAPP_REPO, GAPP_REF)
-    assert set(files) == {ci_mod.DEPLOY_WORKFLOW_PATH, ci_mod.REGISTER_WORKFLOW_PATH, ci_mod.STATUS_WORKFLOW_PATH}
+def test_both_runners_install_terraform_and_the_gcloud_beta_component():
+    for steps in (_reusable()["jobs"]["deploy"]["steps"], _rendered(ci_mod.STATUS_WORKFLOW)["jobs"]["status"]["steps"]):
+        assert [s["uses"] for s in steps if "terraform" in (s.get("uses") or "")] == ["hashicorp/setup-terraform@v3"]
+        gcloud = next(s for s in steps if s.get("name") == "Set up gcloud")
+        assert gcloud["with"] == {"install_components": "beta"}
 
 
-def test_reusable_workflow_takes_an_overlay_and_applies_it_with_gapp_after_installing_it():
-    doc = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "deploy.yml").read_text())
-    inputs = doc[True]["workflow_call"]["inputs"]
-    assert "overlay" in inputs and inputs["overlay"]["required"] is False and "domain" in inputs
-    steps = doc["jobs"]["deploy"]["steps"]
-    names = [s.get("name") for s in steps]
-    install, overlay, deploy = names.index("Install gapp"), names.index("Apply the deployment's gapp.yaml keys"), names.index("Setup and deploy")
-    assert install < overlay < deploy
-    step = steps[overlay]
-    assert step["run"] == "gapp ci runner overlay gapp.yaml"
-    assert step["env"] == {"OVERLAY": "${{ inputs.overlay }}", "DOMAIN": "${{ inputs.domain }}"}
-    assert step["if"] == "inputs.overlay != '' || inputs.domain != ''"
-    assert step["working-directory"] == "${{ inputs.solution-name }}"
-    assert not any("yq" in (s.get("run") or "") for s in steps)
-
-
-def test_reusable_workflow_checks_the_identity_first_and_names_the_missing_variable():
-    doc = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "deploy.yml").read_text())
-    step = next(s for s in doc["jobs"]["deploy"]["steps"] if s.get("name") == "Check the deploy identity")
-    assert step["if"].startswith("inputs.environment != ''")
-    env = {**os.environ, "ENVIRONMENT": "my-proj", "WIF_PROVIDER": "", "DEPLOY_SA": "sa"}
-    res = subprocess.run(["bash", "-c", step["run"]], env=env, capture_output=True, text=True)
-    assert res.returncode == 1
-    assert "no GAPP_WIF_PROVIDER variable" in res.stdout and "of the fleet repo" in res.stdout
-    assert "gapp ci project setup my-proj" in res.stdout
-    env.update(WIF_PROVIDER="projects/1/x", DEPLOY_SA="sa")
-    assert subprocess.run(["bash", "-c", step["run"]], env=env, capture_output=True, text=True).returncode == 0
-
-
-# -- the deploy workflow's lookup step, run for real --
+# -- the lookup steps, run for real --
 
 
 def _go_yq():
@@ -164,8 +164,7 @@ def _go_yq():
     path = shutil.which("yq")
     if not path:
         return False
-    out = subprocess.run([path, "--version"], capture_output=True, text=True).stdout
-    return "version v4" in out
+    return "version v4" in subprocess.run([path, "--version"], capture_output=True, text=True).stdout
 
 
 needs_yq = pytest.mark.skipif(not _go_yq(), reason="the Go yq pre-installed on GitHub's Ubuntu runners is not installed")
@@ -187,167 +186,170 @@ STUB_GH = textwrap.dedent('''
     sys.stderr.write("unexpected endpoint " + endpoint + "\\n"); sys.exit(1)
 ''').lstrip()
 
+DEFINITION = {"id": "my-app", "repo": "me/my-app", "project": "my-proj", "gapp": "4.0.0", "settings": {}}
+DEPLOY_ENV = {"DEPLOYMENT": "my-app", "APP_ID": "", "ALLOWED_SOURCES": "me", "GH_TOKEN": "x"}
+
 
 class _Runner:
-    def __init__(self, tmp_path, state):
-        self.dir = tmp_path
+    """A runner's workspace: the fleet repo checked out, a stub `gh`, and the step's outputs file."""
+
+    def __init__(self, tmp_path, workflow=None, environments=("my-proj",), repos=None):
+        self.dir, self.workflow = tmp_path, workflow or ci_mod.DEPLOY_WORKFLOW
         bin_dir = tmp_path / "bin"
         bin_dir.mkdir()
         gh = bin_dir / "gh"
         gh.write_text(STUB_GH)
         gh.chmod(gh.stat().st_mode | stat.S_IEXEC)
-        self.state_path = tmp_path / "state.json"
-        self.state_path.write_text(json.dumps(state))
+        state = tmp_path / "state.json"
+        state.write_text(json.dumps({"environments": list(environments),
+                                     "repos": {"me/my-app": False} if repos is None else repos}))
         self.output = tmp_path / "output.txt"
         self.output.touch()
-        self.env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "FAKE_GH_STATE": str(self.state_path),
+        self.env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "FAKE_GH_STATE": str(state),
                     "GITHUB_REPOSITORY": FLEET, "GITHUB_OUTPUT": str(self.output)}
 
-    def run_resolve(self, env):
-        doc = yaml.safe_load(_rendered(ci_mod.DEPLOY_WORKFLOW))
-        step = doc["jobs"]["resolve"]["steps"][1]
-        full_env = {**self.env, **{k: ("" if v is None else str(v)) for k, v in (step.get("env") or {}).items()
-                                   if not str(v).startswith("${{")}, **env}
-        res = subprocess.run(["bash", "-c", step["run"]], cwd=self.dir, env=full_env, capture_output=True, text=True)
+    def fleet(self, deployments, **top):
+        (self.dir / entryfile.FILE_NAME).write_text(entryfile.dump({"deployments": deployments, **top}))
+        return self
+
+    def resolve(self, **env):
+        step = _rendered(self.workflow)["jobs"]["resolve"]["steps"][1]
+        fixed = {k: str(v) for k, v in step["env"].items() if not str(v).startswith("${{")}
+        given = {**(DEPLOY_ENV if self.workflow == ci_mod.DEPLOY_WORKFLOW else {"DEPLOYMENT": "my-app"}), **env}
+        res = subprocess.run(["bash", "-c", step["run"]], cwd=self.dir, env={**self.env, **fixed, **given},
+                             capture_output=True, text=True)
         return res.returncode == 0, res.stdout + res.stderr
 
     def outputs(self):
         return dict(line.split("=", 1) for line in self.output.read_text().splitlines() if "=" in line)
 
 
-def _with_fleet_file(tmp_path, doc):
-    (tmp_path / "gapp").mkdir(exist_ok=True)
-    (tmp_path / "gapp" / "deployments.yaml").write_text(fleet.dump(doc))
-
-
-DEPLOY_ENV = {"DEPLOYMENT": "my-app", "REQUESTED_REF": "", "APP_ID": "", "ALLOWED_SOURCES": "me", "GH_TOKEN": "x",
-              "DATA_FILE": "gapp/deployments.yaml"}
-
-
 @needs_yq
-def test_deploy_builds_the_entrys_ref_and_keeps_it_out_of_the_overlay(tmp_path):
-    _with_fleet_file(tmp_path, {"my-app": {"id": "my-app", "repo": "me/my-app", "project": "my-proj", "ref": "v1.4.0",
-                                           "domain": "mcp.example.com"}})
-    runner = _Runner(tmp_path, {"environments": ["my-proj"], "repos": {"me/my-app": False}})
-    ok, log = runner.run_resolve({**DEPLOY_ENV, "REQUESTED_REF": "v1.4.0"})
+def test_deploy_reads_the_repo_ref_project_and_gapp_version_from_the_definition(tmp_path):
+    runner = _Runner(tmp_path).fleet({"my-app": {**DEFINITION, "ref": "v1.4.0", "gapp": "4.0.0rc14"}})
+    ok, log = runner.resolve()
     assert ok, log
-    out = runner.outputs()
-    assert out["ref"] == "v1.4.0"
-    assert json.loads(out["overlay"]) == {"domain": "mcp.example.com", "name": "my-app"}
+    assert runner.outputs() == {"repo": "me/my-app", "project": "my-proj", "ref": "v1.4.0", "gapp_ref": "v4.0.0rc14", "app_id": ""}
+    assert "gapp-deploy: my-app -> me/my-app (v1.4.0) on my-proj, with gapp 4.0.0rc14" in log
 
 
 @needs_yq
-def test_deploy_with_no_ref_in_the_entry_passes_an_empty_ref(tmp_path):
-    _with_fleet_file(tmp_path, {"my-app": {"id": "my-app", "repo": "me/my-app", "project": "my-proj"}})
-    runner = _Runner(tmp_path, {"environments": ["my-proj"], "repos": {"me/my-app": False}})
-    ok, log = runner.run_resolve(DEPLOY_ENV)
-    assert ok, log
-    assert runner.outputs()["ref"] == ""
+def test_deploy_with_no_ref_in_the_definition_builds_the_default_branch(tmp_path):
+    runner = _Runner(tmp_path).fleet({"my-app": DEFINITION})
+    ok, log = runner.resolve()
+    assert ok and runner.outputs()["ref"] == "" and "(the default branch)" in log
 
 
 @needs_yq
-@pytest.mark.parametrize("entry_ref,asked", [("v1.4.0", "my-branch"), ("v1.4.0", ""), (None, "my-branch")])
-def test_deploy_refuses_a_ref_that_is_not_the_entrys(tmp_path, entry_ref, asked):
-    entry = {"id": "my-app", "repo": "me/my-app", "project": "my-proj"}
-    if entry_ref:
-        entry["ref"] = entry_ref
-    _with_fleet_file(tmp_path, {"my-app": entry})
-    runner = _Runner(tmp_path, {"environments": ["my-proj"], "repos": {"me/my-app": False}})
-    ok, log = runner.run_resolve({**DEPLOY_ENV, "REQUESTED_REF": asked})
+def test_a_repo_with_no_fleet_file_names_fleet_use(tmp_path):
+    ok, log = _Runner(tmp_path).resolve()
+    assert not ok and "this repo has no gapp.yaml, so it holds no fleet. Keep your fleet here with: gapp fleet use acme/fleet" in log
+
+
+@needs_yq
+@pytest.mark.parametrize("fmt, shown", [(2, "2"), (None, "none")])
+def test_a_fleet_file_in_another_format_is_refused_before_anything_else_is_read(tmp_path, fmt, shown):
+    runner = _Runner(tmp_path)
+    doc = {"deployments": {"my-app": DEFINITION}}
+    if fmt is not None:
+        doc = {"format": fmt, **doc}
+    (tmp_path / entryfile.FILE_NAME).write_text(yaml.safe_dump(doc, sort_keys=False))
+    ok, log = runner.resolve()
     assert not ok and runner.outputs() == {}
-    assert "nothing was deployed. A deploy builds the deployment's own ref." in log
-    assert f"builds '{entry_ref or 'the default branch'}'" in log and f"asked for '{asked or 'the default branch'}'" in log
-    assert "gapp ci setup my-app --repo me/my-app --project my-proj --ref <ref> --update" in log
+    assert f"gapp.yaml is in format '{shown}', and this workflow reads format 1, so nothing was deployed." in log
+    assert "gapp ci init" in log
 
 
 @needs_yq
-def test_deploy_resolves_a_deployment_into_repo_project_id_and_overlay(tmp_path):
-    _with_fleet_file(tmp_path, {"my-app": {"id": "my-app-2", "repo": "me/my-app", "project": "my-proj",
-                                           "domain": "mcp.example.com", "env": [{"name": "A", "value": "1"}]}})
-    runner = _Runner(tmp_path, {"environments": ["my-proj"], "repos": {"me/my-app": False}})
-    ok, log = runner.run_resolve(DEPLOY_ENV)
+def test_a_name_that_is_not_in_the_fleet_names_add(tmp_path):
+    ok, log = _Runner(tmp_path).fleet({"my-app": DEFINITION}).resolve(DEPLOYMENT="nope")
+    assert not ok and "'nope' is not a deployment in this fleet. Define it first: gapp add nope --project <project>" in log
+
+
+@needs_yq
+def test_a_name_is_never_evaluated_as_a_yq_expression(tmp_path):
+    runner = _Runner(tmp_path).fleet({"my-app": DEFINITION})
+    ok, log = runner.resolve(DEPLOYMENT='my-app"] | .x = "1')
+    assert not ok and "is not a deployment in this fleet" in log
+    assert yaml.safe_load((tmp_path / entryfile.FILE_NAME).read_text())["deployments"] == {"my-app": DEFINITION}
+
+
+@needs_yq
+@pytest.mark.parametrize("repo, said", [
+    (None, "'my-app' has no repo, so it can only be deployed from a clone, with gapp deploy."),
+    ("git.example.com/team/app", "'my-app' runs git.example.com/team/app, which is not a repo on GitHub."),
+])
+def test_a_definition_a_runner_cannot_check_out_is_refused(tmp_path, repo, said):
+    definition = {k: v for k, v in DEFINITION.items() if k != "repo"}
+    if repo:
+        definition["repo"] = repo
+    ok, log = _Runner(tmp_path).fleet({"my-app": definition}).resolve()
+    assert not ok and said in log
+
+
+@needs_yq
+@pytest.mark.parametrize("version", [None, "main", "4.0", "v4.0.0", "4.0.0; echo x", "4.0.0-rc1"])
+def test_only_a_gapp_version_is_installed(tmp_path, version):
+    definition = {k: v for k, v in DEFINITION.items() if k != "gapp"}
+    if version:
+        definition["gapp"] = version
+    runner = _Runner(tmp_path).fleet({"my-app": definition})
+    ok, log = runner.resolve()
+    assert not ok and runner.outputs() == {}
+    assert f"'my-app' names gapp '{version or 'none'}', which is not a gapp version, so nothing was deployed." in log
+
+
+@needs_yq
+def test_an_owner_that_is_not_allowed_is_refused_whatever_the_fleet_file_says(tmp_path):
+    runner = _Runner(tmp_path).fleet({"my-app": DEFINITION}, allowed_sources="me")
+    ok, log = runner.resolve(ALLOWED_SOURCES="other-org")
+    assert not ok and runner.outputs() == {}
+    assert ("Apps owned by me aren't allowed in this fleet, so 'my-app' (me/my-app) was not deployed. "
+            "Allow the owner with: gapp ci sources add me") in log
+
+
+@needs_yq
+def test_allowed_owners_are_matched_whole_and_without_regard_to_case(tmp_path):
+    runner = _Runner(tmp_path, repos={"Me/my-app": False}).fleet({"my-app": {**DEFINITION, "repo": "Me/my-app"}})
+    assert not runner.resolve(ALLOWED_SOURCES="me-too, some")[0]
+    assert runner.resolve(ALLOWED_SOURCES="other-org, ME ")[0]
+
+
+@needs_yq
+def test_a_project_runners_are_not_connected_to_names_connect(tmp_path):
+    ok, log = _Runner(tmp_path, environments=()).fleet({"my-app": DEFINITION}).resolve()
+    assert not ok and ("runners in this repo are not connected to my-proj, so 'my-app' was not deployed. "
+                       "Run: gapp ci projects connect my-proj") in log
+
+
+@needs_yq
+def test_a_private_repo_is_cloned_with_the_hosting_app(tmp_path):
+    runner = _Runner(tmp_path, repos={"me/my-app": True}).fleet({"my-app": DEFINITION})
+    ok, log = runner.resolve(APP_ID="12345")
     assert ok, log
-    out = runner.outputs()
-    assert out["repo"] == "me/my-app" and out["project"] == "my-proj" and out["id"] == "my-app-2" and out["app_id"] == ""
-    assert json.loads(out["overlay"]) == {"domain": "mcp.example.com", "env": [{"name": "A", "value": "1"}], "name": "my-app-2"}
+    assert runner.outputs()["app_id"] == "12345"
 
 
 @needs_yq
-def test_deploy_passes_the_hosting_app_for_a_repo_the_token_cannot_read(tmp_path):
-    _with_fleet_file(tmp_path, {"my-app": {"id": "my-app", "repo": "me/my-app", "project": "my-proj"}})
-    runner = _Runner(tmp_path, {"environments": ["my-proj"], "repos": {}})
-    ok, log = runner.run_resolve({**DEPLOY_ENV, "APP_ID": "4242"})
+@pytest.mark.parametrize("repos", [{"me/my-app": True}, {}])
+def test_a_repo_the_run_cannot_read_without_the_hosting_app_is_refused(tmp_path, repos):
+    ok, log = _Runner(tmp_path, repos=repos).fleet({"my-app": DEFINITION}).resolve()
+    assert not ok and "me/my-app is not readable with the run's token (private, or it does not exist)" in log
+    assert "HOSTING_GITHUB_APP_ID" in log and "gapp show --deployment my-app" in log
+
+
+@needs_yq
+def test_status_reads_the_project_and_the_gapp_version(tmp_path):
+    runner = _Runner(tmp_path, ci_mod.STATUS_WORKFLOW).fleet({"my-app": {k: v for k, v in DEFINITION.items() if k != "repo"}})
+    ok, log = runner.resolve()
     assert ok, log
-    out = runner.outputs()
-    assert out["app_id"] == "4242" and json.loads(out["overlay"]) == {"name": "my-app"}
+    assert runner.outputs() == {"project": "my-proj", "gapp_ref": "v4.0.0"}
 
 
 @needs_yq
-def test_deploy_refuses_an_unknown_deployment_a_private_repo_without_app_and_an_untrusted_project(tmp_path):
-    _with_fleet_file(tmp_path, {"my-app": {"id": "my-app", "repo": "me/my-app", "project": "my-proj"}})
-    runner = _Runner(tmp_path, {"environments": ["my-proj"], "repos": {}})
-    ok, log = runner.run_resolve({**DEPLOY_ENV, "DEPLOYMENT": "nope"})
-    assert not ok and "'nope' is not a deployment" in log and "gapp ci setup nope --repo <owner>/<repo>" in log
-    ok, log = runner.run_resolve(DEPLOY_ENV)
-    assert not ok and "HOSTING_GITHUB_APP_ID variable is not set in this fleet repo" in log
-    runner = _Runner(tmp_path / "two", {"environments": [], "repos": {"me/my-app": False}}) if (tmp_path / "two").mkdir() is None else None
-    _with_fleet_file(tmp_path / "two", {"my-app": {"id": "my-app", "repo": "me/my-app", "project": "my-proj"}})
-    ok, log = runner.run_resolve(DEPLOY_ENV)
-    assert not ok and "no Environment named 'my-proj'" in log and "gapp ci project setup my-proj" in log
-
-
-def test_deploy_reads_the_allowed_sources_from_the_vars_context_in_the_existing_step():
-    """The owner re-check costs nothing: the repository variable, read in the step that already reads the entry."""
-    doc = yaml.safe_load(_rendered(ci_mod.DEPLOY_WORKFLOW))
-    assert list(doc["jobs"]) == ["resolve", "deploy"]
-    step = doc["jobs"]["resolve"]["steps"][1]
-    assert step["name"] == "Read the entry"
-    assert step["env"]["ALLOWED_SOURCES"] == "${{ vars.GAPP_ALLOWED_SOURCES }}"
-    assert doc["jobs"]["resolve"]["permissions"] == {"contents": "read", "actions": "read"}
-
-
-@needs_yq
-def test_deploy_refuses_an_entry_whose_owner_is_not_allowed_even_if_added_by_hand(tmp_path):
-    _with_fleet_file(tmp_path, {"my-app": {"id": "my-app", "repo": "Other/my-app", "project": "my-proj"}})
-    runner = _Runner(tmp_path, {"environments": ["my-proj"], "repos": {"Other/my-app": False}})
-    for allowed in ("me", "", "me,other-org"):
-        ok, log = runner.run_resolve({**DEPLOY_ENV, "ALLOWED_SOURCES": allowed})
-        assert not ok, allowed
-        assert ("gapp-deploy: Apps owned by Other aren't allowed in this fleet, so 'my-app' (Other/my-app) was not "
-                "deployed. Allow the owner with: gapp ci sources add Other") in log
-        assert runner.outputs() == {}
-
-
-@needs_yq
-def test_deploy_matches_the_allowed_owner_case_insensitively_and_ignores_spaces(tmp_path):
-    _with_fleet_file(tmp_path, {"my-app": {"id": "my-app", "repo": "Me/my-app", "project": "my-proj"}})
-    runner = _Runner(tmp_path, {"environments": ["my-proj"], "repos": {"Me/my-app": False}})
-    ok, log = runner.run_resolve({**DEPLOY_ENV, "ALLOWED_SOURCES": "someone, ME "})
-    assert ok, log
-    assert runner.outputs()["repo"] == "Me/my-app"
-
-
-@pytest.mark.parametrize("path", [ci_mod.DEPLOY_WORKFLOW, ci_mod.REGISTER_WORKFLOW, ci_mod.STATUS_WORKFLOW])
-def test_every_dispatched_workflow_ends_its_run_name_with_the_optional_request_id(path):
-    """gapp finds the run its dispatch created by the id at the end of the run name."""
-    doc = yaml.safe_load(_rendered(path))
-    assert doc["run-name"].endswith(" ${{ inputs.request_id }}")
-    request_id = doc[True]["workflow_dispatch"]["inputs"]["request_id"]
-    assert request_id["required"] is False and request_id["default"] == "" and request_id["type"] == "string"
-
-
-def _gcloud_setup_step(doc_steps):
-    return next(s for s in doc_steps if "/setup-gcloud@" in str(s.get("uses", "")))
-
-
-def test_status_workflow_installs_gclouds_beta_component_for_domain_mappings():
-    """`gcloud beta run domain-mappings` is the only command for a managed Cloud Run mapping."""
-    doc = yaml.safe_load(_rendered(ci_mod.STATUS_WORKFLOW))
-    steps = next(j for j in doc["jobs"].values() if any("setup-gcloud" in str(s.get("uses", "")) for s in j.get("steps", [])))["steps"]
-    assert _gcloud_setup_step(steps)["with"]["install_components"] == "beta"
-
-
-def test_reusable_deploy_workflow_installs_gclouds_beta_component():
-    doc = yaml.safe_load((pathlib.Path(__file__).resolve().parents[2] / ".github/workflows/deploy.yml").read_text())
-    steps = [s for j in doc["jobs"].values() for s in j.get("steps", [])]
-    assert _gcloud_setup_step(steps)["with"]["install_components"] == "beta"
+def test_status_refuses_what_deploy_refuses_about_the_file(tmp_path):
+    runner = _Runner(tmp_path, ci_mod.STATUS_WORKFLOW)
+    assert "this repo has no gapp.yaml" in runner.resolve()[1]
+    runner.fleet({"my-app": {**DEFINITION, "gapp": "main"}})
+    assert "'my-app' names gapp 'main', which is not a gapp version." in runner.resolve()[1]
+    assert "'nope' is not a deployment in this fleet" in runner.resolve(DEPLOYMENT="nope")[1]

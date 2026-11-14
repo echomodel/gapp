@@ -370,15 +370,6 @@ def test_mcp_tools_report_a_broken_file_as_data(tmp_path, monkeypatch):
     assert (repo / "gapp.yaml.bak").read_text() == BAD_YAML
 
 
-def test_the_ci_overlay_step_reports_a_broken_repo_file(tmp_path):
-    from gapp.admin.sdk.ci import runner_overlay
-    from gapp.admin.sdk.schema import ManifestUnreadable
-    path = tmp_path / "gapp.yaml"
-    path.write_text(BAD_YAML)
-    with pytest.raises(ManifestUnreadable, match="line 4, column 4"):
-        runner_overlay(str(path), "{}")
-
-
 def _cli_help(cmd, ctx=None):
     import click
     ctx = click.Context(cmd, info_name=cmd.name, parent=ctx)

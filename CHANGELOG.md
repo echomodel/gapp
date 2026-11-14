@@ -37,6 +37,33 @@ Breaking changes:
   refusal changes nothing and exits 2. A definition records the gapp
   version that wrote it; only `gapp upgrade` moves it. Nothing deploys
   from these definitions yet, and they do not work on a GitHub fleet yet.
+- `gapp ci` works on the one fleet. The fleet repo is the repo the fleet
+  is kept in (`gapp fleet use <owner>/<repo>`), and its workflows read
+  `gapp.yaml` there. The commands are `gapp ci init`, `gapp ci projects
+  connect <project>`, `gapp ci projects list`, `gapp ci sources
+  add|remove|list`, `gapp ci deploy [--upgrade] [--no-watch]` and `gapp
+  ci status [--live]` (MCP: `gapp_ci_init`, `gapp_ci_projects`,
+  `gapp_ci_sources`, `gapp_ci_deploy`, `gapp_ci_status`). A run is started
+  with the deployment's name and nothing else: it checks out the
+  definition's ref, installs the gapp version the definition names, and
+  runs the deploy `gapp deploy` runs. `gapp ci` never changes the fleet;
+  a definition is changed with `gapp add`, `gapp set` and the other
+  fleet commands, on a fleet in a repo as on a local one.
+  Removed: `gapp ci setup`, `gapp ci project setup`, `gapp ci rename`,
+  `gapp ci list`, `gapp ci manifest` and `gapp ci init <repo>` (MCP:
+  `gapp_ci_setup`, `gapp_ci_project_setup`, `gapp_ci_rename`,
+  `gapp_ci_list`, `gapp_ci_manifest`, `gapp_ci_trigger`), and the fleet
+  repo's register workflow and `gapp/deployments.yaml`. Run `gapp ci
+  init` again to install the two workflows this gapp uses.
+- `gapp ci projects connect <project>` lets the fleet repo's runners sign
+  in to a project and nothing more. Preparing a project for deployments
+  is `gapp project setup <project>`, which it requires first.
+- `gapp apply <file> --dry-run` prints each setting that would change,
+  before and after, and changes nothing (MCP: `gapp_apply(...,
+  dry_run=True)`). `gapp show --json` (MCP: `gapp_show`) gives the
+  definition's settings object under `settings`, as `gapp apply` takes
+  it; the list of settings a deploy would use, each with where it comes
+  from, is under `effective`.
 - `gapp deploy` deploys a deployment from its definition in a fleet kept
   on this machine, and reads nothing from the repo but its Dockerfile or
   Procfile. Run it in a clone of the definition's repo, checked out at

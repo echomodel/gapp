@@ -26,7 +26,6 @@ PAGE = (ROOT / "docs" / "INTERFACE.md").read_text()
 
 # In the page, not built yet.
 PENDING = {
-    "ci projects connect", "ci projects list",
     "fleet export", "fleet import",
     "config profile list", "config profile use", "config profile add",
     "config profile remove", "config profile rename",
@@ -37,28 +36,22 @@ LEAVING = {
     "setup", "init",
     "manifest show", "manifest set", "manifest unset", "manifest env set",
     "manifest env unset", "manifest example", "manifest schema",
-    "ci setup", "ci project setup", "ci rename", "ci list",
-    "ci manifest",
     "config", "config profile", "config discovery",
 }
 
 # In both, but the arguments or options are not the page's yet.
 DIFFERENT = {
-    "ci deploy", "ci status", "ci sources add", "ci sources remove",
-    "ci sources list", "ci init", "config account",
+    "config account",
 }
 
 MCP_PENDING = {
-    "gapp_ci_projects", "gapp_fleet_export",
-    "gapp_fleet_import",
+    "gapp_fleet_export", "gapp_fleet_import",
 }
 
 MCP_LEAVING = {
     "gapp_schema", "gapp_manifest_example", "gapp_manifest_show",
     "gapp_manifest_set", "gapp_manifest_unset", "gapp_manifest_env_set",
     "gapp_manifest_env_unset", "gapp_user", "gapp_init", "gapp_setup",
-    "gapp_ci_project_setup", "gapp_ci_setup",
-    "gapp_ci_manifest", "gapp_ci_rename", "gapp_ci_trigger", "gapp_ci_list",
 }
 
 

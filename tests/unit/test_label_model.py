@@ -4,7 +4,7 @@
   the root module forwards them.
 - Clean break: no gapp code reads or writes the old per-solution project
   labels (gapp__<name>, gapp_<owner>_<name>) or the v-N contract values.
-- The fleet's deploy workflow passes the project from the fleet entry, so
+- The fleet's deploy workflow takes the project from the definition, so
   the runner never searches for it.
 """
 
@@ -53,11 +53,13 @@ def test_no_code_reads_or_writes_old_per_solution_project_labels():
     assert offenders == []
 
 
-def test_the_fleet_deploy_workflow_passes_the_project_from_the_entry():
+def test_the_fleet_deploy_workflow_takes_the_project_from_the_definition():
+    """The runner signs in through the Environment named after the definition's
+    project and deploys with the definition, so it never searches for one."""
     rendered = ci_mod._render_template(ci_mod.DEPLOY_WORKFLOW, "example-org/gapp", "v4.0.0")
     deploy = yaml.safe_load(rendered)["jobs"]["deploy"]
-    assert deploy["with"]["project-id"] == "${{ needs.resolve.outputs.project }}"
     assert deploy["with"]["environment"] == "${{ needs.resolve.outputs.project }}"
+    assert "project-id" not in deploy["with"]
 
 
 def test_no_code_calls_gcloud_projects_update_with_label_flags():

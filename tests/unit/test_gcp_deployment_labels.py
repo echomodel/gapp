@@ -11,7 +11,7 @@ from gapp.admin.sdk.cloud.gcp import GCPProvider
 
 CI_HINT = (
     "This is a CI run as {who}, so signing in again does not apply: the error above names what it "
-    "lacks. `gapp ci project setup {project}` grants the deploy identity its roles; run it as a "
+    "lacks. `gapp ci projects connect {project}` grants the deploy identity its roles; run it as a "
     "project Owner, then deploy again."
 )
 

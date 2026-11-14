@@ -574,8 +574,10 @@ def gapp_rename(old: str, new: str) -> dict:
 def gapp_show(deployment: str | None = None) -> dict:
     """One deployment's definition (repo, project, ref, the gapp version
     that wrote it) and the settings a deploy would use, each marked as
-    from the definition or a default. `upgrade` is "available" when this
-    gapp is newer than the definition. `deployment` may be left out only
+    from the definition or a default (`effective`). `settings` is the
+    definition's settings object, exactly what `gapp_apply` takes.
+    `upgrade` is "available" when this gapp is newer than the
+    definition. `deployment` may be left out only
     when the server runs inside a clone of the app's repo.
     """
     return _definition_tool("show", deployment)
@@ -645,16 +647,19 @@ def gapp_env_unset(name: str, deployment: str | None = None) -> dict:
 
 
 @_tool()
-def gapp_apply(settings: dict, deployment: str | None = None) -> dict:
+def gapp_apply(settings: dict, deployment: str | None = None, dry_run: bool = False) -> dict:
     """Replace a deployment's settings with `settings`, all at once or not
     at all. `settings` is the whole settings object (public, domain,
     start, memory, cpu, max_instances, apis, env); anything it leaves out
     goes back to its default or is removed, variables included. Read the
-    current settings with `gapp_show` first and send them back with the
-    changes made. `changes` lists every value that changed.
+    current settings with `gapp_show` (its `settings`) first and send
+    them back with the changes made. `changes` lists every value that
+    changed, with `before` and `after`. With `dry_run` true the same
+    checks run and `changes` is what would change; nothing is written.
     """
     import yaml
-    return _definition_tool("apply", yaml.safe_dump(settings or {}), deployment=deployment, source="settings")
+    return _definition_tool("apply", yaml.safe_dump(settings or {}), deployment=deployment, source="settings",
+                            dry_run=dry_run)
 
 
 def main():

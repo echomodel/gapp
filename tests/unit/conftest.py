@@ -6,9 +6,9 @@ REST shapes the SDK uses: repo visibility, default branch, topics and
 creation, the fleet repo's files, its Actions variables and secrets, its
 Environments, the repository search by topic, workflow dispatch, the runs
 it produces and their job logs. Any other `gh` subcommand (they reach for
-GraphQL, which some sessions refuse) and any GraphQL call fail the test. A dispatched register
-run executes the real runner code (`ci.runner_register`) against the same
-in-memory GitHub, so what the fake writes is what the workflow writes.
+GraphQL, which gapp never depends on) and any GraphQL call fail the test.
+The fleet file is read and written through `fleetrepo`, which the
+`fleet_repo` fixture points at the same in-memory repo, so no git runs.
 Nothing touches the network.
 """
 
@@ -24,16 +24,6 @@ import pytest
 class _Result:
     def __init__(self, returncode=0, stdout="", stderr=""):
         self.returncode, self.stdout, self.stderr = returncode, stdout, stderr
-
-
-# What GitHub echoes into a job log for the status workflow's identity-check
-# step: the script itself, with its message templates unexpanded.
-STATUS_SCRIPT_ECHO = """missing=""
-[ -n "$WIF_PROVIDER" ] || missing="GAPP_WIF_PROVIDER"
-if [ -n "$missing" ]; then
-  echo "gapp-status: the Environment '$ENVIRONMENT' of this fleet repo has no $missing variable, so this run cannot authenticate to GCP. Run: gapp ci project setup $ENVIRONMENT"
-  exit 1
-fi"""
 
 
 def job_log(lines, script=""):
@@ -77,10 +67,10 @@ class FakeGitHub:
         self.actions_api = True
         self.unreadable = set()     # repos every read of which is refused with 403
         self.fail_with = {}         # endpoint substring -> stderr for GET reads
-        # When set, a dispatched register run concludes with this instead
-        # of running the real runner code: a callable taking the inputs and
-        # returning (conclusion, log lines).
-        self.register_outcome = None
+        # What a dispatched deploy run reports: a callable taking the inputs
+        # and returning (conclusion, log lines). The default reports a
+        # deploy of the definition as the fleet file holds it.
+        self.deploy_outcome = None
         # When set, every workflow dispatch fails with this stderr.
         self.dispatch_refusal = None
         self.default_branch = "main"
@@ -101,7 +91,7 @@ class FakeGitHub:
         self.calls.append((cmd, kwargs))
         assert cmd[0] == "gh", f"only gh may be invoked, got {cmd}"
         assert cmd[:2] == ["gh", "api"], f"only REST through `gh api` (other gh subcommands use GraphQL): {cmd}"
-        assert "graphql" not in cmd, f"GraphQL is not available in every session: {cmd}"
+        assert "graphql" not in cmd, f"gapp uses REST only: {cmd}"
         if "-X" in cmd and cmd[cmd.index("-X") + 1] == "GET":
             endpoint = cmd[cmd.index("-X") + 2]
             if endpoint == "search/repositories":
@@ -111,7 +101,7 @@ class FakeGitHub:
             method = cmd[cmd.index("-X") + 1]
             endpoint = cmd[cmd.index("-X") + 2]
             payload = json.loads(kwargs["input"]) if kwargs.get("input") else None
-            # A session's proxy may refuse API writes but allow workflow dispatch.
+            # GitHub access may refuse API writes but allow workflow dispatch.
             if endpoint.endswith("/dispatches"):
                 return self._dispatch(endpoint, payload)
             if not self.api_writes:
@@ -180,55 +170,36 @@ class FakeGitHub:
             return _Result(0, "")
         run_id = str(self._next_run)
         self._next_run += 1
-        if workflow == "gapp-register.yml":
-            conclusion, log = self._register(repo, inputs)
-            name = f"Register {inputs.get('name')} {request_id}"
-        elif workflow == "gapp-status.yml":
-            conclusion, log = self._status(repo, inputs)
+        if workflow == "gapp-status.yml":
+            conclusion, lines = self._status(repo, inputs)
+            log = job_log([f"gapp-status: {line}" for line in lines], script='gapp ci runner status "$DEPLOYMENT"')
             name = f"Status {inputs.get('deployment')} {request_id}"
         else:
-            conclusion, log = "success", job_log(["gapp-deploy: dispatched"], script='echo "gapp-deploy: $DEPLOYMENT -> $repo"')
-            name = f"Deploy {inputs.get('deployment')} ({inputs.get('ref') or 'default branch'}) {request_id}"
+            conclusion, lines = self._deploy(repo, inputs)
+            log = job_log([f"gapp-deploy: {line}" for line in lines],
+                          script='gapp ci runner deploy "$DEPLOYMENT" $UPGRADE_FLAG')
+            name = f"Deploy {inputs.get('deployment')} {request_id}"
         self.add_run(run_id, repo, workflow, name, conclusion, log, hidden_polls=self.run_appears_after)
         return _Result(0, "")
 
-    def _register(self, repo, inputs):
-        if self.register_outcome is not None:
-            conclusion, lines = self.register_outcome(inputs)
-        else:
-            from gapp.admin.sdk import ci as ci_mod
-            lines = []
-            env = {
-                "FLEET_REPO": repo, "OPERATION": inputs.get("operation", "set"), "NAME": inputs.get("name", ""),
-                "REPO": inputs.get("repo", ""), "PROJECT": inputs.get("project", ""),
-                "CHANGES": inputs.get("changes", "{}"), "SOURCE": inputs.get("source", ""),
-                "ALLOWED_SOURCES": self.variables.get((repo, "GAPP_ALLOWED_SOURCES"), ""),
-                "APP_ID": self.variables.get((repo, "HOSTING_GITHUB_APP_ID"), ""),
-                "APP_KEY_SET": "true" if (repo, "HOSTING_GITHUB_APP_PRIVATE_KEY") in self.secrets else "false",
-            }
-            # The runner's own token reads and writes its repo whatever this
-            # machine's access is.
-            saved = self.api_writes, self.actions_api, set(self.unreadable)
-            self.api_writes, self.actions_api = True, True
-            self.unreadable.discard(repo)
-            try:
-                rc = ci_mod.runner_register(env, out=lambda line: lines.append(line.split("gapp-register: ", 1)[-1]))
-            finally:
-                self.api_writes, self.actions_api, self.unreadable = saved[0], saved[1], saved[2]
-            conclusion = "success" if rc == 0 else "failure"
-        return conclusion, job_log([f"gapp-register: {line}" for line in lines], script="gapp ci runner register")
+    def _deploy(self, repo, inputs):
+        if self.deploy_outcome is not None:
+            return self.deploy_outcome(inputs)
+        name = inputs.get("deployment")
+        definition = self.definitions(repo)[name]
+        done = {"deployment": name, "project": definition["project"], "ref": definition.get("ref"),
+                "commit": "abc1234", "gapp": definition["gapp"], "service_url": f"https://{name}-abc-uc.a.run.app"}
+        return "success", [f"result={json.dumps(done)}"]
 
     def _status(self, repo, inputs):
         if self.status_outcome is not None:
-            conclusion, lines = self.status_outcome(inputs)
-        else:
-            name = inputs.get("deployment")
-            live = {"initialized": True, "name": name, "repo_path": None,
-                    "deployment": {"project": "my-proj", "pending": False,
-                                   "services": [{"name": name, "url": f"https://{name}-abc-uc.a.run.app", "healthy": True}]},
-                    "domain": None, "next_step": None}
-            conclusion, lines = "success", [f"result={json.dumps(live)}"]
-        return conclusion, job_log([f"gapp-status: {line}" for line in lines], script=STATUS_SCRIPT_ECHO)
+            return self.status_outcome(inputs)
+        name = inputs.get("deployment")
+        definition = self.definitions(repo)[name]
+        live = {"deployment": name, "project": definition["project"], "deployed": True,
+                "url": f"https://{name}-abc-uc.a.run.app", "healthy": True,
+                "last_deployed_by": definition["gapp"], "domain": None, "next_step": None}
+        return "success", [f"result={json.dumps(live)}"]
 
     def _run_get(self, run_id, cmd):
         run = self.runs.get(run_id)
@@ -346,8 +317,11 @@ class FakeGitHub:
             if "--jq" in cmd and cmd[cmd.index("--jq") + 1] == ".private":
                 return _Result(0, "true\n" if self.private[repo] else "false\n")
             return _Result(0, json.dumps({"private": self.private[repo], "permissions": {"admin": self.admin.get(repo, True)}}))
+        if rest == ["environments"]:
+            names = sorted(env for (r, env) in self.environments if r == repo)
+            return _Result(0, json.dumps({"total_count": len(names), "environments": [{"name": n} for n in names]}))
         if rest[0] == "environments":
-            return self._environment_get(endpoint)
+            return self._environment_get(path_part)
         if rest[0] == "contents":
             ref = dict(kv.partition("=")[::2] for kv in query.split("&") if kv).get("ref")
             return self._contents(repo, "/".join(rest[1:]), ref)
@@ -423,25 +397,35 @@ class FakeGitHub:
     # -- conveniences for tests --
 
     def install(self, repo, gapp_repo="example-org/gapp", gapp_ref="v4.0.0"):
-        """Put gapp's three files in the fleet repo, as `ci init` would, and make the repo exist."""
+        """Make the fleet repo exist, holding an empty fleet and the workflows `gapp ci init` installs."""
         from gapp.admin.sdk import ci as ci_mod
-        from gapp.admin.sdk import fleet
+        from gapp.admin.sdk import entryfile
         self.private.setdefault(repo, True)
-        self.topics.setdefault(repo, set()).add("gapp-ci")
-        for path, content in ci_mod._operator_files(gapp_repo, gapp_ref).items():
+        for path, content in ci_mod._workflow_files(gapp_repo, gapp_ref).items():
             self.files[(repo, path)] = content
-        self.files[(repo, fleet.DEPLOYMENTS_FILE)] = fleet.DEPLOYMENTS_FILE_INITIAL
+        self.files[(repo, entryfile.FILE_NAME)] = entryfile.dump(entryfile.empty())
 
-    def deployments(self, repo):
-        from gapp.admin.sdk import fleet
-        return fleet.parse(self.files[(repo, fleet.DEPLOYMENTS_FILE)])
+    def definitions(self, repo):
+        from gapp.admin.sdk import entryfile
+        return entryfile.parse(self.files[(repo, entryfile.FILE_NAME)])["deployments"]
 
-    def deploy(self, repo, name, deployed_repo, project, **keys):
-        """Write a deployment entry directly, as the register run would."""
-        from gapp.admin.sdk import fleet
-        doc = self.deployments(repo)
-        doc[name] = {"id": keys.pop("id", name), "repo": deployed_repo, "project": project, **keys}
-        self.files[(repo, fleet.DEPLOYMENTS_FILE)] = fleet.dump(doc)
+    def define(self, repo, name, app_repo, project, **keys):
+        """Add a deployment's definition to the fleet file."""
+        from gapp import __version__
+        from gapp.admin.sdk import entryfile
+        whole = entryfile.parse(self.files[(repo, entryfile.FILE_NAME)])
+        definition = entryfile.new_definition(id=keys.pop("id", name), project=project, repo=app_repo, ref=keys.pop("ref", None))
+        definition.setdefault("gapp", __version__)
+        definition.update(keys)
+        whole["deployments"][name] = definition
+        self.files[(repo, entryfile.FILE_NAME)] = entryfile.dump(whole)
+
+    def connect(self, repo, project):
+        """Record a project's deploy identity in the fleet repo, as `gapp ci projects connect` does."""
+        self.environments[(repo, project)] = {
+            "GAPP_WIF_PROVIDER": f"projects/1/locations/global/workloadIdentityPools/github/providers/github",
+            "GAPP_DEPLOY_SERVICE_ACCOUNT": "gapp-deploy@" + f"{project}.iam.gserviceaccount.com",
+        }
 
 
 @pytest.fixture
@@ -454,12 +438,40 @@ def fake_gh(monkeypatch):
 
 @pytest.fixture
 def fleet_repo(monkeypatch, fake_gh, tmp_path):
-    """A machine whose fleet repo is set to acme/fleet (gapp's files installed)
-    and whose gapp config lives in a temp dir; gh is the only tool present."""
+    """A machine whose fleet lives in acme/fleet (an empty fleet, gapp's
+    workflows installed) and whose gapp config lives in a temp dir; gh is
+    the only tool present."""
     import shutil
     from gapp.admin.sdk import config as config_mod
+    from gapp.admin.sdk import entryfile, fleetrepo
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    monkeypatch.delenv("GAPP_FLEET_FILE", raising=False)
     monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/gh" if name == "gh" else None)
-    config_mod.set_fleet_repo("acme/fleet", "gapp ci init acme/fleet")
+    monkeypatch.setattr(fleetrepo, "read_text", lambda repo: fake_gh.files.get((repo, entryfile.FILE_NAME)))
+
+    def write_text(repo, text, message):
+        fake_gh.files[(repo, entryfile.FILE_NAME)] = text
+        return True
+    monkeypatch.setattr(fleetrepo, "write_text", write_text)
+    config_mod.set_fleet_repo("acme/fleet", "fleet use")
     fake_gh.install("acme/fleet")
     return "acme/fleet"
+
+
+@pytest.fixture
+def ci(monkeypatch, fleet_repo, fake_gh):
+    """The fleet repo with one deployment, my-app (the public repo
+    me/my-app, on my-proj), runners connected to my-proj, and `me` an
+    allowed owner. gcloud must never be called."""
+    from gapp.admin.sdk import ci as ci_mod
+
+    def no_gcloud(*args, **kwargs):
+        raise AssertionError("this command must never call gcloud")
+    monkeypatch.setattr(ci_mod, "run_gcloud", no_gcloud)
+    monkeypatch.setattr(ci_mod, "_get_gapp_repo", lambda: "example-org/gapp")
+    monkeypatch.setattr(ci_mod, "_resolve_gapp_ref", lambda gapp_repo: "v4.0.0")
+    fake_gh.define(fleet_repo, "my-app", "me/my-app", "my-proj")
+    fake_gh.connect(fleet_repo, "my-proj")
+    fake_gh.private["me/my-app"] = False
+    fake_gh.variables[(fleet_repo, "GAPP_ALLOWED_SOURCES")] = "me"
+    return fake_gh

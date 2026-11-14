@@ -799,6 +799,8 @@ def _say_changes(result, json_out, nothing):
         return
     for change in result["changes"]:
         click.echo(f"{result['deployment']}: {change['key']}: {change['before']} -> {change['after']}")
+    if result.get("dry_run"):
+        click.echo("Nothing was changed.")
     if result.get("next"):
         click.echo(f"Set its value: {result['next']}")
 
@@ -858,7 +860,11 @@ def rename_cmd(old, new, json_out):
 @_DEPLOYMENT
 @_JSON
 def show_cmd(deployment, json_out):
-    """One deployment's definition and the settings a deploy would use."""
+    """One deployment's definition and the settings a deploy would use.
+
+    With --json, `settings` is the settings object as `gapp apply` takes
+    it, so a file for `gapp apply` can be started from it.
+    """
     from gapp.admin.sdk import definitions
     try:
         result = definitions.show(deployment)
@@ -875,7 +881,7 @@ def show_cmd(deployment, json_out):
         f"  (this is gapp {result['this_gapp']}; upgrade available: gapp upgrade --deployment {result['deployment']})"
         if result["upgrade"] else ""))
     click.echo("  settings")
-    for row in result["settings"]:
+    for row in result["effective"]:
         click.echo(f"    {row['key']}: {row['value']}  ({row['from']})")
 
 
@@ -993,9 +999,10 @@ def env_unset_cmd(name, deployment, json_out):
 
 @main.command("apply")
 @click.argument("file", type=click.Path(dir_okay=False))
+@click.option("--dry-run", is_flag=True, help="Print what would change, and change nothing.")
 @_DEPLOYMENT
 @_JSON
-def apply_cmd(file, deployment, json_out):
+def apply_cmd(file, dry_run, deployment, json_out):
     """Replace a deployment's settings with a file's, all at once.
 
     \b
@@ -1004,14 +1011,15 @@ def apply_cmd(file, deployment, json_out):
       domain: app.example.com
       env:
         MAX_USERS: {value: "25"}
-    A setting the file leaves out goes back to its default.
+    A setting the file leaves out goes back to its default. Start the
+    file from what is there now: `gapp show --json`, under `settings`.
     """
     from gapp.admin.sdk import definitions
     path = Path(file)
     if not path.is_file():
         _refused(definitions.Refused(f"{file} is not a file."), json_out)
     _definition_command(json_out, "Nothing to change: the settings are already the file's.",
-                        lambda d: d.apply, path.read_text(), deployment=deployment, source=file)
+                        lambda d: d.apply, path.read_text(), deployment=deployment, source=file, dry_run=dry_run)
 
 
 @main.group("manifest")

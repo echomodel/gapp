@@ -29,7 +29,7 @@ commands:
     options: [--secret, --generate, --data-path]
     one: true
   env unset: {args: ["<name>"], one: true}
-  apply: {args: ["<file>"], one: true}
+  apply: {args: ["<file>"], options: [--dry-run], one: true}
 
   deploy:
     options: [--dry-run, --rebuild, --replace-domain, --upgrade]
