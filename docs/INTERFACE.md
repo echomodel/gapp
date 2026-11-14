@@ -87,7 +87,118 @@ that knows both reads both.
 | `repo` | Where the code is. Absent for an app with no remote | `gapp set repo` |
 | `project` | The Google Cloud project | Never |
 | `ref` | The branch, tag or commit a deploy builds. Absent: the default branch | `gapp set ref` |
-| `gapp` | The gapp version this definition was written by, and the one that deploys it. Never typed | `gapp upgrade` | Brings one definition to the installed gapp's version. Takes no version. Prints its plan first. Changes the definition only. Refused when there is nothing to upgrade, when the definition is newer than this gapp, or when it is older than this gapp can upgrade from; the refusal names the gapp to install |
+| `gapp` | The gapp version this definition was written by, and the one that deploys it. Never typed | `gapp upgrade` |
+| `settings` | Everything below | The settings commands |
+
+Settings:
+
+| Key | Meaning | Default |
+|---|---|---|
+| `public` | Anyone can call the URL; the app does its own sign-in | false |
+| `domain` | A custom domain mapped at deploy | none |
+| `start` | The start command, for a repo with no Dockerfile or Procfile | none |
+| `memory`, `cpu`, `max_instances` | Cloud Run sizing | 512Mi, 1, 1 |
+| `apis` | Extra Google Cloud APIs the app uses | none |
+| `env` | Variables the service gets, by name. Each is a plain `value`, or a `secret` (optionally `generate`) | none |
+
+`{{DATA_PATH}}` in a value is the folder where the deployment's bucket is
+mounted. `{{NAME}}` is the deployment's id.
+
+**Reserved, not in 4.0.0:** a deployment made of several services. It
+would add a `services:` map inside `settings`, each with its own keys, and
+a `--service <name>` flag on the settings commands. A definition without
+`services:` keeps meaning exactly what it means now.
+
+## Versions
+
+Two things record a version, and every gapp checks them before anything
+else. Their names and places never change.
+
+| Where | Says | Checked |
+|---|---|---|
+| `format`, at the top of the entry file | How the file is laid out | Before anything else in the file is read |
+| The `gapp-version` label on the deployment's bucket | Which gapp last deployed it, written like `4-0-0` | Before a deploy builds or changes anything |
+
+A gapp that finds a value it does not support, or none, stops there. It
+says what it found and where, reads no further, writes nothing and
+touches no deployment.
+
+Each definition also records, in `gapp`, the version of the gapp that
+wrote it. `gapp add` writes the version of the gapp that ran it.
+
+**A runner deploys with the definition's version**, whatever is installed
+on the machine that asked. So a gapp upgrade on a workstation changes
+nothing by itself. There is no fleet-wide version.
+
+**A newer gapp and an older definition.** Within the range the newer gapp
+supports:
+
+| Action | Allowed |
+|---|---|
+| Read it, show it, start a runner deploy | Yes |
+| Change a setting the definition's version knows | Yes |
+| Use a setting it does not know | No: `gapp upgrade` first |
+| Deploy from this machine | No: `gapp upgrade` first |
+
+So an upgrade can be available without being required. `gapp list` and
+`gapp show` say which.
+
+**Upgrading is two deliberate steps.**
+
+1. `gapp upgrade` changes the definition to the installed gapp's version
+   and prints the plan: what changes in the definition, what the next
+   deploy will change in the cloud, and anything to do by hand before or
+   after. It never goes down, and only the gapp being upgraded to knows
+   the way there, so it takes no version.
+2. The next deploy applies it. A deploy that would apply an upgrade is
+   refused without `--upgrade`, and `--upgrade` is refused when no upgrade
+   is pending. `gapp show` and `gapp deploy --dry-run` say in advance
+   which it is.
+
+Which earlier versions a gapp can upgrade from is that release's choice,
+and may be none. When a definition is too old, the refusal names a gapp
+to install first: install it, upgrade, and repeat.
+
+What this depends on: the way a workflow starts a gapp on a runner stays
+the same across releases, and a test holds it there.
+
+## Which deployment a command means
+
+One rule, for every command about one deployment:
+
+1. `--deployment <name>`, or `-d <name>`, names it. This works anywhere.
+2. Left out, inside a clone: the one definition whose `repo` is the
+   clone's remote. Several: refused, with each full command printed. None:
+   refused, with the `gapp add` command printed.
+3. Left out, outside a clone: refused.
+
+The name is a positional argument in exactly three places, where the name
+is the thing being made or changed: `gapp add <name>`, `gapp rename <old>
+<new>`, `gapp remove <name>` (when it exists). Everywhere else positional
+arguments are the things inside the deployment: a setting, a variable, a
+secret.
+
+A folder's name is never used. A clone with no remote is matched only by
+`--deployment`.
+
+## Commands
+
+Every command takes `--json`. Commands that start a run on GitHub take
+`--no-watch`.
+
+### Projects
+
+| Command | Does | Needs |
+|---|---|---|
+| `gapp project setup <project>` | Once per project: enables APIs, grants Cloud Build its permissions, marks the project. With a GitHub fleet, also lets runners deploy there | gcloud as an Owner; `gh` as an admin of the fleet repo for a GitHub fleet |
+
+### Definitions
+
+| Command | Does |
+|---|---|
+| `gapp add [<name>] --project <p> [--repo <r>] [--ref <r>] [--id <id>]` | Defines a deployment. Touches no cloud. Refused if the name exists. Inside a clone, name and repo default to the clone's |
+| `gapp add <name> --copy-of <existing> [--project <p>] [--ref <r>]` | A second deployment of the same repo. Copies settings except `domain`. Project and ref default to the original's |
+| `gapp upgrade` | Brings one definition to the installed gapp's version. Takes no version. Prints its plan first. Changes the definition only. Refused when there is nothing to upgrade, when the definition is newer than this gapp, or when it is older than this gapp can upgrade from; the refusal names the gapp to install |
 | `gapp rename <old> <new>` | Changes the name only. The id and the cloud resources stay |
 | `gapp list` | Every definition: name, repo, project, ref, gapp version, and "upgrade available" or "upgrade required" where that applies. Says where the fleet lives |
 | `gapp show` | One definition, and the settings a deploy would use, each marked as from the definition, from `app.json`, or a default. Says when the next deploy would apply an upgrade, and from which version to which |
