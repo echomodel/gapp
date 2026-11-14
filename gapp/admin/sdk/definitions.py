@@ -177,7 +177,12 @@ def rename(old: str, new: str) -> dict:
 
 @_guard
 def show(deployment: str | None = None, *, cwd: Path | None = None) -> dict:
-    """One definition, and the settings a deploy would use with where each comes from."""
+    """One definition, and the settings a deploy would use with where each comes from.
+
+    `settings` is the definition's settings object, exactly what `apply`
+    takes, so a file can be started from it. `effective` lists every
+    setting a deploy would use, each with where it comes from.
+    """
     where, deployments = _load()
     name = which(deployments, deployment, cwd, "gapp show")
     definition = deployments[name]
@@ -199,7 +204,7 @@ def show(deployment: str | None = None, *, cwd: Path | None = None) -> dict:
         "deployment": name, "id": definition.get("id"), "repo": definition.get("repo"),
         "project": definition.get("project"), "ref": definition.get("ref"), "gapp": definition.get("gapp"),
         "this_gapp": __version__, "upgrade": "available" if stands == "older" else None,
-        "settings": rows, "app_json": "not read", "fleet": where.describe(),
+        "settings": settings_mod.validate(own), "effective": rows, "app_json": "not read", "fleet": where.describe(),
     }
 
 
@@ -359,8 +364,13 @@ def env_unset(variable: str, *, deployment: str | None = None, cwd: Path | None 
 
 
 @_guard
-def apply(text: str, *, deployment: str | None = None, cwd: Path | None = None, source: str = "The file") -> dict:
-    """Replace a definition's settings with the ones in `text`, all at once or not at all."""
+def apply(text: str, *, deployment: str | None = None, cwd: Path | None = None, source: str = "The file",
+          dry_run: bool = False) -> dict:
+    """Replace a definition's settings with the ones in `text`, all at once or not at all.
+
+    With `dry_run`, the same checks run and the same changes are
+    reported, and nothing is written.
+    """
     try:
         wanted = yaml.safe_load(text) if text and text.strip() else {}
     except yaml.YAMLError as e:
@@ -377,4 +387,6 @@ def apply(text: str, *, deployment: str | None = None, cwd: Path | None = None, 
     for variable in sorted(set(before_env) | set(after_env)):
         if before_env.get(variable) != after_env.get(variable):
             changes.append(_change(f"env {variable}", before_env.get(variable), after_env.get(variable)))
+    if dry_run:
+        return _result(name, changes, where, dry_run=True)
     return _close(where, deployments, name, definition, wanted, changes)

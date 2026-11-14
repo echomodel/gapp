@@ -388,560 +388,206 @@ def project_setup_cmd(sdk: GappSDK, project, json_out):
 
 # -- gapp ci --
 
-# Parity: the ci group mirrors the root group's verbs where both have the
-# operation (CONTRIBUTING, "Rules of the CI system"); a test checks the names.
-CI_PARITY_VERBS = ("setup", "deploy", "status", "list")
-
-
-def _state(present):
-    return "present" if present else "missing" if present is False else "not checked"
-
-
-def _ci_finish(result, *ok_lines, verbose=False, details=(), after=()):
-    """The deployment-first ending of every ci command.
-
-    On success: the lines given (what happened), the fleet detail only
-    with --verbose, then "Next: <exact command>" when there is one. On an
-    outcome: its plain sentence with the fix, and exit 1.
-    """
-    if result.get("ok") is False:
-        click.echo(result["next_step"]["hint"])
-        raise SystemExit(1)
-    for line in ok_lines:
-        if line:
-            click.echo(line)
-    if verbose:
-        for line in details:
-            if line:
-                click.echo(f"  {line}")
-    if result.get("problem"):
-        click.echo(result["problem"])
-    if next_step := result.get("next_step"):
-        click.echo(f"Next: {next_step['hint']}")
-    for line in after:
-        if line:
-            click.echo(line)
-
-
-def _ci_print(result, *, verbose=False, details=()):
-    """Print a result whose text the SDK built (`lines`, `lines_after`); exit 1 on an outcome."""
-    for line in result.get("lines") or []:
-        click.echo(line)
-    if result.get("ok") is False:
-        click.echo(result["next_step"]["hint"])
-        raise SystemExit(1)
-    if verbose:
-        for line in details:
-            if line:
-                click.echo(f"  {line}")
-    for line in result.get("lines_after") or []:
-        click.echo(line)
-
-
-def _fleet_details(result):
-    """The fleet detail lines `--verbose` adds."""
-    lines = [f"Fleet repo: {result.get('fleet_repo') or '(none)'}"]
-    if result.get("id"):
-        lines.append(f"Id: {result['id']} (what the GCP resources are keyed by)")
-    if files := result.get("files"):
-        parts = []
-        for path, info in files.items():
-            name = path.rsplit("/", 1)[-1]
-            if isinstance(info, str):
-                parts.append(f"{name} {info}")
-            elif info.get("present") is None:
-                parts.append(f"{name} not checked")
-            elif not info["present"]:
-                parts.append(f"{name} missing")
-            else:
-                parts.append(f"{name} present" + (", not current" if info.get("current") is False else ""))
-        lines.append("Files: " + ", ".join(parts))
-    if result.get("variables") is not None:
-        if result.get("variables_note"):
-            lines.append(f"Variables: {result['variables_note']}")
-        else:
-            lines.append("Variables: " + ", ".join(f"{n} {_state(ok)}" for n, ok in result["variables"].items()))
-    if result.get("topic"):
-        lines.append(f"Topic gapp-ci: {result['topic']}")
-    if result.get("legacy_workflows"):
-        lines.append("Per-solution workflows from gapp 3.x (still run from the Actions tab; delete once set up here): "
-                     + ", ".join(result["legacy_workflows"]))
-    return lines
-
-
-def _ci_options(fn):
-    """--verbose and --json, on every ci command."""
-    fn = click.option("--json", "json_out", is_flag=True,
-                      help="Print the command's result as JSON (the same dict the MCP tool returns) and nothing else.")(fn)
-    return click.option("--verbose", "-v", is_flag=True, help="Also show the fleet repo, its files, variables and ids.")(fn)
-
 
 def _emit_json(result):
-    """The --json ending: the SDK result exactly, exit 1 on an outcome."""
+    """The --json ending: the result exactly. Exit 2 on a refusal, 1 on a failure."""
     click.echo(json_mod.dumps(result, indent=2, default=str))
-    raise SystemExit(0 if result.get("ok") is not False else 1)
+    if result.get("ok") is False:
+        raise SystemExit(2 if result.get("refused") else 1)
+    raise SystemExit(0)
+
+
+def _ci_end(result, json_out):
+    """How every `gapp ci` command ends.
+
+    Done: the lines the result carries, then "Next: <command>" when there
+    is one. Refused or failed: the one sentence that says why and what to
+    run, and exit code 2 or 1.
+    """
+    if json_out:
+        _emit_json(result)
+    if result.get("ok") is False:
+        click.echo(result["next_step"]["hint"], err=True)
+        raise SystemExit(2 if result.get("refused") else 1)
+    for line in result.get("lines") or []:
+        click.echo(line)
+    if next_step := result.get("next_step"):
+        click.echo(f"Next: {next_step['hint']}")
+
+
+_ci_deployment = click.option("--deployment", "-d", "deployment", default=None, metavar="NAME",
+                              help="The deployment. Left out inside a clone: the one this repo has.")
+_ci_json = click.option("--json", "json_out", is_flag=True,
+                        help="Print the result as JSON (what the MCP tool returns) and nothing else.")
 
 
 @main.group("ci")
 def ci_group():
-    """Deploy through GitHub Actions: the CI fleet system.
+    """Deploy on GitHub Actions runners. Optional.
 
-    gapp has two fleet systems that do not talk to each other. The root
-    commands (setup, deploy, status, list) deploy the local checkout to
-    GCP with gcloud. These `ci` commands manage your fleet through GitHub
-    only: they never use gcloud (except `ci project setup`) and never read
-    the working directory. The fleet is kept in a private fleet repo:
-    gapp/deployments.yaml, one entry per deployment, plus gapp's three
-    workflows (deploy, register, status). A deployment is one repo deployed to one project under a
-    name you choose; the same repo deployed twice is two deployments.
+    Everything gapp does with GitHub Actions is here, and nothing else in
+    gapp needs it. A runner does the deploy `gapp deploy` does, so a
+    machine with only `gh` can start one. These commands need the fleet to
+    be kept in a GitHub repo (`gapp fleet use <owner>/<repo>`); the
+    workflows run in that repo and read its gapp.yaml. They never change
+    the fleet: a definition is changed with `gapp add`, `gapp set` and the
+    other fleet commands.
 
     \b
-    From nothing to first deploy:
-      gapp ci init                              finds your fleet repo, or says how to create one
-      gapp ci init <owner>/<repo> --create      creates a private fleet repo and sets it
-      gapp ci sources add <owner>               allows the GitHub owner whose repos you deploy
-      gapp ci project setup <project>           once per GCP project (gcloud as an Owner)
-      gapp ci setup <name> --repo <owner>/<repo> --project <project>
-      gapp ci deploy <name>
-    Each step's output names the next. `gapp ci list` and `gapp ci status
-    <name>` say where things stand; `gapp ci status <name> --live` asks the
-    project for the live service state; `--verbose` adds the fleet detail;
-    `--json` prints the result dict and nothing else.
+    From a fleet in a repo to a deploy on a runner:
+      gapp ci init                         installs the workflows in the fleet repo
+      gapp ci sources add <owner>          allows the owner whose repos runners deploy
+      gapp project setup <project>         once per project (gcloud as an Owner)
+      gapp ci projects connect <project>   once per project: lets runners sign in to it
+      gapp ci deploy --deployment <name>   deploys it on a runner
+      gapp ci status --deployment <name>   the last run; --live asks the project
+    Each command's output names the next one.
 
-    A deployment's settings come from the app repo's gapp.yaml with the
-    fleet's manifest for it merged over: `gapp ci manifest <name>` prints
-    it, `gapp ci setup <name> ... --manifest FILE --update` replaces it.
-    That is how a repo you can't change (even one with no gapp.yaml or
-    Procfile; set `start` in the manifest) deploys without a fork.
+    \b
+    A public app repo needs nothing more. To deploy private ones, give the
+    fleet repo a GitHub App that can read them: on the organization that
+    holds them, create a GitHub App with Contents: Read-only and no
+    webhook, install it there, generate a private key, and store the two:
+      gh variable set HOSTING_GITHUB_APP_ID --repo <fleet-repo> --body <app-id>
+      gh secret set HOSTING_GITHUB_APP_PRIVATE_KEY --repo <fleet-repo> < <key>.pem
     """
 
 
 @ci_group.command("init")
-@click.argument("repo", required=False, metavar="[OWNER/REPO]")
-@click.option("--owner", default=None, help="Search this GitHub owner's repos for the fleet repo (the gapp-ci topic).")
-@click.option("--create", is_flag=True, help="Create OWNER/REPO as a new private fleet repo, with gapp's workflows, and set it.")
-@_ci_options
-def ci_init_cmd(repo, owner, create, verbose, json_out):
-    """Show, find, set or create your fleet repo (the only command that sets it).
+@_ci_json
+def ci_init_cmd(json_out):
+    """Install the deploy and status workflows in the fleet repo.
 
-    \b
-      gapp ci init                     shows the saved fleet repo; if none is saved, finds the one
-                                       repo under your account carrying the gapp-ci topic and saves it
-      gapp ci init --owner <org>       the same search under that owner
-      gapp ci init <owner>/<repo>      sets an existing repo as your fleet repo and installs or
-                                       updates gapp's workflows and gapp/deployments.yaml in it
-      gapp ci init <owner>/<repo> --create   creates it private, tagged and populated, and sets it
-
-    Needs a `gh` login; installing gapp's files needs one that can write to the repo.
-
-    \b
-    Public app repos need nothing more. To deploy private ones, give the fleet
-    a GitHub App that can read them, once: on the GitHub organization that
-    holds them, create a GitHub App (Settings > Developer settings > GitHub
-    Apps) with Contents: Read-only and no webhook, install it there (never on
-    all repos of a personal account), generate a private key, and store the
-    two in the fleet repo under these fixed names:
-      gh variable set HOSTING_GITHUB_APP_ID --repo <fleet-repo> --body <app-id>
-      gh secret set HOSTING_GITHUB_APP_PRIVATE_KEY --repo <fleet-repo> < <key>.pem
-    then delete the key file. --verbose shows whether both are set.
+    Writes .github/workflows/gapp-deploy.yml and gapp-status.yml there and
+    nothing else. Run it again after installing another gapp to bring the
+    two files up to it. Needs `gh` signed in as an admin of the fleet repo.
+    Refused when the fleet is not kept in a GitHub repo.
     """
-    from gapp.admin.sdk.ci import init_fleet
-    result = init_fleet(repo, owner=owner, create=create)
-    if json_out:
-        _emit_json(result)
-    _ci_finish(result, *(result.get("lines") or []), verbose=verbose, details=_fleet_details(result))
+    from gapp.admin.sdk import ci
+    _ci_end(ci.init_workflows(), json_out)
 
 
-@ci_group.group("project")
-def ci_project_group():
-    """Per-project trust between the fleet repo and a GCP project."""
+@ci_group.group("projects")
+def ci_projects_group():
+    """The Google Cloud projects the fleet repo's runners can deploy to."""
 
 
-@ci_project_group.command("setup")
+@ci_projects_group.command("connect")
 @click.argument("project")
-@_ci_options
-def ci_project_setup_cmd(project, verbose, json_out):
-    """Make your fleet trusted to deploy to PROJECT (once per project, idempotent).
+@_ci_json
+def ci_projects_connect_cmd(project, json_out):
+    """Let the fleet repo's runners sign in to PROJECT and deploy. Once per project.
 
-    The only `gapp ci` command that touches GCP. Creates or confirms the
-    Workload Identity pool and provider and the gapp-deploy service
-    account in the project, binds the pool to the fleet repo, and records
-    the deploy identity in the fleet repo as the GitHub Environment named
-    PROJECT (GAPP_WIF_PROVIDER, GAPP_DEPLOY_SERVICE_ACCOUNT).
+    In the project: the Workload Identity pool and provider, the
+    gapp-deploy service account and its roles, and the binding that lets
+    runs of the fleet repo act as it. In the fleet repo: the GitHub
+    Environment named PROJECT, holding the deploy identity
+    (GAPP_WIF_PROVIDER, GAPP_DEPLOY_SERVICE_ACCOUNT). Running it again only
+    adds what is missing.
 
-    Requires gcloud signed in as an Owner of PROJECT, and `gh` signed in
-    as an admin of the fleet repo (its owner, for a personal repo). Every
-    failure says which requirement is not met.
+    Refused on a project that is not set up: run `gapp project setup
+    PROJECT` first. Needs gcloud signed in as an Owner of PROJECT, and `gh`
+    signed in as an admin of the fleet repo.
     """
-    from gapp.admin.sdk.ci import setup_ci_project
-    result = setup_ci_project(project)
-    if json_out:
-        _emit_json(result)
-    lines = []
-    if result.get("ok") is not False:
-        result["next_step"] = {"action": "ci setup", "hint": f"gapp ci setup <name> --repo <owner>/<repo> --project {result['project_id']}"}
-        marked = result.get("hosted") == "set"
-        mark_only = marked and not any(result.get(k) == "created" for k in ("wif_pool", "wif_provider", "service_account")) \
-            and result.get("environment_record") in (None, "unchanged")
-        if result.get("changed") and not mark_only:
-            lines.append(f"{result['project_id']} now trusts your fleet to deploy to it.")
-        elif marked:
-            lines.append(f"{result['project_id']} already trusts your fleet to deploy to it; marked it gapp=hosted, "
-                         f"so `gapp list` and `gapp status <name>` can find its deployments.")
-        else:
-            lines.append(f"{result['project_id']} already trusts your fleet to deploy to it. Nothing changed.")
-        if marked:
-            lines.append("It can take a few minutes before gapp sees the new mark when searching for deployments "
-                         "(`gapp list`, and commands run without `--project`).")
-    details = _fleet_details(result) + [
-        f"{label}: {result[key]}" for key, label in (("wif_pool", "WIF pool"), ("wif_provider", "WIF provider"),
-                                                      ("service_account", "Service account"), ("binding", "Binding"),
-                                                      ("hosted", "Hosted mark (gapp=hosted)"),
-                                                      ("environment_record", f"Environment {result.get('environment')}"))
-        if result.get(key)]
-    _ci_finish(result, *lines, verbose=verbose, details=details)
+    from gapp.admin.sdk import ci
+    _ci_end(ci.connect_project(project), json_out)
+
+
+@ci_projects_group.command("list")
+@_ci_json
+def ci_projects_list_cmd(json_out):
+    """The projects the fleet repo's runners can deploy to.
+
+    Read from the fleet repo's record: its GitHub Environments that hold a
+    deploy identity. Needs only `gh`; Google Cloud is not asked.
+    """
+    from gapp.admin.sdk import ci
+    _ci_end(ci.list_projects(), json_out)
 
 
 @ci_group.group("sources")
 def ci_sources_group():
-    """The GitHub owners whose repos may be deployed from your fleet.
+    """The GitHub owners whose repos runners may deploy.
 
-    The list is the fleet repo's repository variable GAPP_ALLOWED_SOURCES;
-    the register run refuses a repo whose owner is not on it. Needs `gh`
-    with write access to the fleet repo (read for `list`).
+    The list is the fleet repo's repository variable GAPP_ALLOWED_SOURCES.
+    A deploy run refuses a deployment whose repo belongs to an owner that
+    is not on it. Needs `gh` with write access to the fleet repo (read
+    access for `list`).
     """
 
 
 @ci_sources_group.command("add")
 @click.argument("owner")
-@_ci_options
-def ci_sources_add_cmd(owner, verbose, json_out):
-    """Allow apps owned by OWNER in your fleet."""
-    from gapp.admin.sdk.ci import manage_sources
-    result = manage_sources("add", owner)
-    if json_out:
-        _emit_json(result)
-    _ci_finish(result, *(result.get("lines") or []), verbose=verbose, details=_fleet_details(result))
+@_ci_json
+def ci_sources_add_cmd(owner, json_out):
+    """Let runners deploy repos owned by OWNER."""
+    from gapp.admin.sdk import ci
+    _ci_end(ci.manage_sources("add", owner), json_out)
 
 
 @ci_sources_group.command("remove")
 @click.argument("owner")
-@_ci_options
-def ci_sources_remove_cmd(owner, verbose, json_out):
-    """Stop allowing apps owned by OWNER."""
-    from gapp.admin.sdk.ci import manage_sources
-    result = manage_sources("remove", owner)
-    if json_out:
-        _emit_json(result)
-    _ci_finish(result, *(result.get("lines") or []), verbose=verbose, details=_fleet_details(result))
+@_ci_json
+def ci_sources_remove_cmd(owner, json_out):
+    """Stop runners deploying repos owned by OWNER."""
+    from gapp.admin.sdk import ci
+    _ci_end(ci.manage_sources("remove", owner), json_out)
 
 
 @ci_sources_group.command("list")
-@_ci_options
-def ci_sources_list_cmd(verbose, json_out):
-    """Show the allowed owners."""
-    from gapp.admin.sdk.ci import manage_sources
-    result = manage_sources("list")
-    if json_out:
-        _emit_json(result)
-    _ci_finish(result, *(result.get("lines") or []), verbose=verbose, details=_fleet_details(result))
-
-
-@ci_group.command("setup")
-@click.argument("name", required=False)
-@click.option("--repo", default=None, metavar="OWNER/REPO", help="The repo to deploy (never the fleet repo). The name defaults to its repo name.")
-@click.option("--project", default=None, metavar="PROJECT", help="GCP project id the deployment deploys to.")
-@click.option("--ref", default=None, metavar="REF",
-              help="The branch, tag or commit of the repo a deploy builds. Omit to keep the deployment's; "
-                   "pass \"\" to remove it (the repo's default branch).")
-@click.option("--domain", default=None, help="Custom domain the deploy maps (a gapp.yaml key). Omit to keep the entry's; pass \"\" to remove it.")
-@click.option("--copy-of", default=None, metavar="EXISTING", help="Start NAME as a copy of an existing deployment (same repo and keys; its own id; no domain).")
-@click.option("--manifest", "manifest_path", default=None, metavar="FILE",
-              help="The deployment's whole fleet-side manifest, a gapp.yaml-shaped file. It replaces the entry's "
-                   "settings (a key the file lacks is removed) and is merged over the app repo's gapp.yaml at deploy.")
-@click.option("--update", is_flag=True, help="Apply a change to an existing deployment's entry. Without it, setup shows the change and makes none.")
-@click.option("--no-watch", is_flag=True, help="Return after dispatching the register run instead of waiting for it.")
-@_ci_options
-def ci_setup_cmd(name, repo, project, ref, domain, copy_of, manifest_path, update, no_watch, verbose, json_out):
-    """Add or update a deployment: NAME deploys --repo to --project. Mirrors `gapp setup` for the fleet.
-
-    Never uses gcloud and never reads the working directory: the repo is
-    named by --repo and the name defaults to the repo's name. Same name
-    again changes its entry only with --update; without it, setup shows
-    what would change. A repo already
-    deployed under another name is refused: update that one, or add
-    another deployment of it with --copy-of. Writes go through the fleet
-    repo's register run, so this needs only a `gh` that can dispatch
-    workflows; a project your fleet is not yet trusted for, or an owner
-    not yet allowed, stops with the one-time step.
-
-    A deployment's settings come from the app repo's gapp.yaml, with the
-    fleet's manifest for the deployment merged over it at deploy (keys
-    replaced, env variables by name). --manifest FILE sets that fleet-side
-    manifest, so a repo you can't change, even one with no gapp.yaml, can
-    be deployed, and one repo's deployments can differ. Get the current one
-    with `gapp ci manifest NAME`, edit it with `gapp manifest --file FILE
-    set ...`, and upload it with --manifest FILE --update. For a repo with
-    no Dockerfile or Procfile, set `start` in it.
-
-    What a deploy builds is the deployment's ref (--ref): a branch (its
-    tip at each deploy), a tag or a commit. With none, it is the repo's
-    default branch. A release, a rollback and trying a branch are changes
-    to the ref; a copy keeps its source's unless --ref is given.
-
-    \b
-      gapp ci setup --repo me/my-app --project my-project
-      gapp ci setup my-app-staging --copy-of my-app --project my-staging-project
-      gapp ci setup my-app --repo me/my-app --project my-project --manifest my-app.yaml --update
-      gapp ci setup my-app --repo me/my-app --project my-project --ref v1.4.0 --update
-      gapp ci setup my-app-try --copy-of my-app --ref my-feature-branch
-    """
-    from gapp.admin.sdk.ci import setup_deployment
-    manifest = None
-    if manifest_path is not None:
-        from gapp.admin.sdk.manifest import parse_manifest_text
-        from gapp.admin.sdk.schema import ManifestUnreadable
-        try:
-            manifest = parse_manifest_text(Path(manifest_path).read_text())
-        except OSError as e:
-            click.echo(f"  Error: can't read {manifest_path}: {e.strerror}.", err=True)
-            raise SystemExit(1)
-        except ManifestUnreadable as e:
-            click.echo(f"  Error: {manifest_path}: {str(e).splitlines()[0]}", err=True)
-            raise SystemExit(1)
-    command = "gapp " + " ".join(sys.argv[1:]) if sys.argv and sys.argv[0] else None
-    result = setup_deployment(name, repo=repo, project=project, domain=domain, update=update, ref=ref,
-                              copy_of=copy_of, manifest=manifest, watch=not no_watch, command=command)
-    if json_out:
-        _emit_json(result)
-    _ci_print(result, verbose=verbose, details=_fleet_details(result))
-
-
-@ci_group.command("manifest")
-@click.argument("name")
-@click.option("--merged", is_flag=True,
-              help="Print what a deploy would use instead: this manifest merged over the app repo's gapp.yaml. "
-                   "Reads the app repo with your own GitHub login.")
-@click.option("--ref", default=None,
-              help="With --merged (implies it): the app repo's commit, tag or branch, as for `gapp ci deploy --ref`. "
-                   "Default: its default branch.")
-@click.option("--json", "json_out", is_flag=True,
-              help="Print the command's result as JSON (the same dict the MCP tool returns) and nothing else.")
-def ci_manifest_cmd(name, merged, ref, json_out):
-    """Print NAME's fleet-side manifest as YAML, and nothing else.
-
-    These are the gapp.yaml keys the fleet sets for the deployment; the
-    deploy run merges them over the app repo's gapp.yaml. Save it, edit it
-    with `gapp manifest --file FILE ...`, and upload it with `gapp ci setup
-    NAME ... --manifest FILE --update`. One read of the fleet repo; the app
-    repo is never read.
-
-    With --merged, print what a deploy at --ref would use: the merge done
-    the way the deploy run does it, with the app repo's gapp.yaml, top-level
-    files and Procfile read through GitHub with your own login. It also says
-    how the app starts, and what the deploy would refuse (on stderr, exit
-    1). Nothing is saved. Two limits: the deploy run reads the app repo with
-    the fleet's own access, so a repo you can't read here can still deploy;
-    and it runs the gapp version the fleet's workflows are pinned to, which
-    is noted when it differs from this one.
-
-    \b
-      gapp ci manifest my-app > my-app.yaml
-      gapp ci manifest my-app --merged
-      gapp ci manifest my-app --ref v1.4.0
-    """
-    from gapp.admin.sdk.manifest import dump_manifest
-    if merged or ref:
-        from gapp.admin.sdk.ci import merged_manifest
-        from gapp.admin.sdk.start import describe
-        result = merged_manifest(name, ref=ref)
-        if json_out:
-            _emit_json(result)
-        if result.get("merged") is None:
-            click.echo(result["next_step"]["hint"], err=True)
-            raise SystemExit(1)
-        at = result["ref"] + (f" ({result['commit'][:12]})" if result.get("commit") else "")
-        source = (f"the fleet-side manifest merged over {result['repo']}'s gapp.yaml" if result["repo_has_gapp_yaml"]
-                  else f"the fleet-side manifest alone ({result['repo']} has no gapp.yaml)")
-        click.echo(f"# What a deploy of {result['name']} at {at} uses: {source}.")
-        if result["start"]["method"]:
-            click.echo(f"# Starts with: {describe(result['start'])}")
-        for note in result["notes"]:
-            click.echo(f"# {note}")
-        click.echo(dump_manifest(result["merged"]), nl=False)
-        for problem in result["problems"]:
-            click.echo(problem, err=True)
-        if result["problems"]:
-            raise SystemExit(1)
-        return
-    from gapp.admin.sdk.ci import deployment_manifest
-    result = deployment_manifest(name)
-    if json_out:
-        _emit_json(result)
-    if result.get("ok") is False:
-        click.echo(result["next_step"]["hint"], err=True)
-        raise SystemExit(1)
-    click.echo(f"# Fleet-side manifest for {result['name']}, merged over {result['repo']}'s gapp.yaml at deploy.")
-    click.echo(dump_manifest(result["manifest"] or {}), nl=False)
-
-
-@ci_group.command("rename")
-@click.argument("old")
-@click.argument("new")
-@click.option("--no-watch", is_flag=True, help="Return after dispatching the register run instead of waiting for it.")
-@_ci_options
-def ci_rename_cmd(old, new, no_watch, verbose, json_out):
-    """Rename a deployment. Its id and every GCP resource stay as they are."""
-    from gapp.admin.sdk.ci import rename_deployment
-    result = rename_deployment(old, new, watch=not no_watch)
-    if json_out:
-        _emit_json(result)
-    line = None
-    if result.get("ok") is not False:
-        if result.get("action") == "renamed":
-            line = f"{old} is now {new}. Its id and GCP resources are unchanged."
-            result["next_step"] = {"action": "ci deploy", "hint": f"gapp ci deploy {new}"}
-        elif result.get("dispatched"):
-            line = f"Renaming {old} to {new}: {result.get('run_url')}"
-            result["next_step"] = {"action": "ci status", "hint": f"gapp ci status {new}"}
-    _ci_finish(result, line, verbose=verbose, details=_fleet_details(result))
-
-
-def _print_ci_deploy(result, verbose):
-    lines = []
-    if result.get("ok") is not False:
-        if result.get("watched"):
-            lines.append(f"{result['name']} deployed ({result.get('conclusion')}): {result.get('run_url')}")
-            result["next_step"] = {"action": "ci status", "hint": f"gapp ci status {result['name']}"}
-        else:
-            from gapp.admin.sdk.ci import ref_label
-            lines.append(f"{result['name']} deploy started ({ref_label(result.get('ref'))}): {result.get('run_url')}")
-            result["next_step"] = {"action": "ci status", "hint": f"gapp ci status {result['name']}"}
-    _ci_finish(result, *lines, verbose=verbose, details=_fleet_details(result))
+@_ci_json
+def ci_sources_list_cmd(json_out):
+    """Show whose repos runners may deploy."""
+    from gapp.admin.sdk import ci
+    _ci_end(ci.manage_sources("list"), json_out)
 
 
 @ci_group.command("deploy")
-@click.argument("name")
-@click.option("--ref", default=None, hidden=True)
-@click.option("--no-watch", is_flag=True, help="Return after dispatch instead of streaming the run.")
-@_ci_options
-def ci_deploy_cmd(name, ref, no_watch, verbose, json_out):
-    """Deploy NAME through your fleet's deploy workflow. Mirrors `gapp deploy` for the fleet.
+@_ci_deployment
+@click.option("--upgrade", is_flag=True,
+              help="Apply a pending gapp upgrade. Required when one is pending, refused when none is.")
+@click.option("--no-watch", is_flag=True, help="Return once the run is started, without waiting for it.")
+@_ci_json
+def ci_deploy_cmd(deployment, upgrade, no_watch, json_out):
+    """Deploy a deployment on a runner: the deploy `gapp deploy` does, from GitHub Actions.
 
-    Builds the deployment's ref: the branch, tag or commit in its
-    definition, or the app repo's default branch when it has none. A
-    deploy takes no ref of its own. To build something else, change the
-    definition first:
+    The run checks out the ref the definition builds, installs the gapp
+    version the definition names, and deploys. What it deploys comes from
+    the definition and nothing else:
 
     \b
-      gapp ci setup NAME --repo OWNER/REPO --project PROJECT --ref v1.4.0 --update
-      gapp ci deploy NAME
+      gapp show         the definition and its settings
+      gapp set ref ...  what it builds
 
-    Streams the run until it finishes unless --no-watch is given. Needs
-    only a `gh` that can dispatch workflows in the fleet repo; no gcloud
-    or terraform on this machine.
+    Waits for the run and prints what it said, unless --no-watch is given.
+    Refused before a run is started when the definition has no repo on
+    GitHub, when runners are not connected to its project (`gapp ci
+    projects connect`), or when the workflows are not installed (`gapp ci
+    init`). Needs only `gh`; no gcloud or Terraform on this machine.
     """
-    from gapp.admin.sdk.ci import deploy_deployment
-    if ref:
-        click.echo(f"  Error: `gapp ci deploy` takes no --ref. A deploy builds the deployment's ref, which is part "
-                   f"of its definition. Set it, then deploy:\n"
-                   f"    gapp ci setup {name} --repo <owner>/<repo> --project <project> --ref {ref} --update\n"
-                   f"    gapp ci deploy {name}\n"
-                   f"  `gapp ci status {name}` shows its repo, project and current ref.", err=True)
-        raise SystemExit(2)
-    result = deploy_deployment(name, watch=not no_watch, progress=None if json_out else click.echo)
-    if json_out:
-        _emit_json(result)
-    _print_ci_deploy(result, verbose)
-
-
-@ci_group.command("trigger", hidden=True)
-@click.argument("name")
-@click.option("--no-watch", is_flag=True)
-def ci_trigger_cmd(name, no_watch):
-    """Former name of `gapp ci deploy`."""
-    from gapp.admin.sdk.ci import deploy_deployment
-    click.echo("`gapp ci trigger` is now `gapp ci deploy`; running it. This alias goes away in the next release.")
-    _print_ci_deploy(deploy_deployment(name, watch=not no_watch, progress=click.echo), False)
+    from gapp.admin.sdk import ci
+    result = ci.deploy(deployment, upgrade=upgrade, watch=not no_watch,
+                       progress=None if json_out else click.echo)
+    _ci_end(result, json_out)
 
 
 @ci_group.command("status")
-@click.argument("name")
-@click.option("--live", is_flag=True, help="Ask the project for the live service state through the fleet's status workflow (takes a runner start).")
-@_ci_options
-def ci_status_cmd(name, live, verbose, json_out):
-    """One deployment: its repo, project, domain and last deploy. Mirrors `gapp status` for the fleet.
+@_ci_deployment
+@click.option("--live", is_flag=True,
+              help="Ask the project what is live, through the fleet repo's status workflow. Takes a runner start.")
+@_ci_json
+def ci_status_cmd(deployment, live, json_out):
+    """The last deploy run of a deployment, and what its definition says.
 
-    Fast by default and GitHub only; names the step when a deploy cannot
-    run as things stand. --live dispatches the fleet repo's read-only
-    status workflow, which runs `gapp status` for the deployment on a
-    runner with the project's existing deploy identity and returns the
-    result: service up or not, URL, domain state. Nothing is stored in the
-    fleet repo. `gapp ci list` shows the whole fleet.
+    Reads GitHub only: the definition's repo, project, ref and gapp
+    version, and the newest run of the deploy workflow for it. --live
+    starts the status workflow instead: a runner signs in to the project
+    as a deploy does and reports the URL, whether it answers, and the
+    domain's state. Nothing is written anywhere either way.
     """
-    from gapp.admin.sdk.ci import status_deployment, status_live
-    if live:
-        result = status_live(name, progress=None if json_out else click.echo)
-        if json_out:
-            _emit_json(result)
-        lines = []
-        if result.get("ok") is not False:
-            lines.append(f"{name}: live state from {result.get('project')} ({result.get('run_url')})")
-            lines.extend(_render_status(result.get("live") or {}))
-        _ci_finish(result, *lines, verbose=verbose, details=_fleet_details(result))
-        return
-    result = status_deployment(name)
-    if json_out:
-        _emit_json(result)
-    lines = []
-    if result.get("ok") is not False:
-        head = f"{name}: {result.get('repo')} deploys to {result.get('project')}"
-        if result.get("domain"):
-            head += f", domain {result['domain']}"
-        lines.append(head + ".")
-        last = result.get("last_deploy") or {}
-        if last.get("checked") is False:
-            lines.append(f"Last deploy: {last.get('note')}")
-        elif last.get("run"):
-            run = last["run"]
-            outcome = run.get("conclusion") or run.get("status") or "unknown"
-            lines.append(f"Last deploy: {outcome}, {run.get('created_at')} (ref {run.get('ref')}): {run.get('url')}")
-        else:
-            lines.append("No deploys yet.")
-        if result.get("next_step") is None:
-            lines.append(f"Deploy it: gapp ci deploy {name}")
-    details = _fleet_details(result)
-    if verbose and result.get("overlay"):
-        details.append("gapp.yaml keys set by the fleet: " + ", ".join(sorted(result["overlay"])))
-    _ci_finish(result, *lines, verbose=verbose, details=details, after=[result.get("live_hint")])
-
-
-@ci_group.command("list")
-@click.option("--repo", default=None, metavar="OWNER/REPO", help="Only the deployments of this repo.")
-@_ci_options
-def ci_list_cmd(repo, verbose, json_out):
-    """The fleet's deployments, optionally one repo's. Mirrors `gapp list` for the fleet.
-
-    Never touches GCP. --verbose adds the fleet repo's files and variables
-    and notes per-solution workflows left from gapp 3.x.
-    """
-    from gapp.admin.sdk.ci import list_deployments
-    result = list_deployments(repo, verbose=verbose)
-    if json_out:
-        _emit_json(result)
-    lines = []
-    if result.get("ok") is not False and not result.get("deployments"):
-        lines.append(f"No deployment of {repo} in {result['fleet_repo']}." if repo
-                     else f"No deployments in {result['fleet_repo']} yet.")
-    if result.get("ok") is not False and result.get("deployments"):
-        n = len(result["deployments"])
-        lines.append(f"{n} deployment{'s' if n != 1 else ''} in {result['fleet_repo']}"
-                     + (f" of {repo}" if repo else "") + ":")
-        width = max(len(d["name"]) for d in result["deployments"])
-        for d in result["deployments"]:
-            extra = f", domain {d['domain']}" if d.get("domain") else ""
-            lines.append(f"  {d['name']:<{width}}  {d['repo']} -> {d['project']}{extra}")
-    _ci_finish(result, *lines, verbose=verbose, details=_fleet_details(result))
+    from gapp.admin.sdk import ci
+    result = ci.status(deployment, live=live, progress=None if json_out else click.echo)
+    _ci_end(result, json_out)
 
 
 @ci_group.group("runner", hidden=True)
@@ -949,28 +595,21 @@ def ci_runner_group():
     """Commands the fleet repo's workflows run on the runner (not for people)."""
 
 
-@ci_runner_group.command("register")
-def ci_runner_register_cmd():
-    """Validate and write one change to gapp/deployments.yaml; inputs come from the environment."""
-    from gapp.admin.sdk.ci import runner_register
-    raise SystemExit(runner_register())
+@ci_runner_group.command("deploy")
+@click.argument("deployment")
+@click.option("--upgrade", is_flag=True, help="Apply a pending gapp upgrade.")
+def ci_runner_deploy_cmd(deployment, upgrade):
+    """Deploy DEPLOYMENT from the app checkout the run stands in; the fleet file is named by GAPP_FLEET_FILE."""
+    from gapp.admin.sdk.ci_runner import runner_deploy
+    raise SystemExit(runner_deploy(deployment, upgrade=upgrade))
 
 
 @ci_runner_group.command("status")
-def ci_runner_status_cmd():
-    """Print the root `gapp status` result for SOLUTION_ID on PROJECT as one line for `ci status --live`."""
+@click.argument("deployment")
+def ci_runner_status_cmd(deployment):
+    """Print what is live for DEPLOYMENT as one line for `gapp ci status --live`."""
     from gapp.admin.sdk.ci_runner import runner_status
-    raise SystemExit(runner_status())
-
-
-@ci_runner_group.command("overlay")
-@click.argument("path", default="gapp.yaml")
-def ci_runner_overlay_cmd(path):
-    """Merge the deployment's gapp.yaml keys (OVERLAY, a JSON object; DOMAIN) over PATH."""
-    import os
-    from gapp.admin.sdk.ci import runner_overlay
-    merged = runner_overlay(path, os.environ.get("OVERLAY"), os.environ.get("DOMAIN"))
-    click.echo(f"gapp-deploy: gapp.yaml for '{merged.get('name')}' with the fleet's keys applied.")
+    raise SystemExit(runner_status(deployment))
 
 
 # -- gapp manifest --
@@ -1160,6 +799,8 @@ def _say_changes(result, json_out, nothing):
         return
     for change in result["changes"]:
         click.echo(f"{result['deployment']}: {change['key']}: {change['before']} -> {change['after']}")
+    if result.get("dry_run"):
+        click.echo("Nothing was changed.")
     if result.get("next"):
         click.echo(f"Set its value: {result['next']}")
 
@@ -1219,7 +860,11 @@ def rename_cmd(old, new, json_out):
 @_DEPLOYMENT
 @_JSON
 def show_cmd(deployment, json_out):
-    """One deployment's definition and the settings a deploy would use."""
+    """One deployment's definition and the settings a deploy would use.
+
+    With --json, `settings` is the settings object as `gapp apply` takes
+    it, so a file for `gapp apply` can be started from it.
+    """
     from gapp.admin.sdk import definitions
     try:
         result = definitions.show(deployment)
@@ -1236,7 +881,7 @@ def show_cmd(deployment, json_out):
         f"  (this is gapp {result['this_gapp']}; upgrade available: gapp upgrade --deployment {result['deployment']})"
         if result["upgrade"] else ""))
     click.echo("  settings")
-    for row in result["settings"]:
+    for row in result["effective"]:
         click.echo(f"    {row['key']}: {row['value']}  ({row['from']})")
 
 
@@ -1354,9 +999,10 @@ def env_unset_cmd(name, deployment, json_out):
 
 @main.command("apply")
 @click.argument("file", type=click.Path(dir_okay=False))
+@click.option("--dry-run", is_flag=True, help="Print what would change, and change nothing.")
 @_DEPLOYMENT
 @_JSON
-def apply_cmd(file, deployment, json_out):
+def apply_cmd(file, dry_run, deployment, json_out):
     """Replace a deployment's settings with a file's, all at once.
 
     \b
@@ -1365,14 +1011,15 @@ def apply_cmd(file, deployment, json_out):
       domain: app.example.com
       env:
         MAX_USERS: {value: "25"}
-    A setting the file leaves out goes back to its default.
+    A setting the file leaves out goes back to its default. Start the
+    file from what is there now: `gapp show --json`, under `settings`.
     """
     from gapp.admin.sdk import definitions
     path = Path(file)
     if not path.is_file():
         _refused(definitions.Refused(f"{file} is not a file."), json_out)
     _definition_command(json_out, "Nothing to change: the settings are already the file's.",
-                        lambda d: d.apply, path.read_text(), deployment=deployment, source=file)
+                        lambda d: d.apply, path.read_text(), deployment=deployment, source=file, dry_run=dry_run)
 
 
 @main.group("manifest")

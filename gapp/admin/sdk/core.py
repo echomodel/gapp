@@ -2,8 +2,7 @@
 
 The label model:
 
-  Project label (written only by an Owner: `gapp setup` on a workstation,
-  or `gapp ci project setup`):
+  Project label (written only by an Owner, with `gapp project setup`):
     gapp=hosted                    the project hosts gapp deployments
 
   Deployment labels (written by every setup and deploy, in both modes, on
@@ -46,7 +45,7 @@ from gapp.admin.sdk.models import StatusResult, DeploymentInfo, NextStep, Servic
 CURRENT_MAJOR = int(__version__.split(".")[0])
 
 # The project label that marks a project as hosting gapp deployments. Only an
-# Owner writes it (`gapp setup`, `gapp ci project setup`); a CI run never does.
+# Owner writes it (`gapp project setup`); a CI run never does.
 HOSTED_LABEL = "gapp"
 HOSTED_VALUE = "hosted"
 
@@ -708,15 +707,15 @@ class GappSDK:
                     f"{live} is mapped now and this deploy would map {requested} instead. "
                     f"Terraform destroys the old mapping before creating the new one, so "
                     f"{live} would stop serving. If the change is intended, re-run with "
-                    f"--replace-domain (replace_domain=True); otherwise fix `domain:` in "
-                    f"gapp.yaml or the fleet entry's domain (`gapp ci setup <name> ... --domain`)."
+                    f"--replace-domain (replace_domain=True); otherwise set the deployment's "
+                    f"domain back: gapp set domain {live}"
                 )
             raise RuntimeError(
                 f"Refusing to remove the live domain mapping {live} of '{service_name}': "
-                f"this deploy sets no domain (none in gapp.yaml and none passed by CI). "
+                f"this deploy sets no domain. "
                 f"If removing it is intended, re-run with --replace-domain "
-                f"(replace_domain=True); otherwise set `domain: {live}` in gapp.yaml or "
-                f"pass it through the fleet entry's domain (`gapp ci setup <name> ... --domain`)."
+                f"(replace_domain=True); otherwise set the deployment's domain: "
+                f"gapp set domain {live}"
             )
 
         if requested and requested != live:

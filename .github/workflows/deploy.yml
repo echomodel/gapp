@@ -1,201 +1,85 @@
-# Reusable workflow for deploying gapp solutions via GitHub Actions + WIF.
+# Deploys one deployment of a fleet on a GitHub Actions runner.
 #
-# This workflow is called from an operator's private fleet repo, not from
-# the deployed repo itself. The usual caller is the generic deploy
-# workflow `gapp ci init` installs there (gapp/templates/ci/gapp-deploy.yml),
-# which looks the deployment up in the fleet repo's gapp/deployments.yaml
-# and passes its repo, id and gapp.yaml keys. Any workflow can call it
-# the same way:
+# Called from the deploy workflow `gapp ci init` installs in a fleet repo
+# (gapp/templates/ci/gapp-deploy.yml), which looks the deployment up in the
+# fleet repo's gapp.yaml and passes what a job needs before gapp is
+# installed: the app's repo and ref to check out, the project whose
+# Environment holds the deploy identity, and the gapp version the
+# deployment's definition names.
 #
-#   jobs:
-#     deploy:
-#       uses: <gapp-owner>/gapp/.github/workflows/deploy.yml@<pinned-ref>
-#       permissions:
-#         id-token: write
-#         contents: read
-#       with:
-#         solution-repo: <owner>/example-app
-#         ref: ${{ inputs.ref }}
-#         # The usual form: the job runs in the fleet repo's GitHub Environment
-#         # named after the project id and reads GAPP_WIF_PROVIDER and
-#         # GAPP_DEPLOY_SERVICE_ACCOUNT from it (recorded by
-#         # `gapp ci project setup <project>`).
-#         environment: my-gcp-project
-#         # Or spell the identity out (no Environment):
-#         project-id: my-gcp-project
-#         project-number: '123456789012'
-#         # Optional: gapp.yaml keys to merge over the repo's gapp.yaml, as
-#         # a JSON object (the fleet entry's keys). Keeps deployment-specific
-#         # values out of the repo's gapp.yaml, which may be public:
-#         overlay: '{"name": "example-app", "domain": "app.example.com"}'
-#         # Or the one-key form kept for older callers:
-#         domain: app.example.com
-#         # Private solution repo only: the GitHub App installed on the
-#         # solution repo's owner, whose one-hour token clones the repo.
-#         # The id is an Actions variable and the key an Actions secret
-#         # of the fleet repo.
-#         solution-repo-app-id: ${{ vars.HOSTING_GITHUB_APP_ID }}
-#       secrets:
-#         solution-repo-app-private-key: ${{ secrets.HOSTING_GITHUB_APP_PRIVATE_KEY }}
+# The job checks out the fleet repo and the app's repo, installs that gapp,
+# signs in to Google Cloud, and runs `gapp ci runner deploy <deployment>`
+# in the app's checkout. gapp is started with the deployment's name and
+# nothing else; everything it deploys comes from the definition. That one
+# command line is what must stay the same across gapp releases, so a
+# definition written by an earlier gapp can still be deployed by it.
 
-name: Deploy gapp solution
+name: Deploy a gapp deployment
 
 on:
   workflow_call:
     secrets:
-      solution-repo-app-private-key:
+      app-repo-key:
         description: >-
-          Private key of the GitHub App that may read the solution repo.
-          Needed only when the solution repo is private; set together
-          with the `solution-repo-app-id` input. Used once per run to
-          mint an installation token limited to that one repo, read-only
-          Contents, valid for an hour; the key itself never reaches the
-          checkout.
+          Private key of the GitHub App that may read the app's repo. Needed
+          only when that repo is private, together with `app-repo-app-id`.
+          Used once per run for a one-hour, read-only token limited to that
+          one repo.
         required: false
     inputs:
-      environment:
-        description: >-
-          Name of a GitHub Environment in the caller (fleet) repo, normally
-          the GCP project id. `gapp ci project setup <project>` records
-          the project's deploy identity there as the Environment variables
-          `GAPP_WIF_PROVIDER` and `GAPP_DEPLOY_SERVICE_ACCOUNT`; when this
-          input is set the job runs in that Environment and uses those
-          two values, so the caller carries no per-project literals.
-          Leave empty to pass the identity through `project-id` and
-          `project-number` (or the deprecated explicit inputs) instead.
-        required: false
-        default: ''
+      deployment:
+        description: The deployment's name in the fleet.
+        required: true
         type: string
-      solution-repo-app-id:
-        description: >-
-          Id of the GitHub App that may read the solution repo. When
-          non-empty (together with the `solution-repo-app-private-key`
-          secret), the checkout uses a token minted from that app instead
-          of the run's built-in token, which can read only the fleet repo
-          itself. Leave empty for a public solution repo: the workflow
-          then behaves exactly as before this input existed.
+      upgrade:
+        description: Apply a pending gapp upgrade. Refused when none is pending.
         required: false
-        default: ''
-        type: string
-      solution-repo:
-        description: 'Solution repo (owner/name)'
+        default: false
+        type: boolean
+      app-repo:
+        description: The app's repo (owner/name), from the deployment's definition.
         required: true
         type: string
       ref:
-        description: 'Git ref to deploy (commit, tag, or branch); empty deploys the repo''s default branch'
+        description: The branch, tag or commit the definition builds; empty for the repo's default branch.
         required: false
         default: ''
         type: string
-      project-id:
+      environment:
         description: >-
-          GCP project ID to deploy to. When set, gapp setup/deploy is
-          invoked with `--project <id>` so no project discovery is
-          performed at deploy time (no IAM dependency on
-          resourcemanager.projects.list, no ambiguity from label
-          lookups). Also used to derive `service-account` when that
-          input is not supplied. Required unless `service-account` is
-          supplied AND the GitHub Actions service account has
-          permission to list projects to perform label-based discovery.
-        required: false
-        default: ''
-        type: string
-      project-number:
-        description: >-
-          GCP project number — the numeric ID GCP assigns, not the
-          project-id string. Used to derive `workload-identity-provider`
-          when that input is not supplied. Get it with
-          `gcloud projects describe <project-id> --format='value(projectNumber)'`.
-          Required unless `workload-identity-provider` is supplied.
-        required: false
-        default: ''
-        type: string
-      # DEPRECATED — `workload-identity-provider` is retained for
-      # backward compatibility with v3.x callers that pinned before
-      # `project-number` was introduced, and for operators with non-
-      # standard WIF pool/provider naming. Plan to remove this input
-      # in v4 of the gapp framework — once v4 ships, callers must use
-      # `project-number` (or a future explicit-WIF input with a clearer
-      # name). When both are supplied, `workload-identity-provider`
-      # wins.
-      workload-identity-provider:
-        description: >-
-          DEPRECATED — prefer `project-number`. Full WIF provider
-          resource name
-          (e.g. `projects/N/locations/global/workloadIdentityPools/POOL/providers/PROVIDER`).
-          When set, used as-is; otherwise derived from `project-number`
-          using gapp's convention (`github` pool, `github` provider).
-        required: false
-        default: ''
-        type: string
-      # DEPRECATED — `service-account` is retained for backward
-      # compatibility with v3.x callers that pinned before `project-id`
-      # was introduced, and for operators with non-standard service
-      # account naming. Plan to remove this input in v4 of the gapp
-      # framework — once v4 ships, callers must use `project-id` (which
-      # also enables the `--project` flag for gapp, eliminating the
-      # discovery dependency). When both are supplied, `service-account`
-      # wins.
-      service-account:
-        description: >-
-          DEPRECATED — prefer `project-id`. GCP service account email
-          for deployment. When set, used as-is; otherwise derived from
-          `project-id` using gapp's convention
-          (`gapp-deploy@<project-id>.iam.gserviceaccount.com`).
-        required: false
-        default: ''
+          The GitHub Environment in the fleet repo that holds the project's
+          deploy identity (GAPP_WIF_PROVIDER and GAPP_DEPLOY_SERVICE_ACCOUNT),
+          named after the project. `gapp ci projects connect` records it.
+        required: true
         type: string
       gapp-repo:
-        description: 'gapp repo (owner/name) for CLI installation'
+        description: Where gapp is installed from (owner/name).
         required: true
         type: string
       gapp-ref:
-        description: 'gapp git ref for CLI installation'
+        description: The gapp version to install, as a tag. The one the deployment's definition names.
         required: true
         type: string
-      solution-name:
-        description: 'Solution name (as registered in gapp)'
-        required: true
-        type: string
-      domain:
-        description: >-
-          Optional one-key overlay for gapp.yaml `domain:`. When
-          non-empty, set on gapp.yaml after checkout, before gapp
-          setup/deploy; the same as passing `{"domain": "<d>"}` in
-          `overlay`. Kept for callers written before `overlay` existed.
-        required: false
-        default: ''
-        type: string
-      overlay:
-        description: >-
-          Optional JSON object of gapp.yaml keys merged over the repo's
-          committed gapp.yaml after checkout, before gapp setup/deploy:
-          mappings merge key by key, lists of named entries (such as
-          `env`) merge by name, anything else is replaced; when the repo
-          has no gapp.yaml the object becomes the whole file. The fleet
-          repo's deploy workflow passes the deployment's entry here, so
-          deployment-specific values never live in the deployed repo.
+      app-repo-app-id:
+        description: Id of the GitHub App that may read the app's repo; empty for a public repo.
         required: false
         default: ''
         type: string
 
+permissions: {}
+
 jobs:
   deploy:
+    name: Deploy ${{ inputs.deployment }}
     runs-on: ubuntu-latest
-    # A caller job cannot declare an environment on a reusable-workflow
-    # call, so the called job declares it from the input. The Environment
-    # belongs to the caller repo, which is where its variables are read
-    # from. Empty means no environment.
     environment: ${{ inputs.environment }}
     permissions:
       id-token: write
       contents: read
-
     steps:
-      # When the caller names an Environment, the deploy identity must be in
-      # it. Say so in words before anything else runs, rather than letting
-      # the auth step fail on an empty value.
+      # A missing variable would fail the sign-in with a message about an
+      # empty value; say what is missing and the command that records it.
       - name: Check the deploy identity
-        if: inputs.environment != '' && inputs.workload-identity-provider == '' && inputs.service-account == ''
         env:
           ENVIRONMENT: ${{ inputs.environment }}
           WIF_PROVIDER: ${{ vars.GAPP_WIF_PROVIDER }}
@@ -205,80 +89,66 @@ jobs:
           [ -n "$WIF_PROVIDER" ] || missing="GAPP_WIF_PROVIDER"
           [ -n "$DEPLOY_SA" ] || missing="${missing:+$missing and }GAPP_DEPLOY_SERVICE_ACCOUNT"
           if [ -n "$missing" ]; then
-            echo "::error::The Environment '$ENVIRONMENT' of the fleet repo has no $missing variable, so this run cannot authenticate to GCP. Run: gapp ci project setup $ENVIRONMENT"
+            echo "::error::The Environment '$ENVIRONMENT' of the fleet repo has no $missing, so this run cannot sign in to Google Cloud. Run: gapp ci projects connect $ENVIRONMENT"
             exit 1
           fi
 
-      # Private repos: the run's GITHUB_TOKEN can read only the fleet
-      # repo, so a private deployed repo fails at checkout with
-      # "Repository not found". When the caller passes the hosting app's
-      # id and private key, mint a token scoped to the one solution repo
-      # (owner + name), read-only Contents, one hour. Both steps are
-      # skipped for a public repo, and the checkout falls back to the
-      # built-in token.
-      - name: Check the solution repo credential
-        if: inputs.solution-repo-app-id != ''
-        env:
-          APP_PRIVATE_KEY: ${{ secrets.solution-repo-app-private-key }}
-          SOLUTION_REPO: ${{ inputs.solution-repo }}
-        id: solution-repo
-        run: |
-          if [ -z "$APP_PRIVATE_KEY" ]; then
-            echo "::error::solution-repo-app-id is set but the solution-repo-app-private-key secret is empty. Pass both, or neither for a public solution repo."
-            exit 1
-          fi
-          echo "owner=${SOLUTION_REPO%%/*}" >> "$GITHUB_OUTPUT"
-          echo "name=${SOLUTION_REPO#*/}" >> "$GITHUB_OUTPUT"
-
-      - name: Mint a read-only token for the solution repo
-        if: inputs.solution-repo-app-id != ''
-        id: solution-token
-        uses: actions/create-github-app-token@v2
-        with:
-          app-id: ${{ inputs.solution-repo-app-id }}
-          private-key: ${{ secrets.solution-repo-app-private-key }}
-          owner: ${{ steps.solution-repo.outputs.owner }}
-          repositories: ${{ steps.solution-repo.outputs.name }}
-          permission-contents: read
-
-      - name: Clone solution repo
+      - name: Check out the fleet
         uses: actions/checkout@v4
         with:
-          repository: ${{ inputs.solution-repo }}
-          ref: ${{ inputs.ref }}
-          # The app token when minted above; otherwise the run's own token.
-          token: ${{ steps.solution-token.outputs.token || github.token }}
-          # The token is needed only for the clone; do not leave it in the
-          # checkout's git config for the later steps.
+          path: fleet
+          sparse-checkout: gapp.yaml
+          sparse-checkout-cone-mode: false
           persist-credentials: false
-          # Check out into a subdirectory named after the deployment's id so
-          # gapp's folder-name fallback (used when gapp.yaml omits a
-          # top-level `name:` and no overlay sets it) resolves to it. Without
-          # this, the default checkout path is the CALLER repo's
-          # workspace (`/home/runner/work/<caller>/<caller>/`), and
-          # `git rev-parse --show-toplevel`'s basename would be the
-          # caller repo's name rather than the solution name — leading
-          # to gapp resolving the wrong solution. Solutions that DO
-          # declare an explicit `name:` in gapp.yaml are unaffected
-          # either way.
-          path: ${{ inputs.solution-name }}
 
-      - name: Authenticate to Google Cloud
+      # A private app repo: the run's own token can read only the fleet
+      # repo, so mint one for that one repo, read-only, for an hour.
+      - name: Check the app repo credential
+        if: inputs.app-repo-app-id != ''
+        id: app-repo
+        env:
+          APP_REPO_KEY: ${{ secrets.app-repo-key }}
+          APP_REPO: ${{ inputs.app-repo }}
+        run: |
+          if [ -z "$APP_REPO_KEY" ]; then
+            echo "::error::app-repo-app-id is set but the app-repo-key secret is empty. Pass both, or neither for a public repo."
+            exit 1
+          fi
+          echo "owner=${APP_REPO%%/*}" >> "$GITHUB_OUTPUT"
+          echo "name=${APP_REPO#*/}" >> "$GITHUB_OUTPUT"
+
+      - name: Mint a read-only token for the app repo
+        if: inputs.app-repo-app-id != ''
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ inputs.app-repo-app-id }}
+          private-key: ${{ secrets.app-repo-key }}
+          owner: ${{ steps.app-repo.outputs.owner }}
+          repositories: ${{ steps.app-repo.outputs.name }}
+          permission-contents: read
+
+      - name: Check out the app
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.app-repo }}
+          ref: ${{ inputs.ref }}
+          token: ${{ steps.app-token.outputs.token || github.token }}
+          # The token is needed only for the clone.
+          persist-credentials: false
+          # Its own folder, beside the fleet's: a checkout's default path is the
+          # workspace (`/home/runner/work/<caller>/<caller>/`), and
+          # two checkouts cannot share it.
+          path: app
+
+      - name: Sign in to Google Cloud
         uses: google-github-actions/auth@v2
         with:
-          # Resolution order: the explicit DEPRECATED input (v3 back-compat);
-          # then the Environment variable recorded by `gapp ci project
-          # setup` (set when `environment` names a CI-repo Environment);
-          # then the value derived from `project-number` by gapp's
-          # convention.
-          workload_identity_provider: ${{ inputs.workload-identity-provider || vars.GAPP_WIF_PROVIDER || format('projects/{0}/locations/global/workloadIdentityPools/github/providers/github', inputs.project-number) }}
-          # Same order: explicit DEPRECATED input, then the Environment
-          # variable, then derived from `project-id`.
-          service_account: ${{ inputs.service-account || vars.GAPP_DEPLOY_SERVICE_ACCOUNT || format('gapp-deploy@{0}.iam.gserviceaccount.com', inputs.project-id) }}
+          workload_identity_provider: ${{ vars.GAPP_WIF_PROVIDER }}
+          service_account: ${{ vars.GAPP_DEPLOY_SERVICE_ACCOUNT }}
 
       # The beta component carries `gcloud beta run domain-mappings`, which
-      # gapp uses for a fully managed Cloud Run domain mapping (the GA
-      # command group covers Cloud Run for Anthos only).
+      # gapp uses for a fully managed Cloud Run domain mapping.
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v2
         with:
@@ -288,38 +158,15 @@ jobs:
         uses: hashicorp/setup-terraform@v3
 
       - name: Install gapp
-        run: pip install "gapp @ git+https://github.com/${{ inputs.gapp-repo }}.git@${{ inputs.gapp-ref }}"
-
-      # The deployment's gapp.yaml keys, merged over the repo's file (or
-      # written as the whole file when the repo has none). The entry
-      # governs: its `name` is the deployment's id, so gapp keys every
-      # resource by it whatever the repo's gapp.yaml says.
-      - name: Apply the deployment's gapp.yaml keys
-        if: inputs.overlay != '' || inputs.domain != ''
-        working-directory: ${{ inputs.solution-name }}
         env:
-          OVERLAY: ${{ inputs.overlay }}
-          DOMAIN: ${{ inputs.domain }}
-        run: gapp ci runner overlay gapp.yaml
+          GAPP_REPO: ${{ inputs.gapp-repo }}
+          GAPP_REF: ${{ inputs.gapp-ref }}
+        run: pip install --quiet "gapp @ git+https://github.com/${GAPP_REPO}.git@${GAPP_REF}"
 
-      - name: Setup and deploy
-        working-directory: ${{ inputs.solution-name }}
+      - name: Deploy
+        working-directory: app
         env:
-          # Empty ref: the checkout above took the repo's default branch, and
-          # gapp deploys what was checked out.
-          REF_FLAG: ${{ inputs.ref != '' && format('--ref {0}', inputs.ref) || '' }}
-          # When `project-id` is provided, pass `--project <id>` to
-          # gapp so it skips its project-discovery query (which needs
-          # resourcemanager.projects.list on the runner's SA). When
-          # omitted, gapp falls back to discovery — only works if the
-          # SA has list permission. Plan to make `project-id` required
-          # in v4.
-          PROJECT_FLAG: ${{ inputs.project-id != '' && format('--project {0}', inputs.project-id) || '' }}
-        run: |
-          # No name argument: gapp setup and gapp deploy read the name
-          # from gapp.yaml at the checkout cwd (gapp deploy always
-          # deploys the checkout). The checkout above places the app at
-          # `./${solution-name}/` so the basename inference resolves to
-          # the deployment name.
-          gapp setup $PROJECT_FLAG
-          gapp deploy $REF_FLAG $PROJECT_FLAG
+          GAPP_FLEET_FILE: ${{ github.workspace }}/fleet/gapp.yaml
+          DEPLOYMENT: ${{ inputs.deployment }}
+          UPGRADE_FLAG: ${{ inputs.upgrade && '--upgrade' || '' }}
+        run: gapp ci runner deploy "$DEPLOYMENT" $UPGRADE_FLAG

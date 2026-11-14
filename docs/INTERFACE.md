@@ -203,7 +203,7 @@ reasons are in [FLEET-IN-GIT.md](FLEET-IN-GIT.md).
 | `gapp upgrade` | Brings one definition to the installed gapp's version. Takes no version. Prints its plan first. Changes the definition only. Refused when there is nothing to upgrade, when the definition is newer than this gapp, or when it is older than this gapp can upgrade from; the refusal names the gapp to install |
 | `gapp rename <old> <new>` | Changes the name only. The id and the cloud resources stay |
 | `gapp list` | Every definition: name, repo, project, ref, gapp version, and "upgrade available" or "upgrade required" where that applies. Says where the fleet lives |
-| `gapp show` | One definition, and the settings a deploy would use, each marked as from the definition, from `app.json`, or a default. Says when the next deploy would apply an upgrade, and from which version to which |
+| `gapp show` | One definition, and the settings a deploy would use, each marked as from the definition, from `app.json`, or a default. Says when the next deploy would apply an upgrade, and from which version to which. With `--json`, `settings` is the settings object as `gapp apply` takes it |
 
 ### Settings
 
@@ -218,13 +218,13 @@ Each changes one definition and nothing else.
 | `gapp env set <NAME> --data-path [<subfolder>]` | The variable points at the deployment's data folder, which survives restarts |
 | `gapp env set <NAME> --secret [<secret-name>] [--generate]` | The variable comes from a secret. The secret's value is set with `gapp secrets set` |
 | `gapp env unset <NAME>` | Removes the variable from the definition. Leaves any secret in place |
-| `gapp apply <file>` | Replaces a definition's settings with the file's, all at once or not at all. The file has the shape of `settings:` above. Prints what changes first |
+| `gapp apply <file> [--dry-run]` | Replaces a definition's settings with the file's, all at once or not at all. The file has the shape of `settings:` above. Prints each setting that changes, before and after. With `--dry-run` it prints the same and changes nothing |
 
 ### Running
 
 | Command | Does | Needs |
 |---|---|---|
-| `gapp deploy [--dry-run] [--rebuild] [--replace-domain] [--upgrade]` | Builds the definition's ref from this clone and deploys it. Refused when the clone is not at that ref. Creates the deployment's bucket the first time | gcloud, Terraform, a clone |
+| `gapp deploy [--dry-run] [--rebuild] [--replace-domain] [--upgrade]` | Builds the definition's ref from this clone and deploys it. Refused when the clone is not at that ref. Creates the deployment's bucket the first time. `--dry-run` is the full preview: everything the deploy would use and do, with nothing built or changed | gcloud, Terraform, a clone |
 | `gapp status` | What is live: URL, revision, domain state | gcloud |
 | `gapp secrets list` | The definition's secrets and whether each has a value | gcloud |
 | `gapp secrets set <secret-name> [--from-stdin]` | Stores a value, typed at a prompt or piped | gcloud |
@@ -312,5 +312,7 @@ no tool for `gapp secrets set`: a value is typed at its prompt or piped in.
   gapp has little reason to change.
 - **A secret's name** defaults to its variable's, in lower case with
   dashes (`SIGNING_KEY`, `signing-key`). `--secret <name>` gives another.
-- **`gapp show` outside a clone** works from the definition and says
-  `app.json` was not read.
+- **`gapp show` outside a clone** reads `app.json` from the repo, at the
+  definition's ref, when it can. It tries briefly, never prompts and
+  never fails for it: when the repo cannot be read it works from the
+  definition and says `app.json` was not read.

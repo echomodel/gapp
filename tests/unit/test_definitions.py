@@ -257,6 +257,25 @@ def test_apply_replaces_every_setting_and_lists_each_change(my_app):
         ("env OLD", "1", "not set"), ("env NEW", "not set", "2")}
 
 
+def test_a_dry_run_of_apply_reports_the_same_changes_and_writes_nothing(my_app, local_machine):
+    definitions.set_value("public", "true", deployment="my-app")
+    before = fleetstore.location().path.read_text()
+    result = definitions.apply("memory: 1Gi\n", deployment="my-app", dry_run=True)
+    assert result["dry_run"] is True and result["changed"] is True
+    assert {(c["key"], c["before"], c["after"]) for c in result["changes"]} == {
+        ("public", "true", "false"), ("memory", "512Mi", "1Gi")}
+    assert fleetstore.location().path.read_text() == before
+    file = local_machine / "settings.yaml"
+    file.write_text("memory: 1Gi\n")
+    assert run("apply", str(file), "--dry-run", "-d", "my-app").output == (
+        "my-app: public: true -> false\nmy-app: memory: 512Mi -> 1Gi\nNothing was changed.\n")
+    assert fleetstore.location().path.read_text() == before
+
+
+def test_a_dry_run_of_apply_refuses_what_apply_refuses(my_app):
+    assert "'deployment' is not a setting" in refused(definitions.apply, "deployment: my-app\n", deployment="my-app", dry_run=True)
+
+
 @pytest.mark.parametrize("text,says", [
     ("deployment: my-app\n", "'deployment' is not a setting"),
     ("env:\n  A: {value: 1, secret: s}\n", "exactly one of"),
@@ -361,6 +380,17 @@ def test_show_lists_settings_with_where_each_comes_from(my_app):
     assert "    public: true  (definition)\n" in output and "    memory: 512Mi  (default)\n" in output
     shown = json.loads(run("show", "-d", "my-app", "--json").output)
     assert shown["gapp"] == __version__ and shown["upgrade"] is None and shown["app_json"] == "not read"
+    assert {"key": "public", "value": "true", "from": "definition"} in shown["effective"]
+
+
+def test_show_gives_the_settings_object_a_file_for_apply_can_start_from(my_app, local_machine):
+    run("set", "public", "true", "-d", "my-app")
+    run("env", "set", "MAX_USERS", "25", "-d", "my-app")
+    shown = json.loads(run("show", "-d", "my-app", "--json").output)
+    assert shown["settings"] == fleet()["my-app"]["settings"] == {"public": True, "env": {"MAX_USERS": {"value": "25"}}}
+    file = local_machine / "settings.yaml"
+    file.write_text(json.dumps(shown["settings"]))
+    assert run("apply", str(file), "-d", "my-app").output == "Nothing to change: the settings are already the file's.\n"
 
 
 # --- the MCP tools ---
@@ -378,4 +408,8 @@ def test_the_apply_tool_takes_the_settings_object_not_a_path(my_app):
     from gapp.admin.mcp import server
     result = server.gapp_apply({"memory": "1Gi", "env": {"A": {"value": "1"}}}, deployment="my-app")
     assert result["changed"] is True
+    assert fleet()["my-app"]["settings"] == {"memory": "1Gi", "env": {"A": {"value": "1"}}}
+    assert server.gapp_show("my-app")["settings"] == {"memory": "1Gi", "env": {"A": {"value": "1"}}}
+    preview = server.gapp_apply({}, deployment="my-app", dry_run=True)
+    assert preview["dry_run"] is True and len(preview["changes"]) == 2
     assert fleet()["my-app"]["settings"] == {"memory": "1Gi", "env": {"A": {"value": "1"}}}

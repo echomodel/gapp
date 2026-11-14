@@ -1,27 +1,30 @@
-"""gapp ci: the CI fleet system.
+"""gapp ci: deploying the fleet's deployments on GitHub Actions runners.
 
-gapp has two fleet systems that do not talk to each other. The root
-commands (`gapp setup`, `deploy`, `status`, `list`, ...) deploy the local
-checkout to GCP with gcloud. The `gapp ci` commands here manage the fleet
-through GitHub only: they never use gcloud (except `ci project setup`,
-once per project) and never read the working directory. Their record is
-`gapp/deployments.yaml` in the fleet repo (one entry per deployment, see
-`fleet.py`) plus the project's GitHub Environment.
+Everything gapp knows about GitHub Actions is in this module and in the
+workflows it installs. It installs those workflows in the fleet repo,
+connects Google Cloud projects to the repo's runners, keeps the list of
+owners whose repos a runner may deploy, starts a deploy run and reports
+on runs. It never changes the fleet: a definition is changed by the fleet
+commands, as a commit.
 
-Rules this module keeps (CONTRIBUTING, "Rules of the CI system"):
+The fleet has to be kept in a GitHub repo (`gapp fleet use <owner>/<repo>`).
+What a run deploys is read from that repo's `gapp.yaml` by the run itself;
+a command here reads the same definition only to refuse early what the
+run would refuse.
 
-- Only `ci init` sets the fleet repo, in gapp's local config. Every other
-  command reads it from there and stops with one message when it is unset.
-- Every result carries `ok` and, when False, `next_step` with `action` and
-  `hint`: a plain sentence and the exact fix. Nothing here raises for a
-  condition the operator can act on.
+Rules this module keeps:
+
+- Every result carries `ok`. When it is False, `next_step` holds `action`
+  and `hint`, a plain sentence with the exact command to run, and
+  `refused` says which kind it is: True when the command was refused and
+  nothing was started or changed (exit code 2), False when something
+  failed (exit code 1).
 - Something is reported missing only when GitHub's answer confirms it does
-  not exist; a refused or failed read is "couldn't check", with GitHub's
+  not exist. A refused or failed read is "couldn't check", with GitHub's
   own status and message and the request that failed.
 - Every GitHub call is a REST call through `gh api`. Higher-level `gh`
-  subcommands (`workflow run`, `run view`, `run watch`, `repo create`,
-  `repo edit`, `search`) reach for GraphQL, which some sessions (a Claude
-  Code cloud session, among others) do not allow.
+  subcommands (`workflow run`, `run view`, `run watch`) reach for GraphQL,
+  which some sessions do not allow.
 """
 
 from __future__ import annotations
@@ -29,7 +32,6 @@ from __future__ import annotations
 import base64
 import io
 import json
-import os
 import re
 import shutil
 import subprocess
@@ -40,86 +42,60 @@ import zipfile
 from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
 from importlib import resources
-
-import yaml
+from pathlib import Path
+from urllib.parse import quote
 
 from gapp.admin.sdk import fleet
-from gapp.admin.sdk.config import get_fleet_repo, set_fleet_repo
-from gapp.admin.sdk.fleet import DEPLOYMENTS_FILE, FleetRefusal
+from gapp.admin.sdk.ci_runner import DEPLOY_LOG_PREFIX, STATUS_LOG_PREFIX
 from gapp.admin.sdk.util import run_gcloud, require_gcloud_account
 
-FLEET_TOPIC = "gapp-ci"
-
-# The hosting GitHub App that lets a run clone a private repo: an Actions
-# variable and an Actions secret of the fleet repo. Fixed names, like
-# GITHUB_TOKEN: the credentials belong to the fleet repo (one pair per
-# operator), so nothing about a deployment could want different ones.
+# The GitHub App that lets a run clone a private app repo: an Actions
+# variable and an Actions secret of the fleet repo. The names are fixed,
+# because the pair belongs to the fleet repo and not to any deployment.
 APP_ID_VAR = "HOSTING_GITHUB_APP_ID"
 APP_KEY_SECRET = "HOSTING_GITHUB_APP_PRIVATE_KEY"
 
-# Comma-separated GitHub owners whose repos may be deployed from the fleet.
+# Comma-separated GitHub owners whose repos a runner may deploy.
 # Managed by `gapp ci sources`.
 ALLOWED_SOURCES_VAR = "GAPP_ALLOWED_SOURCES"
 
-# Per-project deploy identity, recorded in the fleet repo as a GitHub
+# A project's deploy identity, recorded in the fleet repo as a GitHub
 # Environment named after the project id, holding these two variables.
-# Written by `gapp ci project setup`, read by every deploy.
+# Written by `gapp ci projects connect`, read by every run.
 ENV_WIF_PROVIDER_VAR = "GAPP_WIF_PROVIDER"
 ENV_DEPLOY_SA_VAR = "GAPP_DEPLOY_SERVICE_ACCOUNT"
 
-# The gapp-owned files in the fleet repo.
+# The workflows gapp owns in the fleet repo.
 DEPLOY_WORKFLOW = "gapp-deploy.yml"
-REGISTER_WORKFLOW = "gapp-register.yml"
 STATUS_WORKFLOW = "gapp-status.yml"
 WORKFLOWS_DIR = ".github/workflows"
 DEPLOY_WORKFLOW_PATH = f"{WORKFLOWS_DIR}/{DEPLOY_WORKFLOW}"
-REGISTER_WORKFLOW_PATH = f"{WORKFLOWS_DIR}/{REGISTER_WORKFLOW}"
 STATUS_WORKFLOW_PATH = f"{WORKFLOWS_DIR}/{STATUS_WORKFLOW}"
-GAPP_WORKFLOWS = (DEPLOY_WORKFLOW, REGISTER_WORKFLOW, STATUS_WORKFLOW)
-LEGACY_SOLUTIONS_FILE = "gapp/solutions.yaml"
+GAPP_WORKFLOWS = (DEPLOY_WORKFLOW, STATUS_WORKFLOW)
 
-# The register workflow prefixes every line meant for the operator, and
-# reports its outcome as `gapp-register: result=<code>`.
-REGISTER_LOG_PREFIX = "gapp-register:"
-REGISTER_SUCCESS_CODES = ("added", "updated", "unchanged", "renamed")
-# The status workflow reports `gapp-status: result=<json>`.
-STATUS_LOG_PREFIX = "gapp-status:"
+# A repo on GitHub, as a definition and the profile record it.
+GITHUB_REPO_RE = re.compile(r"^[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+$")
 
-# --- the messages the operator reads, verbatim ---
+# --- the messages a person reads, verbatim ---
 
-NO_FLEET_REPO_MESSAGE = (
-    "No fleet repo is set on this machine. Start here: gapp ci init "
-    "(It finds your existing fleet repo, or tells you how to create one.)"
+FLEET_NOT_ON_GITHUB_MESSAGE = (
+    "Your fleet is kept in {where}, and `gapp ci` works on a fleet kept in a GitHub repo. "
+    "Move it to one: gapp fleet use <owner>/<repo>"
 )
-REPO_MISSING_MESSAGE = (
-    "{repo} doesn't exist. Create it as a new private fleet repo: gapp ci init {repo} --create"
+PROJECT_NOT_CONNECTED_MESSAGE = (
+    "Runners in {fleet_repo} are not connected to {project}, so nothing was started. "
+    "Connect them, once per project: gapp ci projects connect {project}"
 )
-REPO_EXISTS_MESSAGE = (
-    "{repo} already exists, so it wasn't created. To use it as your fleet repo: gapp ci init {repo}"
+WORKFLOW_MISSING_MESSAGE = (
+    "{fleet_repo} has no {path}, so there is nothing to start. Install the workflows: gapp ci init"
 )
-PROJECT_NOT_TRUSTED_MESSAGE = (
-    "Fleet repo {fleet_repo} is not yet trusted to deploy to GCP project {project}. One-time setup:\n"
-    "\n"
-    "1. Run `gapp ci project setup {project}`\n"
-    "   - Requires gcloud signed in as an Owner of {project}\n"
-    "   - Requires `gh` signed in as an admin of {fleet_repo}\n"
-    "2. Run this command again: {command}"
-)
-SOURCE_NOT_ALLOWED_MESSAGE = (
-    "Apps owned by {owner} aren't allowed in your fleet yet (fleet repo {fleet_repo}). One-time setup:\n"
-    "\n"
-    "1. Run `gapp ci sources add {owner}`\n"
-    "   - Or: gh variable set GAPP_ALLOWED_SOURCES --repo {fleet_repo} --body <current-list>,{owner}\n"
-    "   - Requires `gh` signed in with write access to {fleet_repo}\n"
-    "2. Run this command again: {command}"
-)
-PROJECT_SETUP_REQUIREMENTS = (
-    "`gapp ci project setup <project>` requires gcloud signed in as an Owner of the "
+CONNECT_REQUIREMENTS = (
+    "`gapp ci projects connect <project>` needs gcloud signed in as an Owner of the "
     "project and `gh` signed in as an admin of the fleet repo (its owner, for a personal repo)."
 )
 UNCHECKED_VARIABLES_NOTE = (
     "not checked: the GitHub Actions variables and secrets API is not reachable "
-    "from this machine; the register and deploy runs check them"
+    "from this machine; a run checks them"
 )
 
 
@@ -127,21 +103,22 @@ UNCHECKED_VARIABLES_NOTE = (
 
 
 def _outcome(action: str, hint: str, **extra) -> dict:
-    """A plain outcome: what stands in the way, and the exact next step."""
-    result = {"ok": False, "next_step": {"action": action, "hint": hint}}
+    """Something failed: what, and the exact next step."""
+    result = {"ok": False, "refused": False, "next_step": {"action": action, "hint": hint}}
     result.update(extra)
     return result
 
 
+def _refusal(action: str, hint: str, **extra) -> dict:
+    """The command was refused and nothing was started or changed."""
+    return {**_outcome(action, hint, **extra), "refused": True}
+
+
 def _gh_missing_outcome() -> dict:
-    return _outcome("install gh", (
+    return _refusal("install gh", (
         "The GitHub CLI (gh) is not installed on this machine, and every `gapp ci` command works "
         "through it. Install it, then sign in with `gh auth login`."
     ))
-
-
-def _no_fleet_repo_outcome() -> dict:
-    return _outcome("ci init", NO_FLEET_REPO_MESSAGE)
 
 
 def _gh_available() -> bool:
@@ -277,20 +254,11 @@ def _read_file(repo: str, path: str, ref: str | None = None) -> Read:
     return _read_path(repo, path, f"{path} in {repo}", ref)
 
 
-def _list_dir(repo: str, path: str) -> Read:
-    rd = _read_path(repo, path, f"{path}/ in {repo}")
-    if rd.present:
-        rd.data = [item.get("name") for item in (rd.data or []) if isinstance(item, dict) and item.get("type") == "file"]
-    return rd
-
-
 def _write_file(repo: str, path: str, content: str, message: str) -> str:
     """Create or update a gapp-owned file in the fleet repo via the Contents API.
 
-    gapp is not a git client for the operator's repos: the file is generated
-    configuration, so it is written as a config-store update. GitHub makes
-    the commit server-side; nothing is cloned, committed or pushed on the
-    operator's machine. Idempotent: an identical file is "unchanged".
+    A workflow is a file gapp generates, so it is written through GitHub's
+    API, which makes the commit itself. An identical file is "unchanged".
     Returns "created", "updated" or "unchanged"; raises RuntimeError with
     GitHub's words when the write is refused or the current file unreadable.
     """
@@ -306,12 +274,6 @@ def _write_file(repo: str, path: str, content: str, message: str) -> str:
     if rc != 0:
         raise RuntimeError(f"{path} in {repo} could not be written: {_refused(err)}")
     return "updated" if current.sha else "created"
-
-
-def _delete_file(repo: str, path: str, sha: str, message: str) -> None:
-    rc, _, err = _gh_api(["-X", "DELETE", f"repos/{repo}/contents/{path}"], {"message": message, "sha": sha})
-    if rc != 0:
-        raise RuntimeError(f"{path} in {repo} could not be removed: {_refused(err)}")
 
 
 def _repo_permission(fleet_repo: str) -> tuple[bool | None, str]:
@@ -412,7 +374,7 @@ def _write_environment_record(fleet_repo: str, project_id: str, wif_provider: st
     return status
 
 
-# --- the gapp-owned files in the fleet repo ---
+# --- the workflows gapp owns in the fleet repo ---
 
 
 def _render_template(name: str, gapp_repo: str, gapp_ref: str) -> str:
@@ -420,310 +382,129 @@ def _render_template(name: str, gapp_repo: str, gapp_ref: str) -> str:
     return text.replace("__GAPP_REPO__", gapp_repo).replace("__GAPP_REF__", gapp_ref)
 
 
-def _operator_files(gapp_repo: str, gapp_ref: str) -> dict[str, str]:
-    """Path -> content of the workflows `ci init` installs (deploy, register, status)."""
+def _workflow_files(gapp_repo: str, gapp_ref: str) -> dict[str, str]:
+    """Path -> content of the workflows `gapp ci init` installs."""
     return {f"{WORKFLOWS_DIR}/{name}": _render_template(name, gapp_repo, gapp_ref) for name in GAPP_WORKFLOWS}
 
 
-def _install_operator_files(fleet_repo: str) -> tuple[dict[str, str], int | None]:
-    """Install or update gapp's workflows and create the deployments file.
+def _install_workflows(fleet_repo: str) -> dict[str, str]:
+    """Install the workflows in the fleet repo, or bring them up to this gapp's.
 
-    The workflows are written whenever the rendered content differs from
-    what the repo holds (a new gapp release pins a new reusable-workflow
-    ref). The deployments file is created when missing and never
-    overwritten: the register workflow owns its content from then on.
-    Returns (path -> "created" | "updated" | "unchanged", the number of
-    deployments the file already held: 0 when it was just created, None
-    when it could not be parsed).
+    A file is written only when its rendered content differs from what the
+    repo holds. Returns path -> "created" | "updated" | "unchanged".
     """
     gapp_repo = _get_gapp_repo()
     gapp_ref = _resolve_gapp_ref(gapp_repo)
-    statuses = {}
-    for path, content in _operator_files(gapp_repo, gapp_ref).items():
-        statuses[path] = _write_file(fleet_repo, path, content, f"Install gapp workflow {path.rsplit('/', 1)[-1]}")
-    existing = _read_file(fleet_repo, DEPLOYMENTS_FILE)
-    if existing.unchecked:
-        raise RuntimeError(existing.note)
-    if existing.absent:
-        statuses[DEPLOYMENTS_FILE] = _write_file(fleet_repo, DEPLOYMENTS_FILE, fleet.DEPLOYMENTS_FILE_INITIAL,
-                                                 "Add the gapp deployments file")
-        return statuses, 0
-    statuses[DEPLOYMENTS_FILE] = "unchanged"
-    try:
-        count = len(fleet.parse(existing.content))
-    except fleet.FleetRefusal:
-        count = None
-    return statuses, count
+    return {path: _write_file(fleet_repo, path, content, f"Install gapp workflow {path.rsplit('/', 1)[-1]}")
+            for path, content in _workflow_files(gapp_repo, gapp_ref).items()}
 
 
-def _files_report(fleet_repo: str) -> dict:
-    """Presence (or that it couldn't be checked), and currency against this
-    gapp's templates, of the four files."""
-    report = {}
-    try:
-        gapp_repo = _get_gapp_repo()
-        expected = _operator_files(gapp_repo, _resolve_gapp_ref(gapp_repo))
-    except RuntimeError:
-        expected = {}
-    for path in (DEPLOY_WORKFLOW_PATH, REGISTER_WORKFLOW_PATH, STATUS_WORKFLOW_PATH, DEPLOYMENTS_FILE):
-        rd = _read_file(fleet_repo, path)
-        current = (rd.content == expected[path]) if (rd.present and path in expected) else None
-        report[path] = {"present": None if rd.unchecked else rd.present, "current": current, "note": rd.note}
-    return report
+# --- the fleet repo, and the definition a command means ---
 
 
-def _legacy_workflows(fleet_repo: str) -> list[str]:
-    """Deployments still run by a per-solution caller workflow from gapp 3.x.
+def _fleet_repo(result: dict) -> tuple[str | None, dict | None]:
+    """The GitHub repo the fleet is kept in, or the refusal to return.
 
-    Any workflow other than gapp's own that calls gapp's
-    reusable deploy workflow is one; they keep working from the Actions
-    tab until deleted, and `ci list --verbose` notes them.
+    `gapp ci` runs workflows in the fleet repo, so the fleet has to be in
+    one, and on GitHub. Where the fleet lives is read from the one place
+    that says (`fleetstore.location`); nothing is searched for.
     """
-    names = []
-    listing = _list_dir(fleet_repo, WORKFLOWS_DIR)
-    for name in (listing.data or []) if listing.present else []:
-        if name in GAPP_WORKFLOWS or not name.endswith((".yml", ".yaml")):
-            continue
-        rd = _read_file(fleet_repo, f"{WORKFLOWS_DIR}/{name}")
-        if rd.present and rd.content and "/.github/workflows/deploy.yml@" in rd.content:
-            names.append(name.rsplit(".", 1)[0])
-    return names
-
-
-def _load_fleet(fleet_repo: str) -> tuple[dict | None, Read]:
-    """The parsed deployments document and its read; the document is None
-    when the file is absent or unreadable (the read says which)."""
-    rd = _read_file(fleet_repo, DEPLOYMENTS_FILE)
-    if not rd.present:
-        return None, rd
-    try:
-        return fleet.parse(rd.content), rd
-    except FleetRefusal as e:
-        rd.state, rd.note = "unchecked", e.message
-        return None, rd
-
-
-def _fleet_file_outcome(fleet_repo: str, rd: Read) -> dict:
-    """The outcome for a deployments file that is absent or unreadable."""
-    if rd.absent:
-        return _outcome("ci init", (
-            f"{fleet_repo} has no {DEPLOYMENTS_FILE}, so it holds no deployments yet. Install gapp's files: "
-            f"gapp ci init {fleet_repo}"
-        ))
-    return _outcome("check GitHub access", rd.note)
-
-
-def _require(result: dict) -> tuple[str | None, dict | None]:
-    """gh present and the fleet repo set; else the outcome to return."""
+    from gapp.admin.sdk import fleetstore
     if not _gh_available():
         return None, {**result, **_gh_missing_outcome()}
-    fleet_repo, _ = get_fleet_repo()
-    if not fleet_repo:
-        return None, {**result, **_no_fleet_repo_outcome()}
-    result["fleet_repo"] = fleet_repo
-    return fleet_repo, None
+    where = fleetstore.location()
+    if where.kind != "github" or not GITHUB_REPO_RE.match(where.repo or ""):
+        kept = where.describe() if where.kind != "github" else f"{where.repo}, which is not a repo on GitHub"
+        return None, {**result, **_refusal("fleet use", FLEET_NOT_ON_GITHUB_MESSAGE.format(where=kept))}
+    result["fleet_repo"] = where.repo
+    return where.repo, None
+
+
+def _definition(result: dict, deployment: str | None, cwd: Path | None, command: str) -> tuple[str | None, dict | None, dict | None]:
+    """The deployment a command means and its definition, read from the
+    fleet: (name, definition, None), or (None, None, the refusal)."""
+    from gapp.admin.sdk import definitions, fleetstore
+    from gapp.admin.sdk.lookup import LookupRefusal
+    try:
+        deployments = fleetstore.read()
+        name = definitions.which(deployments, deployment, cwd, command)
+    except definitions.Refused as e:
+        return None, None, {**result, **_refusal("name the deployment", e.message)}
+    except (LookupRefusal, fleetstore.FleetUnavailable) as e:
+        return None, None, {**result, **_refusal("name the deployment", str(e))}
+    definition = deployments[name]
+    result.update(deployment=name, id=definition.get("id"), repo=definition.get("repo"),
+                  project=definition.get("project"), ref=definition.get("ref") or None, gapp=definition.get("gapp"))
+    return name, definition, None
+
+
+def _workflow_stop(fleet_repo: str, path: str) -> dict | None:
+    """The outcome when a workflow a command starts is not in the fleet repo, or could not be checked."""
+    workflow = _read_file(fleet_repo, path)
+    if workflow.absent:
+        return _refusal("ci init", WORKFLOW_MISSING_MESSAGE.format(fleet_repo=fleet_repo, path=path))
+    if workflow.unchecked:
+        return _outcome("check GitHub access", workflow.note)
+    return None
+
+
+def _project_stop(fleet_repo: str, project: str) -> dict | None:
+    """The outcome when the fleet repo's runners are not connected to a project, or that could not be checked."""
+    env = _environment(fleet_repo, project)
+    if env.absent:
+        return _refusal("ci projects connect", PROJECT_NOT_CONNECTED_MESSAGE.format(fleet_repo=fleet_repo, project=project))
+    if env.unchecked:
+        return _outcome("check GitHub access", env.note)
+    return None
 
 
 # --- ci init ---
 
 
-def _search_fleet_repos(owner: str | None) -> tuple[list[str] | None, str | None]:
-    """Repos carrying the gapp-ci topic under an owner (the gh user when None): one REST search."""
-    who = owner or _gh_login()
-    query = f"topic:{FLEET_TOPIC} user:{who}"
-    request = f"GET search/repositories?q={query}"
-    rc, out, err = _gh_api(["-X", "GET", "search/repositories", "-f", f"q={query}", "-f", "per_page=100"])
-    if rc != 0:
-        return None, _couldnt_check(f"the repos tagged {FLEET_TOPIC} under {owner or 'your account'}", request, err)
-    try:
-        return sorted(r["full_name"] for r in (json.loads(out or "{}").get("items") or [])), None
-    except (json.JSONDecodeError, KeyError, TypeError, AttributeError):
-        return None, f"Couldn't check the repos tagged {FLEET_TOPIC}: GitHub returned an answer gapp did not recognise. Request: {request}"
+def init_workflows() -> dict:
+    """Install the deploy and status workflows in the fleet repo (`gapp ci init`).
 
-
-def init_fleet(repo: str | None = None, *, owner: str | None = None, create: bool = False) -> dict:
-    """Show, find, set or create the fleet repo for this machine.
-
-    Without a repo: the saved fleet repo and how it was set; when none is
-    saved (or an owner is named), one search of that owner's repos for the
-    gapp-ci topic: one match is saved and shown, several are listed, none
-    gives the create guidance. With a repo: it is set for this machine if
-    it exists (and gapp's files are installed or updated in it), or
-    created private, tagged and populated with `create`. The only command
-    that writes the fleet repo setting.
+    Running it again brings the files up to the installed gapp's. It
+    writes those two files and nothing else: the fleet file and the
+    setting that says where the fleet lives belong to `gapp fleet use`.
     """
-    result = {"ok": True, "fleet_repo": None, "set_by": None, "found": [], "created": False,
-              "files": None, "legacy_solutions": None, "variables": None, "variables_note": None,
-              "topic": None, "next_step": None}
-    if not _gh_available():
-        return {**result, **_gh_missing_outcome()}
-
-    if not repo:
-        saved, set_by = get_fleet_repo()
-        if saved and not owner:
-            result.update(fleet_repo=saved, set_by=set_by)
-            result["next_step"] = None
-            result["lines"] = [f"Your fleet is kept in {saved} (set by: {set_by or 'unknown'})."]
-            return result
-        found, note = _search_fleet_repos(owner)
-        if found is None:
-            return {**result, **_outcome("check GitHub access", note)}
-        result["found"] = found
-        where = owner or "your GitHub account"
-        if not found:
-            return {**result, **_outcome("create a fleet repo", (
-                f"No fleet repo is set on this machine, and no repo under {where} carries the {FLEET_TOPIC} topic. "
-                f"Create one: gapp ci init {owner or '<owner>'}/<repo> --create"
-            ))}
-        if len(found) > 1:
-            return {**result, **_outcome("pick one fleet repo", (
-                f"Several repos under {where} carry the {FLEET_TOPIC} topic: {', '.join(found)}. "
-                f"Pick one: gapp ci init <owner>/<repo>"
-            ))}
-        set_fleet_repo(found[0], f"found by its {FLEET_TOPIC} topic under {where}")
-        result.update(fleet_repo=found[0], set_by=f"found by its {FLEET_TOPIC} topic under {where}")
-        result["lines"] = [f"Your fleet is kept in {found[0]} (set by: {result['set_by']})."]
-        return result
-
-    repo = repo.strip()
-    if not fleet.REPO_RE.match(repo):
-        return {**result, **_outcome("name the repo as owner/name", (
-            f"'{repo}' is not of the form owner/name. Name the fleet repo as <owner>/<repo>."
-        ))}
-    rc, _, err = _gh_api([f"repos/{repo}"])
-    if rc != 0:
-        status, _ = _gh_failure(err)
-        if status != 404:
-            return {**result, **_outcome("check GitHub access", _couldnt_check(repo, f"GET repos/{repo}", err))}
-        exists = False
-    else:
-        exists = True
-
-    if create:
-        if exists:
-            return {**result, **_outcome("use the existing repo", REPO_EXISTS_MESSAGE.format(repo=repo))}
-        owner_name, name = repo.split("/", 1)
-        endpoint = "user/repos" if owner_name.lower() == _gh_login().lower() else f"orgs/{owner_name}/repos"
-        rc, _, err = _gh_api(["-X", "POST", endpoint], {
-            "name": name, "private": True, "description": "gapp fleet: deployments and their workflows",
-        })
-        if rc != 0:
-            return {**result, **_outcome("create the fleet repo", (
-                f"{repo} could not be created: {_refused(err)}. Create it on GitHub (private), then run "
-                f"`gapp ci init {repo}`."
-            ))}
-        result["created"] = True
-    elif not exists:
-        return {**result, **_outcome("create the fleet repo", REPO_MISSING_MESSAGE.format(repo=repo))}
-
-    set_fleet_repo(repo, f"gapp ci init {repo}" + (" --create" if create else ""))
-    result.update(fleet_repo=repo, set_by=f"gapp ci init {repo}" + (" --create" if create else ""))
-
-    result["topic"] = _add_topic(repo)
-
+    result = {"ok": True, "fleet_repo": None, "files": None, "variables": None, "variables_note": None,
+              "next_step": None, "lines": []}
+    fleet_repo, stop = _fleet_repo(result)
+    if stop:
+        return stop
     try:
-        result["files"], deployments = _install_operator_files(repo)
+        result["files"] = _install_workflows(fleet_repo)
     except RuntimeError as e:
-        result["files"] = None
-        result.update(_outcome("install gapp's files", (
-            f"{repo} is your fleet repo now, but gapp's files could not be installed in it from this machine: "
-            f"{e}. Run `gapp ci init {repo}` from a machine whose `gh` can write to the repo; it installs "
-            f"{DEPLOY_WORKFLOW_PATH}, {REGISTER_WORKFLOW_PATH}, {STATUS_WORKFLOW_PATH} and {DEPLOYMENTS_FILE}."
-        )))
-        return result
-
-    result["legacy_solutions"] = _retire_legacy_solutions_file(repo)
-    report = _variables_report(repo)
-    result["variables"] = report["variables"]
-    result["variables_note"] = report["note"]
-    if result["legacy_solutions"] and result["legacy_solutions"].get("kept"):
-        n = result["legacy_solutions"]["count"]
-        result["next_step"] = {"action": "set up the 3.9 solutions again", "hint": (
-            f"{repo} still has {LEGACY_SOLUTIONS_FILE} from gapp 3.9 with {n} solution(s). Set each up again "
-            f"with `gapp ci setup <name> --repo <owner>/<repo> --project <project>`, then delete that file."
-        )}
-    elif report["variables"][ALLOWED_SOURCES_VAR] is not True:
-        result["next_step"] = {"action": "ci sources add", "hint": "gapp ci sources add <owner>"}
-    elif deployments != 0:
-        # An existing fleet (an upgrade run): its deployments are what to look at next.
-        result["next_step"] = {"action": "ci list", "hint": "gapp ci list"}
+        return {**result, **_outcome("install the workflows", (
+            f"The workflows could not be installed in {fleet_repo}: {str(e).rstrip('.')}. `gapp ci init` needs "
+            f"`gh` signed in as an admin of {fleet_repo}. Then run it again: gapp ci init"
+        ))}
+    statuses = set(result["files"].values())
+    if "created" in statuses:
+        result["lines"].append(f"Installed the deploy and status workflows in {fleet_repo}.")
+    elif "updated" in statuses:
+        result["lines"].append(f"Updated the workflows in {fleet_repo} to this gapp's.")
     else:
-        result["next_step"] = {"action": "ci project setup", "hint": "gapp ci project setup <project>"}
-    result["lines"] = _init_lines(result)
+        result["lines"].append(f"The workflows in {fleet_repo} are this gapp's already. Nothing changed.")
+    report = _variables_report(fleet_repo)
+    result["variables"], result["variables_note"] = report["variables"], report["note"]
+    if report["variables"][ALLOWED_SOURCES_VAR] is not True:
+        result["next_step"] = {"action": "ci sources add", "hint": "gapp ci sources add <owner>"}
+    else:
+        result["next_step"] = {"action": "ci projects connect", "hint": "gapp ci projects connect <project>"}
     return result
 
 
-def _init_lines(result: dict) -> list[str]:
-    """What `gapp ci init <owner>/<repo>` did, as the lines the CLI prints.
-
-    "gapp can now deploy your apps through GitHub Actions." only when this
-    run made the fleet (a new repo, or a deployments file it just created);
-    on an existing fleet, an upgrade run says what changed and nothing more.
-    """
-    repo = result["fleet_repo"]
-    files = result.get("files") or {}
-    changed = any(s in ("created", "updated") for s in files.values())
-    first_time = result.get("created") or files.get(DEPLOYMENTS_FILE) == "created"
-    lines = []
-    if result.get("created"):
-        lines.append(f"Created your private fleet repo {repo} with gapp's workflows and an empty {DEPLOYMENTS_FILE}.")
-    if first_time:
-        lines.append("gapp can now deploy your apps through GitHub Actions.")
-    if not result.get("created"):
-        if not changed:
-            lines.append("Nothing changed.")
-        elif files.get(DEPLOYMENTS_FILE) == "created":
-            lines.append(f"Installed gapp's workflows and {DEPLOYMENTS_FILE} in {repo}.")
-        else:
-            lines.append(f"Updated gapp's workflows in {repo} to this release.")
-    legacy = result.get("legacy_solutions") or {}
-    if legacy and not legacy.get("kept"):
-        lines.append("Removed the empty gapp/solutions.yaml left by gapp 3.9.")
-    lines.append(f"(Your fleet is kept in {repo}.)")
-    return lines
-
-
-def _add_topic(repo: str) -> str:
-    """Add the gapp-ci topic to a repo, keeping its other topics (REST)."""
-    rc, out, err = _gh_api([f"repos/{repo}/topics"])
-    if rc != 0:
-        return f"not set: {_refused(err)}"
-    try:
-        names = list(json.loads(out or "{}").get("names") or [])
-    except (json.JSONDecodeError, AttributeError):
-        names = []
-    if FLEET_TOPIC in names:
-        return "set"
-    rc, _, err = _gh_api(["-X", "PUT", f"repos/{repo}/topics"], {"names": names + [FLEET_TOPIC]})
-    return "set" if rc == 0 else f"not set: {_refused(err)}"
-
-
-def _retire_legacy_solutions_file(fleet_repo: str) -> dict | None:
-    """Remove an empty gapp/solutions.yaml left by 3.9.0; report a non-empty one."""
-    rd = _read_file(fleet_repo, LEGACY_SOLUTIONS_FILE)
-    if not rd.present:
-        return None
-    try:
-        entries = (yaml.safe_load(rd.content) or {}).get("solutions") or []
-    except (yaml.YAMLError, AttributeError):
-        entries = []
-    if entries:
-        return {"kept": True, "count": len(entries)}
-    try:
-        _delete_file(fleet_repo, LEGACY_SOLUTIONS_FILE, rd.sha, "Remove the empty gapp 3.9 solutions file")
-    except RuntimeError as e:
-        return {"kept": True, "count": 0, "note": str(e)}
-    return {"kept": False, "count": 0}
-
-
-# --- ci project setup: the one CI command that touches GCP ---
+# --- ci projects: which projects the fleet repo's runners can deploy to ---
 
 
 def _gcloud_outcome(step: str, project_id: str, detail: str) -> dict:
-    """Classify a gcloud failure into words with the requirement restated."""
+    """A gcloud failure in words, with what the command needs restated."""
     text = (detail or "").strip()
     first = text.splitlines()[0] if text else ""
     lowered = text.lower()
+    again = f"gapp ci projects connect {project_id}"
     if "unrecognized arguments" in lowered or "invalid choice" in lowered:
         # gcloud rejected the command itself: nothing about the sign-in is wrong.
         return _outcome("report the gcloud error", (
@@ -739,70 +520,87 @@ def _gcloud_outcome(step: str, project_id: str, detail: str) -> dict:
     else:
         return _outcome("check the error", (
             f"Could not {step} for project {project_id}: {first or 'gcloud failed'}. That is the error "
-            f"itself, not a sign-in problem. Fix what it names, then run `gapp ci project setup "
-            f"{project_id}` again."
+            f"itself, not a sign-in problem. Fix what it names, then run it again: {again}"
         ))
     return _outcome("sign in to gcloud as an Owner", (
-        f"Could not {step} for project {project_id}: {why}. {PROJECT_SETUP_REQUIREMENTS} "
+        f"Could not {step} for project {project_id}: {why}. {CONNECT_REQUIREMENTS} "
         f"Sign in with `gcloud auth login` (or point gapp at the right account with "
-        f"`gapp config account <email>`), then run `gapp ci project setup {project_id}` again."
+        f"`gapp config account <email>`), then run it again: {again}"
     ))
 
 
-def setup_ci_project(project: str) -> dict:
-    """Make the fleet repo trusted to deploy to a GCP project. Once per project, idempotent.
+def _project_is_set_up(project_id: str) -> bool:
+    """Whether the project carries the mark `gapp project setup` leaves."""
+    from gapp.admin.sdk.cloud import get_provider
+    from gapp.admin.sdk.cloud.base import CloudAccessError
+    from gapp.admin.sdk.core import HOSTED_LABEL, HOSTED_VALUE
+    try:
+        return (get_provider().get_project_labels(project_id) or {}).get(HOSTED_LABEL) == HOSTED_VALUE
+    except CloudAccessError as e:
+        raise RuntimeError(str(e).splitlines()[0]) from e
 
-    Enables the APIs a deployment needs and lets Cloud Build read sources
-    and push images, so a project nobody ran `gapp setup` on (one used only
-    through CI) can take its first deploy: a runner's identity may do
-    neither. Creates or confirms the Workload Identity pool and provider and the
-    `gapp-deploy` service account in the project, binds the pool to the
-    fleet repo, and records the deploy identity in the fleet repo as the
-    GitHub Environment named after the project. The only `gapp ci` command
-    that touches GCP: it requires gcloud signed in as an Owner of the
-    project and `gh` signed in as an admin of the fleet repo, and every
-    failure says which.
+
+def connect_project(project: str) -> dict:
+    """Let the fleet repo's runners sign in to a project and deploy to it (`gapp ci projects connect`).
+
+    Once per project; running it again only adds what is missing. In the
+    project: the APIs a sign-in from GitHub Actions uses, the Workload
+    Identity pool and provider, the `gapp-deploy` service account with its
+    roles, and the binding that lets runs of the fleet repo act as it. In
+    the fleet repo: the GitHub Environment named after the project, holding
+    the two variables a run signs in with.
+
+    It prepares nothing a deployment itself needs. That is `gapp project
+    setup`, and a project without its mark is refused here. Needs gcloud
+    signed in as an Owner of the project and `gh` signed in as an admin of
+    the fleet repo.
     """
     project_id = (project or "").strip()
-    result = {"ok": True, "project_id": project_id, "fleet_repo": None,
-              "apis": None, "wif_pool": None, "wif_provider": None, "service_account": None, "binding": None,
-              "build_permissions": None, "hosted": None, "environment": project_id, "environment_record": None, "changed": None, "next_step": None}
-    if not project_id:
-        return {**result, **_outcome("pass the project", "Name the GCP project: `gapp ci project setup <project>`.")}
-    fleet_repo, stop = _require(result)
+    result = {"ok": True, "project": project_id, "fleet_repo": None, "apis": None, "wif_pool": None,
+              "wif_provider": None, "service_account": None, "binding": None, "environment": project_id,
+              "environment_record": None, "changed": None, "next_step": None, "lines": []}
+    try:
+        project_id = fleet.validate_project(project_id)
+    except fleet.FleetRefusal as e:
+        return {**result, **_refusal("pass the project", f"{e.message} Name the project: gapp ci projects connect <project>")}
+    fleet_repo, stop = _fleet_repo(result)
     if stop:
         return stop
+    again = f"gapp ci projects connect {project_id}"
 
     admin, reason = _repo_permission(fleet_repo)
     if admin is not True:
         why = reason if admin is None else f"the signed-in `gh` account is not an admin of {fleet_repo}"
-        return {**result, **_outcome("sign in to gh as an admin", (
-            f"Cannot record the project's deploy identity in {fleet_repo}: {why}. "
-            f"{PROJECT_SETUP_REQUIREMENTS} Sign in with `gh auth login` as the repo's admin "
-            f"(its owner, for a personal repo), then run `gapp ci project setup {project_id}` again."
+        return {**result, **_refusal("sign in to gh as an admin", (
+            f"The project's deploy identity cannot be recorded in {fleet_repo}: {why}. {CONNECT_REQUIREMENTS} "
+            f"Sign in with `gh auth login` as the repo's admin, then run it again: {again}"
         ))}
-
     if shutil.which("gcloud") is None:
-        return {**result, **_outcome("install gcloud", (
-            f"gcloud is not installed on this machine. {PROJECT_SETUP_REQUIREMENTS} Run "
-            f"`gapp ci project setup {project_id}` from a machine with gcloud signed in as an "
-            f"Owner of {project_id}; every other `gapp ci` command works from here."
+        return {**result, **_refusal("install gcloud", (
+            f"gcloud is not installed on this machine. {CONNECT_REQUIREMENTS} Run it on a machine that has "
+            f"gcloud signed in as an Owner of {project_id}: {again}"
         ))}
     try:
         require_gcloud_account()
     except RuntimeError as e:
-        return {**result, **_outcome("sign in to gcloud as an Owner", f"{e} {PROJECT_SETUP_REQUIREMENTS}")}
+        return {**result, **_refusal("sign in to gcloud as an Owner", f"{e} {CONNECT_REQUIREMENTS}")}
+    try:
+        set_up = _project_is_set_up(project_id)
+    except RuntimeError as e:
+        return {**result, **_gcloud_outcome("read the project's labels", project_id, str(e))}
+    if not set_up:
+        return {**result, **_refusal("project setup", (
+            f"{project_id} is not set up for gapp, so runners were not connected to it. Set it up, once per "
+            f"project: gapp project setup {project_id}. Then run this again: {again}"
+        ))}
 
     steps = (
-        ("apis", "enable the APIs a deployment needs", lambda: _enable_project_apis(project_id)),
+        ("apis", "enable the APIs a sign-in from GitHub Actions uses", lambda: _enable_sign_in_apis(project_id)),
         ("wif_pool", "create or confirm the Workload Identity pool", lambda: _ensure_wif_pool(project_id)),
         ("wif_provider", "create or confirm the Workload Identity provider",
          lambda: _ensure_wif_provider(project_id, fleet_repo.split("/")[0])),
         ("service_account", "create or confirm the gapp-deploy service account", lambda: _ensure_deploy_sa(project_id)),
         ("binding", "bind the Workload Identity pool to the fleet repo", lambda: _ensure_wif_binding(project_id, fleet_repo)),
-        ("build_permissions", "let Cloud Build read sources and push images",
-         lambda: _ensure_build_permissions(project_id)),
-        ("hosted", "mark the project as hosting gapp deployments (gapp=hosted)", lambda: _mark_project_hosted(project_id)),
     )
     for key, step, fn in steps:
         try:
@@ -819,12 +617,55 @@ def setup_ci_project(project: str) -> dict:
         )
     except RuntimeError as e:
         return {**result, **_outcome("sign in to gh as an admin", (
-            f"GCP is ready, but the deploy identity could not be recorded in {fleet_repo}: could not {e}. "
-            f"{PROJECT_SETUP_REQUIREMENTS} Then run `gapp ci project setup {project_id}` again; the GCP "
-            f"steps are idempotent."
+            f"The project is ready, but its deploy identity could not be recorded in {fleet_repo}: could not {e}. "
+            f"{CONNECT_REQUIREMENTS} Then run it again; it only adds what is missing: {again}"
         ))}
     result["changed"] = any(result[k] == "created" for k in ("wif_pool", "wif_provider", "service_account")) \
-        or result["environment_record"] != "unchanged" or result["hosted"] == "set"
+        or result["environment_record"] != "unchanged"
+    result["lines"].append(
+        f"Runners in {fleet_repo} can deploy to {project_id}." if result["changed"]
+        else f"Runners in {fleet_repo} could already deploy to {project_id}. Nothing changed.")
+    result["next_step"] = {"action": "ci deploy", "hint": "gapp ci deploy --deployment <name>"}
+    return result
+
+
+def list_projects() -> dict:
+    """The projects the fleet repo's runners can deploy to (`gapp ci projects list`).
+
+    Read from the fleet repo's record alone: its GitHub Environments that
+    hold the deploy identity `gapp ci projects connect` writes.
+    Google Cloud is not asked. `unchecked` names the Environments whose variables
+    this machine's GitHub access could not read.
+    """
+    result = {"ok": True, "fleet_repo": None, "projects": [], "unchecked": [], "next_step": None, "lines": []}
+    fleet_repo, stop = _fleet_repo(result)
+    if stop:
+        return stop
+    request = f"GET repos/{fleet_repo}/environments"
+    rc, out, err = _gh_api([f"repos/{fleet_repo}/environments?per_page=100"])
+    if rc != 0:
+        return {**result, **_outcome("check GitHub access", _couldnt_check(f"the Environments of {fleet_repo}", request, err))}
+    try:
+        names = sorted(str(e["name"]) for e in (json.loads(out or "{}").get("environments") or []))
+    except (json.JSONDecodeError, KeyError, TypeError, AttributeError):
+        return {**result, **_outcome("check GitHub access", _couldnt_check(
+            f"the Environments of {fleet_repo}", request, "GitHub returned an answer gapp did not recognise"))}
+    for name in names:
+        rc, out, err = _gh_api([f"repos/{fleet_repo}/environments/{quote(name, safe='')}/variables/{ENV_WIF_PROVIDER_VAR}"])
+        if rc == 0 and out.strip():
+            result["projects"].append(name)
+        elif _gh_failure(err)[0] != 404:
+            result["unchecked"].append(name)
+    if result["projects"]:
+        result["lines"].append(f"Runners in {fleet_repo} can deploy to:")
+        result["lines"] += [f"  {name}" for name in result["projects"]]
+    else:
+        result["lines"].append(f"Runners in {fleet_repo} are not connected to any project.")
+        result["next_step"] = {"action": "ci projects connect", "hint": "gapp ci projects connect <project>"}
+    if result["unchecked"]:
+        result["lines"].append(
+            f"Couldn't check {', '.join(result['unchecked'])}: the variables of those Environments are not "
+            f"readable with this machine's GitHub access.")
     return result
 
 
@@ -866,20 +707,21 @@ def _sources_write(fleet_repo: str, owners: list[str], existed: bool) -> dict | 
 
 
 def manage_sources(action: str, owner: str | None = None) -> dict:
-    """List, add to, or remove from the GitHub owners whose repos may be deployed from the fleet.
+    """List, add to, or remove from the GitHub owners whose repos runners may deploy (`gapp ci sources`).
 
     The list is the fleet repo's repository variable `GAPP_ALLOWED_SOURCES`
-    (comma-separated owners); the register run refuses a repo whose owner
-    is not on it. Needs `gh` with write access to the fleet repo (read
+    (comma-separated owners). A deploy run refuses a deployment whose repo
+    belongs to an owner that is not on it, and a commit to the fleet file
+    cannot change it. Needs `gh` with write access to the fleet repo (read
     access for `list`).
     """
     result = {"ok": True, "action": action, "fleet_repo": None, "owner": owner, "owners": None,
               "changed": False, "next_step": None}
     if action not in ("add", "remove", "list"):
-        return {**result, **_outcome("choose an action", "Use `gapp ci sources add|remove|list [<owner>]`.")}
+        return {**result, **_refusal("choose an action", "Use `gapp ci sources add <owner>`, `gapp ci sources remove <owner>` or `gapp ci sources list`.")}
     if action != "list" and not (owner or "").strip():
-        return {**result, **_outcome("pass the owner", f"Name the GitHub owner: `gapp ci sources {action} <owner>`.")}
-    fleet_repo, stop = _require(result)
+        return {**result, **_refusal("pass the owner", f"Name the GitHub owner: gapp ci sources {action} <owner>")}
+    fleet_repo, stop = _fleet_repo(result)
     if stop:
         return stop
 
@@ -911,26 +753,21 @@ def manage_sources(action: str, owner: str | None = None) -> dict:
 
 
 def _with_sources_text(result: dict) -> dict:
-    """The lines `gapp ci sources` prints, and its next step.
-
-    After `add`, the next step is setting up one of that owner's apps;
-    `gapp ci setup` itself names `gapp ci project setup` when the project
-    is not yet trusted, so add never sends an existing fleet back to it.
-    """
-    owner, action = result.get("owner"), result["action"]
+    """The lines `gapp ci sources` prints, and its next step."""
+    owner, action, fleet_repo = result.get("owner"), result["action"], result["fleet_repo"]
     if action == "list":
         owners = result.get("owners") or []
-        result["lines"] = [("Allowed owners: " + ", ".join(owners)) if owners else "No owners are allowed in your fleet yet."]
+        result["lines"] = [("Runners may deploy repos owned by: " + ", ".join(owners)) if owners
+                           else f"Runners in {fleet_repo} may not deploy any owner's repos yet."]
         if not owners:
             result["next_step"] = {"action": "ci sources add", "hint": "gapp ci sources add <owner>"}
     elif action == "add":
-        result["lines"] = [f"Apps owned by {owner} are now allowed in your fleet." if result["changed"]
-                           else f"Apps owned by {owner} are already allowed in your fleet. Nothing changed."]
-        result["next_step"] = {"action": "ci setup",
-                               "hint": f"gapp ci setup <name> --repo {owner}/<repo> --project <project>"}
+        result["lines"] = [f"Runners in {fleet_repo} may deploy repos owned by {owner}." if result["changed"]
+                           else f"Runners in {fleet_repo} could already deploy repos owned by {owner}. Nothing changed."]
+        result["next_step"] = {"action": "add", "hint": f"gapp add <name> --repo {owner}/<repo> --project <project>"}
     else:
-        result["lines"] = [f"Apps owned by {owner} are no longer allowed in your fleet." if result["changed"]
-                           else f"Apps owned by {owner} were not allowed in your fleet. Nothing changed."]
+        result["lines"] = [f"Runners in {fleet_repo} do not deploy repos owned by {owner}." if result["changed"]
+                           else f"{owner} was not on the list. Nothing changed."]
     return result
 
 
@@ -978,8 +815,8 @@ def _dispatch(fleet_repo: str, workflow_file: str, fields: dict[str, str]) -> Di
         return Dispatch(request_id, sent_at)
     said = _refused(err)
     if "unexpected inputs" in (err or "").lower():
-        said += (f" (the fleet repo's {workflow_file} is older than this gapp and does not take a request id; "
-                 f"update gapp's files with `gapp ci init {fleet_repo}`)")
+        said += (f" (the fleet repo's {workflow_file} does not take the inputs this gapp sends; "
+                 f"bring the workflows up to this gapp's with `gapp ci init`)")
     return Dispatch(request_id, sent_at, said, err)
 
 
@@ -1072,23 +909,15 @@ def _run_log(fleet_repo: str, run_id: str) -> str:
         return ""
 
 
-def _run_messages(fleet_repo: str, run_id: str, prefix: str) -> list[str]:
-    """The lines a run's steps printed for the operator (those starting with `prefix`)."""
-    return _emitted_messages(_run_log(fleet_repo, run_id), prefix)
-
-
 def _run_url(fleet_repo: str, run_id: str | None) -> str | None:
     return f"https://github.com/{fleet_repo}/actions/runs/{run_id}" if run_id else None
 
 
-def _run_conclusion(fleet_repo: str, run_id: str) -> str | None:
-    rc, out, _ = _gh_api([f"repos/{fleet_repo}/actions/runs/{run_id}", "--jq", ".conclusion"])
-    return (out.strip() or None) if rc == 0 else None
-
 
 def _last_deploy(fleet_repo: str, name: str) -> dict:
-    """The newest run of the deploy workflow for a deployment, by its run name
-    "Deploy <name> (<ref>) <request id>"; `checked` False with a note when runs cannot be read."""
+    """The newest run of the deploy workflow for a deployment, found by its
+    run name, "Deploy <name> <request id>". `checked` is False, with a
+    note, when the runs cannot be read."""
     request = f"GET repos/{fleet_repo}/actions/workflows/{DEPLOY_WORKFLOW}/runs"
     rc, out, err = _gh_api([f"repos/{fleet_repo}/actions/workflows/{DEPLOY_WORKFLOW}/runs?per_page=50"])
     if rc != 0:
@@ -1097,937 +926,287 @@ def _last_deploy(fleet_repo: str, name: str) -> dict:
         runs = json.loads(out).get("workflow_runs") or []
     except (json.JSONDecodeError, AttributeError):
         runs = []
-    pattern = re.compile(rf"^Deploy {re.escape(name)} \((?P<ref>[^)]*)\)(?: \S+)?$")
+    pattern = re.compile(rf"^Deploy {re.escape(name)}(?: \S+)?\s*$")
     for run in runs:
-        match = pattern.match(run.get("display_title") or run.get("name") or "")
-        if match:
+        if pattern.match(run.get("display_title") or run.get("name") or ""):
             return {"checked": True, "note": None, "run": {
                 "id": str(run.get("id")), "status": run.get("status"), "conclusion": run.get("conclusion"),
-                "created_at": run.get("created_at"), "ref": match.group("ref"),
+                "created_at": run.get("created_at"),
                 "url": run.get("html_url") or _run_url(fleet_repo, run.get("id")),
             }}
     return {"checked": True, "run": None, "note": None}
 
 
-# --- ci setup and ci rename: the register run writes the fleet file ---
+@dataclass
+class RunReport:
+    """What a finished run said in its log.
+
+    `result`, `refused` and `error` are the one line gapp prints on the
+    runner (`ci_runner`). `said` holds the other lines a workflow printed
+    for a person, and `errors` the errors GitHub Actions itself logged.
+    """
+    result: dict | None = None
+    refused: str | None = None
+    error: str | None = None
+    said: list = None
+    errors: list = None
+    log: str = ""
+
+    def words(self) -> str:
+        """Why the run failed, in the run's own words, or "" when it gave none."""
+        return " ".join(self.said or self.errors or [])
 
 
-def _register(fleet_repo: str, result: dict, inputs: dict, *, watch: bool, command: str,
-              owner: str | None, project: str | None) -> dict:
-    """Dispatch the register workflow and read its result into `result`."""
-    register = _read_file(fleet_repo, REGISTER_WORKFLOW_PATH)
-    if register.absent:
-        return {**result, **_outcome("ci init", (
-            f"{fleet_repo} has no {REGISTER_WORKFLOW_PATH}, so there is nothing to dispatch. Install gapp's "
-            f"files: gapp ci init {fleet_repo}"
-        ))}
-    if register.unchecked:
-        return {**result, **_outcome("check GitHub access", register.note)}
+def _run_report(fleet_repo: str, run_id: str, prefix: str, name: str) -> RunReport:
+    log = _run_log(fleet_repo, run_id)
+    report = RunReport(said=[], errors=_emitted_messages(log, "##[error]"), log=log)
+    for message in _emitted_messages(log, prefix):
+        if message.startswith("result="):
+            try:
+                report.result = json.loads(message[len("result="):])
+            except json.JSONDecodeError:
+                report.result = None
+        elif message.startswith("refused="):
+            report.refused = message[len("refused="):]
+        elif message.startswith("error="):
+            report.error = message[len("error="):]
+        elif not message.startswith(f"{name} -> "):       # the line that says what the run is about to deploy
+            report.said.append(message)
+    return report
 
-    dispatch = _dispatch(fleet_repo, REGISTER_WORKFLOW, inputs)
+
+def _start_run(fleet_repo: str, workflow: str, inputs: dict, result: dict, doing: str, again: str) -> dict | None:
+    """Dispatch a workflow and find its run, filling `result`. Returns the
+    outcome to stop with, or None when the run was found."""
+    dispatch = _dispatch(fleet_repo, workflow, inputs)
     if dispatch.refused:
-        said, err = dispatch.refused, dispatch.stderr
-        return {**result, **_outcome("dispatch the register workflow", (
-            f"The register workflow could not be dispatched in {fleet_repo}: {said}. "
-            f"{_fix_for(err, f'access to dispatch workflows in {fleet_repo}')} run this command again: {command}"
+        return {**result, **_outcome(f"start the {doing} run", (
+            f"The {doing} run could not be started in {fleet_repo}: {dispatch.refused}. "
+            f"{_fix_for(dispatch.stderr, f'access to start workflows in {fleet_repo}')} run it again: {again}"
         ))}
     result["dispatched"] = True
     result["request_id"] = dispatch.request_id
-    result["run_id"] = _find_run(fleet_repo, REGISTER_WORKFLOW, dispatch)
+    result["run_id"] = _find_run(fleet_repo, workflow, dispatch)
     result["run_url"] = _run_url(fleet_repo, result["run_id"])
     if not result["run_id"]:
         return {**result, **_outcome("check the run", (
-            f"Dispatched {REGISTER_WORKFLOW} in {fleet_repo}, but no run carrying its request id {dispatch.request_id} "
-            f"appeared within {RUN_APPEAR_TIMEOUT} seconds, so no result is reported (an older run's never is). Check the "
-            f"repo's Actions tab for the register run, then `gapp ci status {result.get('name')}`."
+            f"Started {workflow} in {fleet_repo} for '{result['deployment']}', but no run carrying its request id "
+            f"{dispatch.request_id} appeared within {RUN_APPEAR_TIMEOUT} seconds, so nothing is reported about it "
+            f"(another run's result never is). Look for it on the repo's Actions tab, then: "
+            f"gapp ci status --deployment {result['deployment']}"
         ))}
-    if not watch:
-        return result
-
-    status, conclusion = _wait_for_run(fleet_repo, result["run_id"])
-    result["conclusion"] = conclusion
-    result["messages"] = _run_messages(fleet_repo, result["run_id"], REGISTER_LOG_PREFIX)
-    fields = dict(m.split("=", 1) for m in result["messages"] if re.match(r"^(result|name|id|project)=", m))
-    result["result_code"] = fields.get("result")
-    if fields.get("name"):
-        result["name"] = fields["name"]
-    if fields.get("id"):
-        result["id"] = fields["id"]
-    if fields.get("project"):
-        result["project"] = fields["project"]
-    texts = [m for m in result["messages"] if not re.match(r"^(result|name|id|project)=", m)]
-    if status != "completed":
-        return {**result, **_outcome("check the run", (
-            f"The register run did not finish within the wait: {result['run_url']}. Check it there; when it "
-            f"has written '{result.get('name')}', `gapp ci deploy {result.get('name')}` works. Otherwise run this "
-            f"command again: {command}"
-        ))}
-    if result["result_code"] in REGISTER_SUCCESS_CODES and conclusion == "success":
-        result["action"] = result["result_code"]
-        return result
-    if result["result_code"] == "source-owner-not-allowed":
-        return {**result, **_outcome("ci sources add", SOURCE_NOT_ALLOWED_MESSAGE.format(
-            owner=owner or "<owner>", fleet_repo=fleet_repo, command=command))}
-    if result["result_code"] == "project-not-trusted":
-        return {**result, **_outcome("ci project setup", PROJECT_NOT_TRUSTED_MESSAGE.format(
-            fleet_repo=fleet_repo, project=project or "<project>", command=command))}
-    said = " ".join(texts) if texts else "it ended with no message"
-    return {**result, **_outcome("fix and run again", (
-        f"The register run refused the change: {said} ({result['run_url']}). Fix what it names, then run "
-        f"this command again: {command}"
-    ))}
-
-
-def _refusal_action(code: str) -> str:
-    return {
-        "name-taken": "pick another name", "project-bound": "add a deployment", "repo-deployed": "update or copy",
-        "name-too-long": "pick a shorter name", "source-missing": "name an existing deployment",
-        "deployment-missing": "name an existing deployment", "invalid-input": "fix the input",
-    }.get(code, "fix the input")
-
-
-def _default_command(name, *, repo=None, project=None, domain=None, copy_of=None, manifest=None, ref=None) -> str:
-    parts = ["gapp ci setup", name]
-    if copy_of:
-        parts += ["--copy-of", copy_of]
-    if repo and not copy_of:
-        parts += ["--repo", repo]
-    if project:
-        parts += ["--project", project]
-    if ref is not None:
-        parts += ["--ref", ref or '""']
-    if domain is not None:
-        parts += ["--domain", domain or '""']
-    if manifest is not None:
-        parts += ["--manifest", "<file>"]
-    return " ".join(parts)
-
-
-def _shown(value) -> str:
-    text = value if isinstance(value, str) else json.dumps(value, separators=(", ", ": "))
-    return text if len(text) <= 80 else text[:77] + "..."
-
-
-def _entry_changes(before: dict, after: dict) -> list[str]:
-    """What an update does to an entry's gapp.yaml keys, one line per key: the
-    domain first, then each other key set, changed or removed (a key gapp.yaml
-    does not have is "dropped")."""
-    lines = []
-    if fleet.ref_of(before) != fleet.ref_of(after):
-        lines.append(f"ref: {fleet.ref_of(before) or '(default branch)'} → {fleet.ref_of(after) or '(default branch)'}")
-    if before.get("domain") != after.get("domain"):
-        lines.append(f"domain: {before.get('domain') or '(none)'} → {after.get('domain') or '(none)'}")
-    lines += [f"would drop: {path}" for path in fleet.unknown_keys(fleet.manifest_keys(before))]
-    old = fleet.manifest_keys(fleet.without_unknown_keys(before))
-    new = fleet.manifest_keys(after)
-    for key in sorted(set(old) | set(new)):
-        if key == "domain":
-            continue
-        if key not in new:
-            lines.append(f"would remove: {key}")
-        elif key not in old:
-            lines.append(f"would set: {key} = {_shown(new[key])}")
-        elif old[key] != new[key]:
-            lines.append(f"{key}: {_shown(old[key])} → {_shown(new[key])}")
-    return lines
-
-
-def _applied(line: str) -> str:
-    """A change line as done rather than proposed: "would drop: k" becomes "dropped: k"."""
-    for verb, done in (("drop", "dropped"), ("remove", "removed"), ("set", "set")):
-        if line.startswith(f"would {verb}:"):
-            return done + line[len(f"would {verb}"):]
-    return line
-
-
-def setup_deployment(name: str | None = None, *, repo: str | None = None, project: str | None = None,
-                     domain: str | None = None, copy_of: str | None = None, manifest: dict | None = None,
-                     watch: bool = True, command: str | None = None, update: bool = False,
-                     ref: str | None = None) -> dict:
-    """`gapp ci setup`: the outcome (see `_setup_outcome`) plus the text that
-    describes it, built once here. `lines` is what a reader sees first,
-    `lines_after` what follows any detail lines; the CLI prints both as
-    given and MCP callers get the same words."""
-    result = _setup_outcome(name, repo=repo, project=project, domain=domain, copy_of=copy_of,
-                            manifest=manifest, watch=watch, command=command, update=update, ref=ref)
-    return _with_setup_text(result, copy_of=copy_of)
-
-
-def _with_setup_text(result: dict, *, copy_of: str | None) -> dict:
-    lines, after = [], []
-    nm, rp, pj = result.get("name"), result.get("repo"), result.get("project")
-    if result.get("ok") is False:
-        shown = rp or "the repo"
-        action = (result.get("next_step") or {}).get("action")
-        if action == "ci sources add":
-            lines.append(f"{shown} can't be set up yet.")
-        elif action == "ci project setup":
-            lines.append(f"{shown} can't be set up yet.")
-        return {**result, "lines": lines, "lines_after": after}
-    if result.get("action") == "unchanged":
-        lines.append(f"{nm} is already set up to deploy {rp} to {pj}. Nothing changed.")
-    elif result.get("dispatched") and result.get("action") is None:
-        lines.append(f"Setting up {nm} ({rp} to {pj}): {result.get('run_url')}")
-        result["next_step"] = {"action": "ci status", "hint": f"gapp ci status {nm}"}
-        after.append(f"Next: gapp ci status {nm}")
-    elif copy_of:
-        lines.append(f"{nm} is set up as a copy of {copy_of}: {rp} deploys to {pj}"
-                     + (" (the same project as the source)." if result.get("project_from_source") else "."))
-        lines.append(f"Set its secrets on {pj} before the first deploy: "
-                     f"`gapp secrets list --deployment {nm}` shows them, and "
-                     f"`gapp secrets set <secret> --deployment {nm}` stores one.")
-    elif result.get("action") == "updated" and result.get("changes_shown"):
-        lines.append(f"{nm} updated ({rp} to {pj}):")
-        lines += ["  " + c for c in result["changes_shown"]]
-    else:
-        lines.append(f"{rp} is set up to deploy to {pj} as {nm}.")
-    if result.get("ref"):
-        lines.append(f"Builds: {result['ref']}")
-    if result.get("domain"):
-        lines.append(f"Domain: {result['domain']}")
-    if result.get("action") in ("added", "updated", "unchanged"):
-        result["next_step"] = {"action": "ci deploy", "hint": f"gapp ci deploy {nm}"}
-        lines.append(f"Deploy it: gapp ci deploy {nm}")
-    return {**result, "lines": lines, "lines_after": after}
-
-
-def _setup_outcome(name: str | None = None, *, repo: str | None = None, project: str | None = None,
-                   domain: str | None = None, copy_of: str | None = None, manifest: dict | None = None,
-                   watch: bool = True, command: str | None = None, update: bool = False,
-                   ref: str | None = None) -> dict:
-    """Add or update a deployment of the fleet (`gapp ci setup`). Never uses gcloud, never reads the cwd.
-
-    `ref` is the branch, tag or commit of the repo that a deploy of this
-    deployment builds (`""` removes it: the repo's default branch). It is
-    part of the definition and not a gapp.yaml key; a copy keeps its
-    source's unless one is given.
-
-    The name defaults to the repo's name, derived only from `repo`. Same
-    name and repo: the same request is "unchanged"; a request that would
-    change the entry (`domain` set, or removed as "", or keys gapp.yaml
-    does not have dropped) is refused with the change shown
-    (`changes_shown`) unless `update` is True. With
-    `copy_of`, a new deployment from an existing one: the same repo and
-    gapp.yaml keys, never the id, the domain, deploy history or secret
-    values; `project` defaults to the source's. Every refusal (name taken,
-    repo already deployed under another name, id too long, project not
-    trusted, owner not allowed) is a plain outcome; the same checks run
-    again in the register run, which writes the file with its own token.
-
-    `manifest` is the deployment's whole fleet-side manifest (`--manifest
-    FILE`, parsed): its gapp.yaml keys replace the entry's, so a key the file
-    lacks is removed. It is checked against the schema before anything else.
-    `domain`, when also given, wins over the manifest's.
-    """
-    result = {"ok": True, "name": None, "repo": None, "project": None, "domain": None, "ref": None, "id": None,
-              "fleet_repo": None, "copy_of": copy_of, "action": None, "changes": None,
-              "changes_shown": [], "project_from_source": False,
-              "workflow": REGISTER_WORKFLOW, "dispatched": False, "run_id": None, "run_url": None,
-              "conclusion": None, "result_code": None, "messages": [], "next_step": None}
-    changes = {}
-    if domain is not None:
-        changes["domain"] = domain.strip() or None
-    if ref is not None:
-        changes["ref"] = ref.strip() or None
-    result["changes"] = changes
-    if manifest is not None:
-        try:
-            manifest = fleet.validate_manifest_upload(manifest)
-        except FleetRefusal as e:
-            return {**result, **_outcome("fix the manifest", e.message)}
-
-    if copy_of:
-        if not (name or "").strip():
-            return {**result, **_outcome("pass the new name", (
-                f"Name the new deployment: `gapp ci setup <name> --copy-of {copy_of}`."
-            ))}
-    else:
-        if not (repo or "").strip():
-            return {**result, **_outcome("pass --repo", (
-                "Name the repo to deploy: `gapp ci setup [<name>] --repo <owner>/<repo> --project <project>`. "
-                "The deployment name defaults to the repo's name."
-            ))}
-        repo = repo.strip()
-        if not fleet.REPO_RE.match(repo):
-            return {**result, **_outcome("fix the input", f"'{repo}' is not a repo of the form owner/name.")}
-        if not (project or "").strip():
-            return {**result, **_outcome("pass --project", (
-                "Name the GCP project: `gapp ci setup [<name>] --repo <owner>/<repo> --project <project>`. "
-                "The CI system never looks a project up in GCP."
-            ))}
-        name = (name or "").strip() or repo.split("/", 1)[1]
-    name = name.strip()
-    project = (project or "").strip() or None
-    result.update(name=name, repo=repo, project=project)
-    command = command or _default_command(name, repo=repo, project=project, domain=domain, copy_of=copy_of,
-                                          manifest=manifest, ref=ref)
-
-    fleet_repo, stop = _require(result)
-    if stop:
-        return stop
-    doc, rd = _load_fleet(fleet_repo)
-    if doc is None:
-        return {**result, **_fleet_file_outcome(fleet_repo, rd)}
-
-    if manifest is not None:
-        if copy_of:
-            base = {k: v for k, v in fleet.manifest_keys(doc.get(copy_of) or {}).items() if k != "domain"}
-        else:
-            base = doc.get(name) or {}
-        changes = fleet.replacement_changes(base, manifest)
-        if domain is not None:
-            changes["domain"] = domain.strip() or None
-        if ref is not None:
-            changes["ref"] = ref.strip() or None
-        result["changes"] = changes
-
-    try:
-        if copy_of:
-            new_doc, entry, info = fleet.copy_entry(doc, name, copy_of, project=project, changes=changes)
-            result.update(repo=entry["repo"], project=entry["project"], project_from_source=not project)
-            action = "added"
-            operation = "copy"
-        else:
-            new_doc, action, entry = fleet.set_entry(doc, name, repo=repo, project=project, changes=changes)
-            operation = "set"
-    except FleetRefusal as e:
-        hint = e.message
-        if e.code == "repo-deployed":
-            hint = f"{repo} can't be set up as {name}: {e.message}"
-        return {**result, **_outcome(_refusal_action(e.code), hint)}
-    if operation == "set" and action == "updated":
-        result["changes_shown"] = _entry_changes(doc[name], entry)
-        if not update:
-            return {**result, **_outcome("pass --update", (
-                f"{name} already deploys {entry['repo']} to {entry['project']}. This would change its entry:\n"
-                + "".join(f"  {line}\n" for line in result["changes_shown"])
-                + f"Run it again with --update to apply: {command} --update"
-            ))}
-    # The run confirms the action against the live file; only "unchanged" is final here.
-    result.update(id=entry["id"], domain=entry.get("domain"), ref=fleet.ref_of(entry), project=entry["project"],
-                  action=action if action == "unchanged" else None)
-    if action == "unchanged":
-        return result
-
-    env = _environment(fleet_repo, entry["project"])
-    if env.absent:
-        return {**result, **_outcome("ci project setup", PROJECT_NOT_TRUSTED_MESSAGE.format(
-            fleet_repo=fleet_repo, project=entry["project"], command=command))}
-
-    inputs = {"operation": operation, "name": name, "repo": entry["repo"] if operation == "set" else "",
-              "project": project or "", "changes": json.dumps(changes), "source": copy_of or ""}
-    result["id"] = None                                    # the run allocates the id against the live file
-    result = _register(fleet_repo, result, inputs, watch=watch, command=command,
-                       owner=entry["repo"].split("/")[0], project=entry["project"])
-    if result.get("action") == "updated":
-        result["changes_shown"] = [_applied(line) for line in result.get("changes_shown") or []]
-    return result
-
-
-def rename_deployment(old: str, new: str, *, watch: bool = True) -> dict:
-    """Change a deployment's name only (`gapp ci rename`); its id and GCP resources are untouched."""
-    result = {"ok": True, "name": (new or "").strip(), "old_name": (old or "").strip(), "id": None, "repo": None,
-              "project": None, "fleet_repo": None, "action": None, "workflow": REGISTER_WORKFLOW,
-              "dispatched": False, "run_id": None, "run_url": None, "conclusion": None, "result_code": None,
-              "messages": [], "next_step": None}
-    if not result["old_name"] or not result["name"]:
-        return {**result, **_outcome("pass both names", "Use `gapp ci rename <old> <new>`.")}
-    fleet_repo, stop = _require(result)
-    if stop:
-        return stop
-    doc, rd = _load_fleet(fleet_repo)
-    if doc is None:
-        return {**result, **_fleet_file_outcome(fleet_repo, rd)}
-    try:
-        new_doc = fleet.rename_entry(doc, result["old_name"], result["name"])
-    except FleetRefusal as e:
-        return {**result, **_outcome(_refusal_action(e.code), e.message)}
-    entry = new_doc[result["name"]]
-    result.update(id=entry["id"], repo=entry.get("repo"), project=entry.get("project"))
-    inputs = {"operation": "rename", "name": result["name"], "repo": "", "project": "", "changes": "{}",
-              "source": result["old_name"]}
-    return _register(fleet_repo, result, inputs, watch=watch,
-                     command=f"gapp ci rename {result['old_name']} {result['name']}",
-                     owner=(entry.get("repo") or "/").split("/")[0], project=entry.get("project"))
+    return None
 
 
 # --- ci deploy ---
 
 
-def ref_label(ref: str | None) -> str:
-    """How a deploy's ref is shown: "ref <ref>", or "default branch" when none was given."""
-    return f"ref {ref}" if ref else "default branch"
+def _builds(ref: str | None) -> str:
+    return ref or "the default branch"
 
 
-def deploy_deployment(name: str, *, watch: bool = True, progress=None) -> dict:
-    """Deploy one deployment through the fleet repo's deploy workflow (`gapp ci deploy <name>`).
+def _ref_is_missing(log: str, repo: str, ref: str | None) -> bool:
+    """Whether a failed run failed because the app repo has no such ref:
+    the checkout said so, or GitHub confirms it for a repo this login sees."""
+    if not ref:
+        return False
+    if re.search(r"A branch or tag with the name '[^']*' could not be found|couldn't find remote ref|not our ref", log or ""):
+        return True
+    rc, _, err = _gh_api([f"repos/{repo}/commits/{ref}", "--jq", ".sha"])
+    return rc != 0 and _gh_failure(err)[0] in (404, 422) and _repo_visible(repo)
 
-    What is built is the deployment's ref, from its definition: a branch
-    (its tip), a tag or a commit; with none, the app repo's default branch,
-    whatever it is named. A deploy takes no ref of its own: whoever can
-    start one could otherwise build code the definition never named.
-    Dispatches `gapp-deploy.yml` with the name and that ref (the run
-    refuses a ref that is not the definition's) and, when `watch` is True,
-    streams the run and reports its conclusion. Needs only a `gh` that can
-    dispatch workflows in the fleet repo. `progress`, when given, is called
-    with "Deploying <name> (ref <ref>)." (or "(default branch).") once the
-    deployment is found and just before the dispatch.
+
+def deploy(deployment: str | None = None, *, upgrade: bool = False, watch: bool = True,
+           cwd: Path | None = None, progress=None) -> dict:
+    """Deploy one deployment on a runner (`gapp ci deploy`): the same deploy `gapp deploy` does, from GitHub Actions.
+
+    The run is started with the deployment's name and nothing else. It
+    reads the definition from the fleet repo, checks out the definition's
+    ref of its repo, installs the gapp version the definition names and
+    deploys. This command reads the same definition first, to refuse
+    before a run is started what the run would refuse: a definition with
+    no repo on GitHub, a project the runners are not connected to, and
+    workflows that are not installed. `upgrade` applies a pending gapp
+    upgrade and is refused by the run when none is pending.
+
+    With `watch`, it waits for the run and reports what the run said.
+    `progress`, when given, is called with one line just before the run
+    is started.
     """
-    ref = None
-    result = {"ok": True, "name": (name or "").strip(), "repo": None, "project": None, "fleet_repo": None,
-              "workflow": DEPLOY_WORKFLOW, "ref": ref, "run_id": None, "run_url": None, "watched": False,
-              "conclusion": None, "next_step": None}
-    if not result["name"]:
-        return {**result, **_outcome("pass the name", "Name the deployment: `gapp ci deploy <name>`. See them: gapp ci list")}
-    fleet_repo, stop = _require(result)
+    result = {"ok": True, "deployment": (deployment or "").strip() or None, "id": None, "repo": None, "project": None,
+              "ref": None, "gapp": None, "upgrade": bool(upgrade), "fleet_repo": None, "workflow": DEPLOY_WORKFLOW,
+              "dispatched": False, "request_id": None, "run_id": None, "run_url": None, "watched": False,
+              "conclusion": None, "deployed": None, "messages": [], "next_step": None, "lines": []}
+    fleet_repo, stop = _fleet_repo(result)
     if stop:
         return stop
-    doc, rd = _load_fleet(fleet_repo)
-    if doc is None:
-        return {**result, **_fleet_file_outcome(fleet_repo, rd)}
-    entry = doc.get(result["name"])
-    if entry is None:
-        return {**result, **_outcome("ci setup", (
-            f"'{result['name']}' is not a deployment in {fleet_repo}, so there is nothing to deploy. Set it up: "
-            f"gapp ci setup {result['name']} --repo <owner>/<repo> --project <project>. See the deployments: gapp ci list"
+    name, _, stop = _definition(result, result["deployment"], cwd, "gapp ci deploy")
+    if stop:
+        return stop
+    repo, project, ref = result["repo"], result["project"], result["ref"]
+    from_clone = f"Deploy it from a clone of its repo: gapp deploy --deployment {name}"
+    if not repo:
+        return {**result, **_refusal("deploy from a clone", (
+            f"'{name}' has no repo, so a runner has nothing to check out. {from_clone}"
         ))}
-    ref = fleet.ref_of(entry)
-    result.update(repo=entry.get("repo"), project=entry.get("project"), ref=ref)
-    deploy = _read_file(fleet_repo, DEPLOY_WORKFLOW_PATH)
-    if deploy.absent:
-        return {**result, **_outcome("ci init", (
-            f"{fleet_repo} has no {DEPLOY_WORKFLOW_PATH}. Install gapp's files: gapp ci init {fleet_repo}"
+    if not GITHUB_REPO_RE.match(repo):
+        return {**result, **_refusal("deploy from a clone", (
+            f"'{name}' runs {repo}, which is not a repo on GitHub, and a runner checks out GitHub repos. {from_clone}"
         ))}
-    if deploy.unchecked:
-        return {**result, **_outcome("check GitHub access", deploy.note)}
+    stop = _project_stop(fleet_repo, project) or _workflow_stop(fleet_repo, DEPLOY_WORKFLOW_PATH)
+    if stop:
+        return {**result, **stop}
 
+    again = f"gapp ci deploy --deployment {name}" + (" --upgrade" if upgrade else "")
     if progress:
-        progress(f"Deploying {result['name']} ({ref_label(ref)}).")
-    inputs = {"deployment": result["name"]}
-    if ref:
-        inputs["ref"] = ref
-    dispatch = _dispatch(fleet_repo, DEPLOY_WORKFLOW, inputs)
-    if dispatch.refused:
-        said, err = dispatch.refused, dispatch.stderr
-        return {**result, **_outcome("dispatch the deploy workflow", (
-            f"The deploy workflow could not be dispatched in {fleet_repo}: {said}. "
-            f"{_fix_for(err, f'access to dispatch workflows in {fleet_repo}')} run `gapp ci deploy {result['name']}` again."
-        ))}
-    result["request_id"] = dispatch.request_id
-    result["run_id"] = _find_run(fleet_repo, DEPLOY_WORKFLOW, dispatch)
-    result["run_url"] = _run_url(fleet_repo, result["run_id"])
-    if not result["run_id"]:
-        return {**result, **_outcome("check the run", (
-            f"Dispatched {DEPLOY_WORKFLOW} in {fleet_repo} for '{result['name']}', but no run carrying its request id "
-            f"{dispatch.request_id} appeared within {RUN_APPEAR_TIMEOUT} seconds, so no result is reported (an older "
-            f"run's never is). Check the repo's Actions tab, or `gapp ci status {result['name']}`."
-        ))}
+        progress(f"Deploying {name}: {_builds(ref)} of {repo}, to {project}.")
+    inputs = {"deployment": name, "upgrade": "true" if upgrade else "false"}
+    stop = _start_run(fleet_repo, DEPLOY_WORKFLOW, inputs, result, "deploy", again)
+    if stop:
+        return stop
+    status_hint = {"action": "ci status", "hint": f"gapp ci status --deployment {name}"}
     if not watch:
+        result["lines"].append(f"Started a deploy of {name} ({_builds(ref)} of {repo}, to {project}): {result['run_url']}")
+        result["next_step"] = status_hint
         return result
 
     status, conclusion = _wait_for_run(fleet_repo, result["run_id"], timeout=3600)
     result["watched"] = True
-    result["conclusion"] = conclusion if status == "completed" else _run_conclusion(fleet_repo, result["run_id"])
-    if result["conclusion"] != "success":
-        return {**result, **_outcome("read the run log", (
-            f"'{result['name']}' didn't deploy: the run ended with '{result['conclusion'] or 'no conclusion'}': "
-            f"{result['run_url']}. Its first steps name a missing credential or Environment variable in words; "
-            f"the deploy step's log has gapp's own message otherwise."
-        ))}
-    return result
-
-
-# --- ci status and ci list ---
-
-
-def status_deployment(name: str) -> dict:
-    """One deployment's state (`gapp ci status <name>`): its repo, project,
-    domain and last deploy. Never touches GCP."""
-    result = {"ok": True, "name": (name or "").strip(), "fleet_repo": None, "registered": None, "id": None,
-              "repo": None, "project": None, "domain": None, "overlay": None,
-              "last_deploy": None, "problem": None, "live_hint": None, "next_step": None}
-    if not result["name"]:
-        return {**result, **_outcome("pass the name", "Name the deployment: `gapp ci status <name>`. See them: gapp ci list")}
-    fleet_repo, stop = _require(result)
-    if stop:
-        return stop
-    doc, rd = _load_fleet(fleet_repo)
-    if doc is None:
-        return {**result, **_fleet_file_outcome(fleet_repo, rd)}
-    entry = doc.get(result["name"])
-    result["registered"] = entry is not None
-    if entry is None:
-        return {**result, **_outcome("ci setup", (
-            f"'{result['name']}' is not a deployment in {fleet_repo}. Set it up: gapp ci setup {result['name']} "
-            f"--repo <owner>/<repo> --project <project>.\nSee the deployments: gapp ci list"
-        ))}
-    result.update(id=entry.get("id"), repo=entry.get("repo"), project=entry.get("project"),
-                  ref=fleet.ref_of(entry), domain=entry.get("domain"), overlay=fleet.manifest_keys(entry),
-                  live_hint=f"For the live service state: gapp ci status {result['name']} --live")
-    if unknown := fleet.unknown_keys(fleet.manifest_keys(entry)):
-        result["problem"] = (
-            f"The entry '{result['name']}' in {DEPLOYMENTS_FILE} has unknown key(s) {', '.join(unknown)}, "
-            f"so a deploy would refuse it."
-        )
-        result["next_step"] = {"action": "ci setup", "hint": (
-            f"rewrite the entry: gapp ci setup {result['name']} --repo {entry.get('repo')} --project {entry.get('project')} --update"
-        )}
-    result["last_deploy"] = _last_deploy(fleet_repo, result["name"])
-    return result
-
-
-def deployment_manifest(name: str) -> dict:
-    """A deployment's fleet-side manifest (`gapp ci manifest <name>`): the
-    gapp.yaml keys its entry sets, merged over the app repo's gapp.yaml at
-    deploy. One read of the fleet file; never the app repo, never GCP."""
-    result = {"ok": True, "name": (name or "").strip(), "fleet_repo": None, "repo": None, "manifest": None,
-              "next_step": None}
-    if not result["name"]:
-        return {**result, **_outcome("pass the name", "Name the deployment: `gapp ci manifest <name>`. See them: gapp ci list")}
-    fleet_repo, stop = _require(result)
-    if stop:
-        return stop
-    doc, rd = _load_fleet(fleet_repo)
-    if doc is None:
-        return {**result, **_fleet_file_outcome(fleet_repo, rd)}
-    entry = doc.get(result["name"])
-    if entry is None:
-        return {**result, **_outcome("ci setup", (
-            f"'{result['name']}' is not a deployment in {fleet_repo}. See the deployments: gapp ci list"
-        ))}
-    result.update(repo=entry.get("repo"), manifest=fleet.manifest_keys(entry))
-    return result
-
-
-def deployment_env(name: str) -> dict:
-    """What `gapp secrets ... --deployment <name>` needs from the fleet: the
-    deployment's id and project, and the env entries a deploy would use (the
-    fleet-side manifest merged over the app repo's gapp.yaml on its default
-    branch, as the deploy run merges them).
-
-    Reads the fleet file and, if it can, the app repo's gapp.yaml, with the
-    caller's own GitHub login; never GCP. `repo_checked` is False when the
-    app repo's gapp.yaml could not be read (`repo_note` says why): `env` then
-    holds only what the fleet sets, which is all there is for a deployment
-    configured only in the fleet.
-    """
-    from gapp.admin.sdk.manifest import get_env_vars, parse_manifest_text
-    from gapp.admin.sdk.schema import ManifestUnreadable
-
-    result = {"ok": True, "name": (name or "").strip(), "fleet_repo": None, "repo": None, "id": None,
-              "project": None, "env": [], "repo_checked": None, "repo_note": None, "next_step": None}
-    if not result["name"]:
-        return {**result, **_outcome("pass the name", "Name the deployment: `--deployment <name>`. See them: gapp ci list")}
-    fleet_repo, stop = _require(result)
-    if stop:
-        return stop
-    doc, rd = _load_fleet(fleet_repo)
-    if doc is None:
-        return {**result, **_fleet_file_outcome(fleet_repo, rd)}
-    entry = doc.get(result["name"])
-    if entry is None:
-        return {**result, **_outcome("ci setup", (
-            f"'{result['name']}' is not a deployment in {fleet_repo}. See the deployments: gapp ci list"
-        ))}
-    repo = entry.get("repo")
-    result.update(repo=repo, id=entry.get("id") or result["name"], project=entry.get("project"))
-
-    base = {}
-    rd = _read_file(repo, "gapp.yaml")
-    if rd.present:
-        try:
-            base = parse_manifest_text(rd.content)
-            result["repo_checked"] = True
-        except ManifestUnreadable as e:
-            result.update(repo_checked=False, repo_note=f"{repo}'s gapp.yaml can't be read as YAML: {e}")
-    elif rd.absent:
-        result["repo_checked"] = True
-    else:
-        result.update(repo_checked=False, repo_note=rd.note)
-    result["env"] = get_env_vars(fleet.merge_manifest(base, fleet.overlay_for(entry)))
-    return result
-
-
-def _fleet_gapp_ref(fleet_repo: str) -> str | None:
-    """The gapp version the fleet's deploy workflow is pinned to (`vX.Y.Z`,
-    or a commit), read from its installed gapp-deploy.yml; None if unread."""
-    rd = _read_file(fleet_repo, DEPLOY_WORKFLOW_PATH)
-    match = re.search(r"/\.github/workflows/deploy\.yml@(\S+)", rd.content or "") if rd.present else None
-    return match.group(1) if match else None
-
-
-def merged_manifest(name: str, *, ref: str | None = None) -> dict:
-    """What a CI deploy of `name` at `ref` would use (`gapp ci manifest <name>
-    --merged [--ref REF]`): the deployment's fleet-side manifest merged over
-    the app repo's gapp.yaml at that ref, the way the deploy run merges them,
-    with `name` set to the id.
-
-    Reads the fleet file, then from the app repo, with the caller's own
-    GitHub login: the ref (default: its default branch), the files at the
-    repo's top, gapp.yaml and the Procfile. In memory; no clone, no runner,
-    no GCP; saves nothing. An app repo this login can't read fails only
-    this, with GitHub's reason. `problems` are what the deploy would refuse
-    (gapp.yaml unreadable, settings gapp doesn't accept, no start method);
-    `notes` are what to know (the fleet runs another gapp version).
-    """
-    from gapp.admin.sdk.manifest import parse_manifest_text
-    from gapp.admin.sdk.schema import ManifestUnreadable, ManifestValidationError, validate_manifest
-    from gapp.admin.sdk.start import START_METHOD_HELP, start_method_of
-
-    result = deployment_manifest(name)
-    result.update(ref=ref, commit=None, repo_has_gapp_yaml=None, merged=None, start=None,
-                  problems=[], notes=[])
-    if result.get("ok") is False:
-        return result
-    fleet_repo, repo = result["fleet_repo"], result["repo"]
-    doc, _ = _load_fleet(fleet_repo)
-    entry = doc[result["name"]]
-    # With no ref given, the preview is of what a deploy builds: the definition's ref.
-    ref = ref or fleet.ref_of(entry)
-    result["ref"] = ref
-
-    def unreadable(reason: str) -> dict:
-        return {**result, **_outcome("read the app repo", (
-            f"Can't read {repo} from here, so the merged settings can't be shown. {reason.rstrip('.')}. "
-            f"The deploy run reads it with the fleet's own access, so this does not mean the deploy fails. "
-            f"The fleet's side alone: gapp ci manifest {result['name']}"
-        ))}
-
-    if ref:
-        rc, out, err = _gh_api([f"repos/{repo}/commits/{ref}", "--jq", ".sha"])
-        if rc != 0:
-            if _repo_visible(repo):
-                return {**result, **_outcome("fix the ref", (
-                    f"{repo} has no branch, tag or commit '{ref}', so a deploy of it would fail."
-                ))}
-            return unreadable(_refused(err))
-        result["commit"] = out.strip()
-    else:
-        branch, err = _default_branch(repo)
-        if branch is None:
-            return unreadable(_refused(err))
-        result["ref"] = branch
-    at = result["commit"] or result["ref"]
-
-    top = _read_path(repo, "", f"the files of {repo}", at)
-    if top.unchecked:
-        return unreadable(top.note or "")
-    names = {item.get("name") for item in (top.data or []) if isinstance(item, dict) and item.get("type") == "file"}
-
-    base = {}
-    result["repo_has_gapp_yaml"] = "gapp.yaml" in names
-    if result["repo_has_gapp_yaml"]:
-        rd = _read_file(repo, "gapp.yaml", at)
-        if not rd.present:
-            return unreadable(rd.note or "")
-        try:
-            base = parse_manifest_text(rd.content)
-        except ManifestUnreadable as e:
-            result["problems"].append(f"{repo}'s gapp.yaml can't be read as YAML: {e}. The deploy would fail on it.")
-            return {**result, "ok": False, "next_step": {"action": "fix the app repo's gapp.yaml",
-                                                         "hint": result["problems"][0]}}
-    merged = fleet.merge_manifest(base, fleet.overlay_for(entry))
-    merged = {"name": merged.pop("name"), **merged}
-    result["merged"] = merged
-    try:
-        validate_manifest(merged)
-    except ManifestValidationError as e:
-        result["problems"].append("The merged settings have settings gapp doesn't accept, so the deploy would refuse them: "
-                                  + "; ".join(f"{i['path']}: {i['message']}" for i in e.issues))
-
-    procfile = None
-    if "Procfile" in names:
-        rd = _read_file(repo, "Procfile", at)
-        procfile = rd.content if rd.present else None
-    start = start_method_of(dockerfile="Dockerfile" in names, procfile=procfile, start=merged.get("start"))
-    result["start"] = start
-    if not start["method"]:
-        why = f"{repo} at {result['ref']} " + (start["reason"] or "has no Dockerfile, no Procfile and no start setting")
-        result["problems"].append(f"{why}, so the deploy would refuse it. {START_METHOD_HELP}")
-
-    pinned = _fleet_gapp_ref(fleet_repo)
-    import gapp
-    installed = f"v{gapp.__version__}"
-    if pinned and pinned != installed:
-        result["notes"].append(
-            f"{fleet_repo}'s deploys run gapp {pinned}; this was worked out with gapp {installed}, so the deploy "
-            f"could differ. Match them: gapp ci init {fleet_repo}")
-    if result["problems"]:
-        result["ok"] = False
-        result["next_step"] = {"action": "fix the problems", "hint": "\n".join(result["problems"])}
-    return result
-
-
-def status_live(name: str, *, progress=None) -> dict:
-    """The live service state of one deployment (`gapp ci status <name> --live`).
-
-    Dispatches the fleet repo's read-only status workflow, which runs
-    `gapp status` for the deployment's id on a runner authenticated as the
-    project's existing deploy identity, and returns that result (the same
-    dict `gapp_status` returns) as `live`. Takes about as long as a runner
-    start. Nothing is stored: live state is asked of the project, never
-    written to the fleet repo. `progress`, when given, is called with what
-    is being asked once the deployment is found and just before the dispatch.
-    """
-    result = {"ok": True, "name": (name or "").strip(), "fleet_repo": None, "id": None, "repo": None,
-              "project": None, "workflow": STATUS_WORKFLOW, "dispatched": False, "run_id": None, "run_url": None,
-              "conclusion": None, "live": None, "messages": [], "next_step": None}
-    if not result["name"]:
-        return {**result, **_outcome("pass the name", "Name the deployment: `gapp ci status <name> --live`. See them: gapp ci list")}
-    fleet_repo, stop = _require(result)
-    if stop:
-        return stop
-    doc, rd = _load_fleet(fleet_repo)
-    if doc is None:
-        return {**result, **_fleet_file_outcome(fleet_repo, rd)}
-    entry = doc.get(result["name"])
-    if entry is None:
-        return {**result, **_outcome("ci setup", (
-            f"'{result['name']}' is not a deployment in {fleet_repo}. Set it up: gapp ci setup {result['name']} "
-            f"--repo <owner>/<repo> --project <project>.\nSee the deployments: gapp ci list"
-        ))}
-    result.update(id=entry.get("id"), repo=entry.get("repo"), project=entry.get("project"))
-    workflow = _read_file(fleet_repo, STATUS_WORKFLOW_PATH)
-    if workflow.absent:
-        return {**result, **_outcome("ci init", (
-            f"{fleet_repo} has no {STATUS_WORKFLOW_PATH}, so there is nothing to ask. Install gapp's files: "
-            f"gapp ci init {fleet_repo}"
-        ))}
-    if workflow.unchecked:
-        return {**result, **_outcome("check GitHub access", workflow.note)}
-
-    if progress:
-        progress(f"Asking the project for the live state of {result['name']}; this takes about as long as a runner start.")
-    dispatch = _dispatch(fleet_repo, STATUS_WORKFLOW, {"deployment": result["name"]})
-    if dispatch.refused:
-        said, err = dispatch.refused, dispatch.stderr
-        return {**result, **_outcome("dispatch the status workflow", (
-            f"The status workflow could not be dispatched in {fleet_repo}: {said}. "
-            f"{_fix_for(err, f'access to dispatch workflows in {fleet_repo}')} run `gapp ci status {result['name']} --live` again."
-        ))}
-    result["dispatched"] = True
-    result["request_id"] = dispatch.request_id
-    result["run_id"] = _find_run(fleet_repo, STATUS_WORKFLOW, dispatch)
-    result["run_url"] = _run_url(fleet_repo, result["run_id"])
-    if not result["run_id"]:
-        return {**result, **_outcome("check the run", (
-            f"Dispatched {STATUS_WORKFLOW} in {fleet_repo} for '{result['name']}', but no run carrying its request id "
-            f"{dispatch.request_id} appeared within {RUN_APPEAR_TIMEOUT} seconds, so no live state is reported (an "
-            f"older run's never is). Check the repo's Actions tab, or run it again."
-        ))}
-    status, conclusion = _wait_for_run(fleet_repo, result["run_id"])
     result["conclusion"] = conclusion
-    result["messages"] = _run_messages(fleet_repo, result["run_id"], STATUS_LOG_PREFIX)
-    for message in result["messages"]:
-        if message.startswith("result="):
-            try:
-                result["live"] = json.loads(message[len("result="):])
-            except json.JSONDecodeError:
-                result["live"] = None
-    texts = [m for m in result["messages"] if not m.startswith("result=")]
+    url = result["run_url"]
     if status != "completed":
         return {**result, **_outcome("check the run", (
-            f"The status run did not finish within the wait: {result['run_url']}. Check it there, or run "
-            f"`gapp ci status {result['name']} --live` again."
+            f"The deploy run for '{name}' did not finish within the wait: {url}. See how it ended: "
+            f"gapp ci status --deployment {name}"
         ))}
-    if conclusion != "success" or result["live"] is None:
-        said = " ".join(t[len("error="):] if t.startswith("error=") else t for t in texts) or "it ended with no message"
+    report = _run_report(fleet_repo, result["run_id"], DEPLOY_LOG_PREFIX, name)
+    result["messages"] = report.said
+    result["deployed"] = report.result
+    if report.refused:
+        # The runner speaks of the deploy it ran; the way to run it again is this command.
+        why = report.refused.replace("gapp deploy --deployment", "gapp ci deploy --deployment")
+        return {**result, **_refusal("fix and deploy again", (
+            f"The run refused to deploy '{name}', and nothing was changed: {why} ({url})"
+        ))}
+    if report.error:
+        return {**result, **_outcome("read the run log", f"'{name}' did not deploy: {report.error} ({url})")}
+    if conclusion != "success":
+        if _ref_is_missing(report.log, repo, ref):
+            return {**result, **_outcome("set the ref", (
+                f"'{name}' builds '{ref}', and {repo} has no branch, tag or commit of that name, so the run could "
+                f"not check it out ({url}). Name one that exists: gapp set ref <ref> --deployment {name}"
+            ))}
+        said = report.words()
         return {**result, **_outcome("read the run log", (
-            f"The status run for '{result['name']}' did not report the live state: {said} ({result['run_url']})."
+            f"'{name}' did not deploy: {said} ({url})" if said else
+            f"'{name}' did not deploy: the run ended with '{conclusion or 'no conclusion'}' and printed no reason. "
+            f"Its log is at {url}"
         ))}
+    done = report.result or {}
+    built = _builds(done.get("ref", ref)) + (f" at {done['commit']}" if done.get("commit") else "")
+    result["lines"].append(f"{name} is deployed to {project}, built from {built}.")
+    if done.get("upgraded_from"):
+        result["lines"].append(f"Upgraded from gapp {done['upgraded_from']} to {done.get('gapp')}.")
+    if done.get("service_url"):
+        result["lines"].append(f"URL: {done['service_url']}")
+    result["lines"].append(f"Run: {url}")
+    result["next_step"] = {"action": "ci status", "hint": f"gapp ci status --deployment {name} --live"}
     return result
 
 
-def list_deployments(repo: str | None = None, *, verbose: bool = False) -> dict:
-    """The fleet's deployments (`gapp ci list`), optionally one repo's. With
-    `verbose`, the fleet repo's files, variables and per-solution workflows
-    from gapp 3.x too. Never touches GCP."""
-    result = {"ok": True, "fleet_repo": None, "repo": repo, "deployments": [], "files": None,
-              "variables": None, "variables_note": None, "legacy_workflows": [], "problem": None, "next_step": None}
-    fleet_repo, stop = _require(result)
+# --- ci status ---
+
+
+def live_lines(live: dict) -> list[str]:
+    """What is live for a deployment, as lines, from the result a status run reports."""
+    lines = [f"{live.get('deployment')}, on {live.get('project')}"]
+    if live.get("deployed"):
+        lines.append(f"  URL      {live.get('url')}")
+        lines.append(f"  Healthy  {'yes' if live.get('healthy') else 'no'}")
+        lines.append(f"  Deployed by gapp {live.get('last_deployed_by') or 'unknown'}")
+    if domain := live.get("domain"):
+        lines.append(f"  Domain   {domain.get('name')} ({domain.get('status')})")
+        if domain.get("status") == "pending_dns":
+            lines.append(f"    CNAME  {domain.get('name')} -> {domain.get('cname_target')}")
+        if domain.get("detail"):
+            lines.append(f"    {domain['detail']}")
+    if live.get("next_step"):
+        lines.append(str(live["next_step"]))
+    return lines
+
+
+def status(deployment: str | None = None, *, live: bool = False, cwd: Path | None = None, progress=None) -> dict:
+    """The last deploy run of a deployment and what its definition says (`gapp ci status`).
+
+    Without `live`, GitHub alone is read: the definition's repo, project,
+    ref and gapp version, and the newest run of the deploy workflow for
+    the deployment. With `live`, the status workflow is started: a runner
+    signs in to the project as a deploy does and reports what is live (the
+    same result `gapp status` gives), which takes about as long as a
+    runner start. Nothing is written anywhere either way. `progress`,
+    when given, is called with one line just before a run is started.
+    """
+    result = {"ok": True, "deployment": (deployment or "").strip() or None, "id": None, "repo": None, "project": None,
+              "ref": None, "gapp": None, "fleet_repo": None, "last_deploy": None, "live": None,
+              "workflow": STATUS_WORKFLOW if live else None, "dispatched": False, "request_id": None,
+              "run_id": None, "run_url": None, "conclusion": None, "messages": [], "next_step": None, "lines": []}
+    fleet_repo, stop = _fleet_repo(result)
     if stop:
         return stop
-    doc, rd = _load_fleet(fleet_repo)
-    if doc is None:
-        return {**result, **_fleet_file_outcome(fleet_repo, rd)}
-    names = sorted(doc) if not repo else fleet.deployments_of_repo(doc, repo)
-    result["deployments"] = [{"name": n, "id": doc[n].get("id"), "repo": doc[n].get("repo"),
-                              "project": doc[n].get("project"), "domain": doc[n].get("domain"),
-                              "keys": sorted(fleet.manifest_keys(doc[n]))} for n in names]
-    if verbose:
-        result["files"] = _files_report(fleet_repo)
-        report = _variables_report(fleet_repo)
-        result["variables"], result["variables_note"] = report["variables"], report["note"]
-        result["legacy_workflows"] = _legacy_workflows(fleet_repo)
-        outdated = [p for p, f in result["files"].items() if f["current"] is False]
-        if outdated:
-            result["problem"] = (f"Not current with this gapp release in {fleet_repo}: {', '.join(outdated)}; "
-                                 f"re-running `gapp ci init` from a machine whose `gh` can write to the repo updates them.")
-            result["next_step"] = {"action": "ci init", "hint": f"gapp ci init {fleet_repo}"}
-    if not result["deployments"] and result["next_step"] is None:
-        result["next_step"] = {"action": "ci setup", "hint": "gapp ci setup <name> --repo <owner>/<repo> --project <project>"}
+    name, _, stop = _definition(result, result["deployment"], cwd, "gapp ci status")
+    if stop:
+        return stop
+    repo, project = result["repo"], result["project"]
+
+    if not live:
+        result["lines"].append(
+            f"{name}: {_builds(result['ref'])} of {repo or 'no repo'}, on {project}, with gapp {result['gapp']}.")
+        last = result["last_deploy"] = _last_deploy(fleet_repo, name)
+        if last["checked"] is False:
+            result["lines"].append(f"Last deploy run: {last['note']}")
+        elif last["run"]:
+            run = last["run"]
+            result["lines"].append(
+                f"Last deploy run: {run['conclusion'] or run['status'] or 'unknown'}, {run['created_at']}: {run['url']}")
+            result["next_step"] = {"action": "ci status --live", "hint": f"gapp ci status --deployment {name} --live"}
+        else:
+            result["lines"].append("No deploy run yet.")
+            result["next_step"] = {"action": "ci deploy", "hint": f"gapp ci deploy --deployment {name}"}
+        return result
+
+    stop = _project_stop(fleet_repo, project) or _workflow_stop(fleet_repo, STATUS_WORKFLOW_PATH)
+    if stop:
+        return {**result, **stop}
+    again = f"gapp ci status --deployment {name} --live"
+    if progress:
+        progress(f"Asking {project} what is live for {name}. This takes about as long as a runner start.")
+    stop = _start_run(fleet_repo, STATUS_WORKFLOW, {"deployment": name}, result, "status", again)
+    if stop:
+        return stop
+    state, conclusion = _wait_for_run(fleet_repo, result["run_id"])
+    result["conclusion"] = conclusion
+    url = result["run_url"]
+    if state != "completed":
+        return {**result, **_outcome("check the run", (
+            f"The status run for '{name}' did not finish within the wait: {url}. Ask again: {again}"
+        ))}
+    report = _run_report(fleet_repo, result["run_id"], STATUS_LOG_PREFIX, name)
+    result["messages"] = report.said
+    result["live"] = report.result
+    if report.refused:
+        return {**result, **_refusal("fix and ask again", f"The run refused to report on '{name}': {report.refused} ({url})")}
+    if conclusion != "success" or report.result is None:
+        said = report.error or report.words()
+        return {**result, **_outcome("read the run log", (
+            f"The status run for '{name}' did not report what is live: {said} ({url})" if said else
+            f"The status run for '{name}' ended with '{conclusion or 'no conclusion'}' and reported nothing. "
+            f"Its log is at {url}"
+        ))}
+    result["lines"] = live_lines(report.result) + [f"Run: {url}"]
     return result
 
 
-# --- what the fleet repo's workflows run on the runner ---
-
-
-def runner_register(env: dict | None = None, out=print) -> int:
-    """The register run: validate and write one change to the deployments file.
-
-    Reads the dispatch inputs from the environment (OPERATION, NAME, REPO,
-    PROJECT, CHANGES, SOURCE), the fleet repo's variables (ALLOWED_SOURCES,
-    APP_ID, APP_KEY_SET) and FLEET_REPO, and prints the structured result
-    the operator's command reads: `gapp-register: result=<code>` and one
-    plain line, plus `name=`, `id=` and `project=` on success. The same
-    fleet.py functions the operator's machine ran before dispatching decide
-    here, against the live file, with the run's own token.
-    """
-    env = dict(os.environ if env is None else env)
-    fleet_repo = env.get("FLEET_REPO") or env.get("GITHUB_REPOSITORY") or ""
-    operation = (env.get("OPERATION") or "set").strip()
-    name = (env.get("NAME") or "").strip()
-    repo = (env.get("REPO") or "").strip()
-    project = (env.get("PROJECT") or "").strip()
-    source = (env.get("SOURCE") or "").strip()
-
-    def refuse(code: str, message: str) -> int:
-        out(f"{REGISTER_LOG_PREFIX} result={code}")
-        out(f"{REGISTER_LOG_PREFIX} {message}")
-        return 1
-
-    try:
-        changes = json.loads(env.get("CHANGES") or "{}")
-        if not isinstance(changes, dict):
-            raise ValueError
-    except ValueError:
-        return refuse("invalid-input", "the changes input is not a JSON object.")
-    if operation not in ("set", "copy", "rename"):
-        return refuse("invalid-input", f"'{operation}' is not an operation (set, copy or rename).")
-    try:
-        fleet.validate_name(name)
-    except FleetRefusal as e:
-        return refuse(e.code, e.message)
-
-    rd = _read_file(fleet_repo, DEPLOYMENTS_FILE)
-    if rd.absent:
-        return refuse("data-file-missing", f"{DEPLOYMENTS_FILE} does not exist in this fleet repo; gapp ci init installs it.")
-    if rd.unchecked:
-        return refuse("data-file-unreadable", rd.note)
-    try:
-        doc = fleet.parse(rd.content)
-    except FleetRefusal as e:
-        return refuse(e.code, e.message)
-
-    def owner_allowed(deployed_repo: str) -> bool:
-        owner = deployed_repo.split("/")[0].lower()
-        allowed = [o.strip().lower() for o in (env.get("ALLOWED_SOURCES") or "").split(",") if o.strip()]
-        return owner in allowed
-
-    def project_trusted(project_id: str) -> bool:
-        rc, _, _ = _gh_api([f"repos/{fleet_repo}/environments/{project_id}"])
-        return rc == 0
-
-    try:
-        if operation == "set":
-            fleet.validate_repo(repo)
-            fleet.validate_project(project)
-            if not owner_allowed(repo):
-                return refuse("source-owner-not-allowed", (
-                    f"Apps owned by {repo.split('/')[0]} aren't allowed in this fleet; allow the owner with: "
-                    f"gapp ci sources add {repo.split('/')[0]}"
-                ))
-            if not project_trusted(project):
-                return refuse("project-not-trusted", (
-                    f"This fleet repo is not yet trusted to deploy to GCP project {project} (no Environment named "
-                    f"'{project}' here). Run: gapp ci project setup {project}"
-                ))
-            new_doc, action, entry = fleet.set_entry(doc, name, repo=repo, project=project, changes=changes)
-            rc, out_vis, _ = _gh_api([f"repos/{repo}", "--jq", ".private"])
-            if not (rc == 0 and out_vis.strip() == "false"):
-                if not env.get("APP_ID") or env.get("APP_KEY_SET") != "true":
-                    return refuse("repo-unreachable", (
-                        f"{repo} is not readable with this run's token (private, or it does not exist), and the "
-                        f"hosting app's {APP_ID_VAR} variable and {APP_KEY_SECRET} secret are not both set in this "
-                        f"fleet repo. If the repo name is right and the repo is private, give the fleet a GitHub App "
-                        f"that can read it, once: on the GitHub organization that holds the repo, Settings > "
-                        f"Developer settings > GitHub Apps > New GitHub App, with Repository permissions Contents: "
-                        f"Read-only, webhook off, installable only on that account; install it on the organization "
-                        f"(never on all repos of a personal account); generate a private key; then run "
-                        f"`gh variable set {APP_ID_VAR} --repo <fleet-repo> --body <app-id>` and "
-                        f"`gh secret set {APP_KEY_SECRET} --repo <fleet-repo> < <key>.pem` and delete the key file."
-                    ))
-            what = f"{action} '{name}' -> {entry['repo']} on project '{entry['project']}'."
-        elif operation == "copy":
-            src = doc.get(source)
-            if src is None:
-                raise FleetRefusal("source-missing", f"'{source}' is not a deployment in this fleet, so there is nothing to copy.")
-            if not owner_allowed(src.get("repo") or "/"):
-                return refuse("source-owner-not-allowed", (
-                    f"Apps owned by {(src.get('repo') or '/').split('/')[0]} aren't allowed in this fleet."
-                ))
-            new_doc, entry, _ = fleet.copy_entry(doc, name, source, project=project or None, changes=changes)
-            if not project_trusted(entry["project"]):
-                return refuse("project-not-trusted", (
-                    f"This fleet repo is not yet trusted to deploy to GCP project {entry['project']} (no Environment "
-                    f"named '{entry['project']}' here). Run: gapp ci project setup {entry['project']}"
-                ))
-            action = "added"
-            what = f"added '{name}' as a copy of '{source}': {entry['repo']} on project '{entry['project']}'."
-        else:
-            new_doc = fleet.rename_entry(doc, source, name)
-            entry = new_doc[name]
-            action = "renamed"
-            what = f"renamed '{source}' to '{name}'; its id '{entry.get('id')}' and resources are unchanged."
-    except FleetRefusal as e:
-        return refuse(e.code, e.message)
-
-    if action == "unchanged":
-        out(f"{REGISTER_LOG_PREFIX} result=unchanged")
-        out(f"{REGISTER_LOG_PREFIX} name={name}")
-        out(f"{REGISTER_LOG_PREFIX} id={entry.get('id')}")
-        out(f"{REGISTER_LOG_PREFIX} project={entry.get('project')}")
-        out(f"{REGISTER_LOG_PREFIX} '{name}' is already set up with these values; nothing to write.")
-        return 0
-    content = fleet.dump(new_doc)
-    payload = {"message": f"{action.capitalize()} {name}", "content": base64.b64encode(content.encode()).decode(),
-               "sha": rd.sha}
-    rc, _, err = _gh_api(["-X", "PUT", f"repos/{fleet_repo}/contents/{DEPLOYMENTS_FILE}"], payload)
-    if rc != 0:
-        return refuse("write-rejected", (
-            f"the write to {DEPLOYMENTS_FILE} was rejected: {_refused(err)}. Either the file changed during this run "
-            f"(dispatch again) or a rule on the default branch blocks this workflow's token (give the workflow a "
-            f"bypass, or make the change through a pull request)."
-        ))
-    out(f"{REGISTER_LOG_PREFIX} result={action}")
-    out(f"{REGISTER_LOG_PREFIX} name={name}")
-    out(f"{REGISTER_LOG_PREFIX} id={entry.get('id')}")
-    out(f"{REGISTER_LOG_PREFIX} project={entry.get('project')}")
-    out(f"{REGISTER_LOG_PREFIX} {what}")
-    return 0
-
-
-def runner_overlay(path: str, overlay_json: str | None, domain: str | None = None) -> dict:
-    """The deploy run's overlay step: merge the deployment's entry keys (a
-    JSON object) over the checked-out gapp.yaml. `domain` is the one-key
-    form older callers pass. Returns the resulting manifest."""
-    overlay = json.loads(overlay_json) if (overlay_json or "").strip() else {}
-    if not isinstance(overlay, dict):
-        raise RuntimeError("the overlay is not a JSON object")
-    if domain:
-        overlay["domain"] = domain
-    base = {}
-    if os.path.exists(path):
-        from gapp.admin.sdk.manifest import parse_manifest_text
-        with open(path) as f:
-            base = parse_manifest_text(f.read())
-    merged = fleet.merge_manifest(base, overlay)
-    with open(path, "w") as f:
-        yaml.safe_dump(merged, f, sort_keys=False, default_flow_style=False)
-    return merged
-
-
-# --- WIF and service account (used only by `ci project setup`) ---
+# --- Workload Identity and the deploy service account (`gapp ci projects connect`) ---
 
 _WIF_POOL_ID = "github"
 _WIF_PROVIDER_ID = "github"
@@ -2106,32 +1285,18 @@ def _ensure_deploy_sa(project_id: str) -> str:
     return status
 
 
-# What signing in from GitHub Actions needs, on top of what a deployment needs.
+# What a sign-in from GitHub Actions uses in a project.
 _CI_SIGN_IN_APIS = ("iam.googleapis.com", "iamcredentials.googleapis.com", "sts.googleapis.com")
 
 
-def _enable_project_apis(project_id: str) -> str:
-    """Enable the foundation APIs and the ones CI sign-in uses. Unlike a
-    deploy's tolerant enable, a refusal here is an error: this step is the
-    Owner's, and nothing later can make up for it."""
-    from gapp.admin.sdk.core import FOUNDATION_APIS
-    result = run_gcloud(["services", "enable", *FOUNDATION_APIS, *_CI_SIGN_IN_APIS, "--project", project_id],
+def _enable_sign_in_apis(project_id: str) -> str:
+    """Enable the APIs a sign-in from GitHub Actions uses. The APIs a
+    deployment needs are `gapp project setup`'s."""
+    result = run_gcloud(["services", "enable", *_CI_SIGN_IN_APIS, "--project", project_id],
                         capture_output=True, text=True)
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip())
     return "enabled"
-
-
-def _ensure_build_permissions(project_id: str) -> str:
-    """The same grants `gapp setup` makes, with their failures reported."""
-    build_domain = "developer.gserviceaccount.com"
-    build_sa = f"{_get_project_number(project_id)}-compute@{build_domain}"
-    for role in ("roles/storage.objectViewer", "roles/artifactregistry.writer"):
-        res = run_gcloud(["projects", "add-iam-policy-binding", project_id, "--member", f"serviceAccount:{build_sa}",
-                          "--role", role, "--condition", "None"], capture_output=True, text=True)
-        if res.returncode != 0:
-            raise RuntimeError(res.stderr.strip())
-    return "set"
 
 
 def _ensure_wif_binding(project_id: str, fleet_repo: str) -> str:
@@ -2143,27 +1308,6 @@ def _ensure_wif_binding(project_id: str, fleet_repo: str) -> str:
                          "--role", "roles/iam.workloadIdentityUser", "--member", member], capture_output=True, text=True)
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip())
-    return "set"
-
-
-def _mark_project_hosted(project_id: str) -> str:
-    """Label the project gapp=hosted, keeping its other labels. Only an Owner
-    writes project labels; a deploy never does.
-
-    Goes through the provider's Resource Manager read and write (the same
-    calls `gapp setup` uses): GA `gcloud projects update` takes no label flags.
-    """
-    from gapp.admin.sdk.cloud import get_provider
-    from gapp.admin.sdk.cloud.base import CloudAccessError
-    provider = get_provider()
-    try:
-        labels = provider.get_project_labels(project_id)
-        if labels.get("gapp") == "hosted":
-            return "exists"
-        provider.set_project_labels(project_id, {**labels, "gapp": "hosted"})
-    except CloudAccessError as e:
-        # The API's own words only; _gcloud_outcome adds the right advice.
-        raise RuntimeError(str(e).splitlines()[0]) from e
     return "set"
 
 
