@@ -985,6 +985,8 @@ them apart was deliberate, and it costs more than it saves:
 
 ### The intended design
 
+The proposed commands, defaults and answers to the open questions below are laid out for review in [docs/ONE-FLEET.md](docs/ONE-FLEET.md).
+
 Written in the present tense for brevity; all of it is intended, none of it built.
 
 - **The fleet is the one authority.** Every command, root or `ci`, reads
