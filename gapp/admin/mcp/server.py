@@ -216,41 +216,45 @@ def gapp_setup(
 
 
 @_tool()
-def gapp_deploy(
-    dry_run: bool = False,
-    project_id: str | None = None,
-    rebuild: bool = False,
-    replace_domain: bool = False,
-) -> dict:
-    """Deploy a gapp solution to Cloud Run (build + terraform apply).
+def gapp_deploy(deployment: str | None = None, dry_run: bool = False, rebuild: bool = False,
+                replace_domain: bool = False, upgrade: bool = False) -> dict:
+    """Build a deployment's ref from the clone the server runs in and
+    deploy it to Cloud Run, from its definition in the fleet. The clone
+    must be of the definition's repo and checked out at what it builds;
+    the project must have had `gapp_project_setup` once.
 
-    Prerequisites: gapp_init and gapp_setup must have been run first.
-    Always deploys the app in the current directory, at the commit that
-    clone is on. There is no ref argument: check out what should be built.
+    Call it with `dry_run=True` first: it reports the commit, the project,
+    and `upgrade_pending`. Pass `upgrade=True` exactly when that is true;
+    it is refused otherwise, and a deploy that would apply an upgrade is
+    refused without it. `replace_domain=True` allows replacing or removing
+    a live custom domain, which stops the old one serving. `rebuild` builds
+    the image even if one exists for the commit.
 
-    Custom domains are guarded. The deploy stops before Terraform when
-    the domain in gapp.yaml is not verified by the deploying identity
-    (the error lists the verification steps), and when it would replace
-    or remove a live domain mapping unless replace_domain is True. A
-    redeploy that keeps the same domain is unaffected.
-
-    Args:
-        dry_run: Preview only — do not build or apply.
-        project_id: Explicit GCP project ID override. Discovered if omitted.
-        rebuild: Force docker build even if an image already exists in
-                 Artifact Registry for the resolved SHA. Default False —
-                 existing images are reused for speed.
-        replace_domain: Allow the deploy to replace or remove the live
-                 custom domain mapping. Terraform destroys the old mapping
-                 before creating the new one, so the old domain stops
-                 serving. Default False — such a deploy is refused and the
-                 error names the live domain.
+    A refusal comes back as `{"refused": true, "message": ...}`: nothing
+    was built or changed, and the message names what to do.
     """
     from gapp.admin.sdk.core import GappSDK
-    return GappSDK().deploy(
-        dry_run=dry_run, project_id=project_id,
-        rebuild=rebuild, replace_domain=replace_domain,
-    )
+    from gapp.admin.sdk.definitions import Refused
+    try:
+        return GappSDK().deploy_definition(deployment, dry_run=dry_run, rebuild=rebuild,
+                                           replace_domain=replace_domain, upgrade=upgrade)
+    except Refused as e:
+        return {"refused": True, "message": e.message}
+
+
+@_tool()
+def gapp_project_setup(project: str) -> dict:
+    """Make a Google Cloud project ready for gapp deployments, once per
+    project: turns on the APIs every deployment needs, gives Cloud Build
+    its permissions, and marks the project. Needs gcloud signed in as an
+    Owner of the project. Sets up nothing about CI.
+    """
+    from gapp.admin.sdk.core import GappSDK
+    from gapp.admin.sdk.definitions import Refused
+    try:
+        return GappSDK().project_setup(project)
+    except Refused as e:
+        return {"refused": True, "message": e.message}
 
 
 @_tool()
@@ -641,14 +645,18 @@ def gapp_status(name: str | None = None, project: str | None = None) -> dict:
 
 
 @_tool()
-def gapp_list(project_limit: int = 50) -> dict:
-    """List deployments found on projects marked gapp=hosted.
-
-    Args:
-        project_limit: Max hosted projects to scan (default 50).
+def gapp_list() -> dict:
+    """Every deployment in the fleet: its name, repo, project, the ref it
+    builds and the gapp version that wrote its definition. `upgrade` is
+    "available" when this gapp is newer than a definition. `fleet` says
+    where the fleet is kept.
     """
     from gapp.admin.sdk.core import GappSDK
-    return GappSDK().list_apps(project_limit=project_limit)
+    from gapp.admin.sdk.definitions import Refused
+    try:
+        return GappSDK().list_definitions()
+    except Refused as e:
+        return {"refused": True, "message": e.message}
 
 
 @_tool()

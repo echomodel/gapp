@@ -785,6 +785,208 @@ class GappSDK:
             "terraform_status": "applied", "service_url": outputs.get("service_url"),
         }
 
+    # -- The fleet's commands: a definition in, a deployment out --
+
+    def project_setup(self, project_id: str) -> dict:
+        """Make a project ready for gapp deployments. Once per project; running it again only adds what is missing.
+
+        Turns on the APIs every deployment needs, gives Cloud Build its
+        permissions, and marks the project. Nothing about CI.
+        """
+        from gapp.admin.sdk import fleet
+        from gapp.admin.sdk.definitions import Refused
+        try:
+            project_id = fleet.validate_project(project_id)
+        except fleet.FleetRefusal as e:
+            raise Refused(e.message) from e
+        for api in FOUNDATION_APIS:
+            self.provider.enable_api(project_id, api)
+        self.provider.ensure_build_permissions(project_id)
+        labels = dict(self.provider.get_project_labels(project_id) or {})
+        marked = labels.get(HOSTED_LABEL) == HOSTED_VALUE
+        if not marked:
+            self.provider.set_project_labels(project_id, {**labels, HOSTED_LABEL: HOSTED_VALUE})
+        return {"project": project_id, "apis": list(FOUNDATION_APIS), "was_set_up": marked}
+
+    def _clone_of(self, definition: dict, name: str, cwd: Path) -> Path:
+        """The clone a deploy builds from: the folder's git root, whose remote must be the definition's repo."""
+        from gapp.admin.sdk import lookup
+        from gapp.admin.sdk.definitions import Refused
+        res = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, cwd=cwd)
+        repo = definition.get("repo")
+        if res.returncode != 0:
+            raise Refused(f"`gapp deploy` builds from a clone. Run it in a clone of {repo or 'the app'}.")
+        root = Path(res.stdout.strip())
+        if repo:
+            remotes = lookup.clone_remotes(root)
+            if not any(r.repo.lower() == repo.lower() for r in remotes.values()):
+                here = ", ".join(sorted({r.repo for r in remotes.values()})) or "a repo with no remote"
+                raise Refused(f"'{name}' runs {repo}, and this clone is {here}. Run it in a clone of {repo}.")
+        return root
+
+    def _check_at_ref(self, root: Path, definition: dict, name: str) -> str:
+        """Refuse unless the clone is on what the definition builds. Returns the commit.
+
+        A branch (or, with no ref, the repo's default branch): the clone
+        must have that branch checked out, and its own commits on it are
+        built, pushed or not. A tag or a commit: the clone must be at
+        exactly that commit.
+        """
+        from gapp.admin.sdk.definitions import Refused
+
+        def git(*args):
+            r = subprocess.run(["git", *args], capture_output=True, text=True, cwd=root)
+            return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
+
+        def commit(rev):
+            return git("rev-parse", "--verify", "-q", f"{rev}^{{commit}}")
+
+        head = commit("HEAD")
+        if not head:
+            raise Refused("This clone has no commit yet, so there is nothing to build.")
+        on_branch = git("symbolic-ref", "--short", "-q", "HEAD")
+        ref = definition.get("ref")
+        change = f"or change what it builds: gapp set ref <ref> --deployment {name}"
+        if ref:
+            is_branch = bool(git("show-ref", "--verify", f"refs/heads/{ref}")
+                             or git("show-ref", "--verify", f"refs/remotes/origin/{ref}"))
+            branch = ref if is_branch else None
+        else:
+            default = git("symbolic-ref", "--short", "-q", "refs/remotes/origin/HEAD")
+            branch = default.split("/", 1)[1] if default and "/" in default else None
+            if branch is None:
+                return head                       # the default branch is not known here; build what is checked out
+        if branch:
+            if on_branch != branch:
+                here = f"on '{on_branch}'" if on_branch else f"at {head[:12]}, on no branch"
+                what = f"'{branch}'" + ("" if ref else ", the repo's default branch")
+                raise Refused(f"'{name}' builds {what}, and this clone is {here}. Check out {branch}, {change}")
+            return head
+        wanted = commit(ref)
+        if not wanted:
+            raise Refused(f"'{name}' builds '{ref}', which this clone does not have. Fetch it, then check it out.")
+        if wanted != head:
+            raise Refused(f"'{name}' builds '{ref}' ({wanted[:12]}), and this clone is at {head[:12]}. "
+                          f"Check that out, {change}")
+        return head
+
+    def deploy_definition(self, deployment: Optional[str] = None, *, cwd: Optional[Path] = None,
+                          dry_run: bool = False, rebuild: bool = False, replace_domain: bool = False,
+                          upgrade: bool = False) -> dict:
+        """Build a deployment's ref from this clone and deploy it, from its definition in the fleet.
+
+        A refusal (`definitions.Refused`) means nothing was built or
+        changed. `dry_run` reports what a deploy would do, including
+        whether it would apply an upgrade, and refuses nothing about that.
+        """
+        from gapp.admin.sdk import definitions, entryfile, settings as settings_mod
+        from gapp.admin.sdk.definitions import Refused
+        from gapp.admin.sdk.start import start_method_of, missing
+
+        cwd = Path(cwd or Path.cwd())
+        _, deployments = definitions._load()
+        name = definitions.which(deployments, deployment, cwd, "gapp deploy")
+        definition = deployments[name]
+        try:
+            entryfile.require_current(definition, name, "deploy it from this machine")
+            manifest = settings_mod.as_manifest(definition["id"], definition.get("settings"))
+        except (entryfile.EntryFileRefusal, settings_mod.SettingsRefusal) as e:
+            raise Refused(e.message) from e
+        root = self._clone_of(definition, name, cwd)
+        sha = self._check_at_ref(root, definition, name)
+        procfile = root / "Procfile"
+        start = start_method_of(dockerfile=(root / "Dockerfile").is_file(),
+                                procfile=procfile.read_text() if procfile.is_file() else None,
+                                start=manifest.get("start"))
+        if not start["method"]:
+            raise Refused(missing(name, start, consequence=", so nothing was built or deployed"))
+
+        deployment_id, project = definition["id"], definition["project"]
+        bucket = self.get_bucket_name(deployment_id, project)
+        has_bucket = self.provider.bucket_exists(project, bucket)
+        label = (self.provider.list_bucket_labels(project).get(bucket) or {}).get(VERSION_LABEL) if has_bucket else None
+        last = settings_mod.label_version(label)
+        if last is None:
+            standing = "first"
+        else:
+            theirs, mine = entryfile.version_key(last), entryfile.version_key(definition["gapp"])
+            standing = "same" if theirs == mine else ("upgrade" if theirs < mine else "ahead")
+        plan = {
+            "deployment": name, "id": deployment_id, "project": project, "repo": definition.get("repo"),
+            "ref": definition.get("ref"), "commit": sha[:12], "gapp": definition["gapp"],
+            "last_deployed_by": last, "upgrade_pending": standing == "upgrade", "first_deploy": standing == "first",
+            "bucket": bucket, "start": start["method"],
+        }
+        if dry_run:
+            return {**plan, "dry_run": True}
+        if standing == "ahead":
+            raise Refused(
+                f"'{name}' was last deployed by gapp {last}, and its definition names gapp {definition['gapp']}. "
+                f"A deployment does not go back. Nothing was changed."
+            )
+        if standing == "upgrade" and not upgrade:
+            raise Refused(
+                f"'{name}' was last deployed by gapp {last}, and its definition is on gapp {definition['gapp']}. "
+                f"This deploy would apply that upgrade. To go ahead: gapp deploy --deployment {name} --upgrade"
+            )
+        if upgrade and standing != "upgrade":
+            raise Refused(f"No upgrade is pending for '{name}'. Deploy it without --upgrade.")
+        if (self.provider.get_project_labels(project) or {}).get(HOSTED_LABEL) != HOSTED_VALUE:
+            raise Refused(f"{project} is not set up for gapp yet. Once per project: gapp project setup {project}")
+
+        for api in (manifest.get("prerequisites") or {}).get("apis", []):
+            self.provider.enable_api(project, api)
+        if not has_bucket:
+            self.provider.create_bucket(project, bucket)
+        labels = {DEPLOYMENT_LABEL: deployment_id.lower(), VERSION_LABEL: settings_mod.version_label(definition["gapp"])}
+
+        state_prefix = "terraform/state"
+        self._check_domain_safety(deployment_id, project, get_domain(manifest), bucket, state_prefix, replace_domain)
+        self.provider.ensure_artifact_registry(project, REGION)
+        short = sha[:12]
+        image = f"{REGION}-docker.pkg.dev/{project}/gapp/{deployment_id}:{short}"
+        if rebuild or not self.provider.image_exists(project, REGION, deployment_id, short):
+            build_dir = _prepare_build_dir(root, image, start, ref="HEAD")
+            try:
+                self.provider.submit_build_sync(project, Path(build_dir), image)
+            finally:
+                shutil.rmtree(build_dir, ignore_errors=True)
+        from gapp.admin.sdk.secrets import validate_declared_secrets, materialize_generated_secrets
+        validate_declared_secrets(project, deployment_id, manifest)
+        materialize_generated_secrets(project, deployment_id, manifest)
+        tfvars = _build_tfvars(
+            deployment_id, project, image, get_service_config(manifest), root,
+            get_public(manifest), get_domain(manifest), bucket,
+            solution_name=deployment_id, labels=labels, manifest=manifest,
+        )
+        outputs = self.provider.apply_infrastructure(
+            staging_dir=_get_staging_dir(deployment_id), bucket_name=bucket,
+            state_prefix=state_prefix, auto_approve=True, tfvars=tfvars,
+        )
+        self.provider.set_bucket_labels(project, bucket, labels)        # only once the deploy has succeeded
+        return {**plan, "image": image, "service_url": outputs.get("service_url"),
+                "upgraded_from": last if standing == "upgrade" else None}
+
+    def list_definitions(self) -> dict:
+        """Every definition in the fleet, with how its version stands against this gapp."""
+        from gapp.admin.sdk import definitions, entryfile, fleetstore
+        where = fleetstore.location()
+        try:
+            deployments = fleetstore.read(where)
+        except fleetstore.FleetUnavailable as e:
+            raise definitions.Refused(str(e)) from e
+        rows = []
+        for name in sorted(deployments):
+            d = deployments[name]
+            try:
+                stands = entryfile.standing(d, name)
+            except entryfile.EntryFileRefusal:
+                stands = "unknown"
+            rows.append({"deployment": name, "repo": d.get("repo"), "project": d.get("project"),
+                         "ref": d.get("ref"), "gapp": d.get("gapp"),
+                         "upgrade": {"older": "available", "newer": "install a newer gapp"}.get(stands)})
+        return {"fleet": where.describe(), "deployments": rows}
+
     def _get_git_root(self) -> Optional[Path]:
         try:
             res = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True)
@@ -865,7 +1067,7 @@ def _prepare_build_dir(path, image, start, ref="HEAD"):
 
 
 def _build_tfvars(name, pid, img, cfg, repo_path, public, domain,
-                  bucket_name, solution_name=None, labels=None):
+                  bucket_name, solution_name=None, labels=None, manifest=None):
     # Every key returned here corresponds to a structurally-required tfvar in
     # modules/cloud-run-service/variables.tf. None of them have defaults, so
     # dropping a key fails terraform plan instead of silently mis-deploying.
@@ -875,7 +1077,8 @@ def _build_tfvars(name, pid, img, cfg, repo_path, public, domain,
     # the module structurally needs.
     from gapp.admin.sdk.manifest import resolve_env_vars, get_env_vars, load_manifest
     env = {}
-    manifest = load_manifest(repo_path)
+    if manifest is None:
+        manifest = load_manifest(repo_path)
     env_vars = get_env_vars(manifest)
     sol = solution_name or name
     secrets_map = {}

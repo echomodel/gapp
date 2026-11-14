@@ -150,19 +150,6 @@ def test_ci_deploy_with_a_ref_is_refused_with_the_two_commands_that_replace_it(m
     assert "gapp ci deploy my-app" in res.output
 
 
-def test_gapp_deploy_with_a_ref_is_refused_off_a_runner_and_accepted_on_one(monkeypatch):
-    from gapp.admin.sdk.core import GappSDK
-    seen = {}
-    monkeypatch.setattr(GappSDK, "deploy", lambda self, **kw: seen.update(kw) or {"dry_run": True, "name": "x"})
-    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
-    res = CliRunner().invoke(main, ["deploy", "--ref", "v1.5.0"])
-    assert res.exit_code == 2 and "`gapp deploy` takes no --ref: it builds the commit this clone is on." in res.output
-    assert seen == {}
-    monkeypatch.setenv("GITHUB_ACTIONS", "true")
-    CliRunner().invoke(main, ["deploy", "--ref", "v1.5.0", "--dry-run"])
-    assert seen["ref"] == "v1.5.0"
-
-
 def test_the_ref_option_is_hidden_from_both_deploys_help():
     for argv in (["deploy", "--help"], ["ci", "deploy", "--help"]):
         out = CliRunner().invoke(main, argv).output

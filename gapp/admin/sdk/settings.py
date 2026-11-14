@@ -199,3 +199,45 @@ def describe(key: str, value) -> str:
     if isinstance(value, list):
         return ", ".join(value) if value else "none"
     return str(value)
+
+
+def as_manifest(id: str, settings) -> dict:
+    """The settings in the shape the deploy code reads: one list of
+    variables, sizing under `service`, extra APIs under `prerequisites`."""
+    checked = validate(settings)
+    manifest = {"name": id}
+    for key in ("public", "domain", "start"):
+        if key in checked:
+            manifest[key] = checked[key]
+    sizing = {k: checked[k] for k in ("memory", "cpu", "max_instances") if k in checked}
+    if sizing:
+        manifest["service"] = sizing
+    if checked.get("apis"):
+        manifest["prerequisites"] = {"apis": list(checked["apis"])}
+    env = []
+    for variable, entry in (checked.get("env") or {}).items():
+        if "secret" in entry:
+            env.append({"name": variable, "secret": {"name": entry["secret"],
+                                                     **({"generate": True} if entry.get("generate") else {})}})
+        else:
+            value = entry["value"].replace("{{DATA_PATH}}", "{{SOLUTION_DATA_PATH}}").replace("{{NAME}}", "{{SOLUTION_NAME}}")
+            env.append({"name": variable, "value": value})
+    if env:
+        manifest["env"] = env
+    return manifest
+
+
+def version_label(version: str) -> str:
+    """A gapp version as a label value: labels take no dots."""
+    return version.replace(".", "-")
+
+
+def label_version(label: str | None) -> str | None:
+    """The gapp version a label value names, or None when it names none.
+    A bare major number, which earlier 4.0 release candidates wrote, reads
+    as the first release candidate of that major."""
+    if not label:
+        return None
+    if label.isdigit():
+        return f"{label}.0.0rc0"
+    return label.replace("-", ".")

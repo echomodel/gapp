@@ -28,7 +28,7 @@ def test_the_owner_command_and_options_are_gone():
 
 def test_the_mcp_tools_take_no_owner_arguments():
     assert list(inspect.signature(server.gapp_user).parameters) == ["account"]
-    assert list(inspect.signature(server.gapp_list).parameters) == ["project_limit"]
+    assert list(inspect.signature(server.gapp_list).parameters) == []
     assert "force" not in inspect.signature(server.gapp_setup).parameters
 
 

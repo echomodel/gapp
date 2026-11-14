@@ -37,6 +37,19 @@ Breaking changes:
   refusal changes nothing and exits 2. A definition records the gapp
   version that wrote it; only `gapp upgrade` moves it. Nothing deploys
   from these definitions yet, and they do not work on a GitHub fleet yet.
+- `gapp deploy` deploys a deployment from its definition in a fleet kept
+  on this machine, and reads nothing from the repo but its Dockerfile or
+  Procfile. Run it in a clone of the definition's repo, checked out at
+  what the definition builds; `--deployment` names it, or the clone's
+  remote does. It takes no `--project` and no `--ref`. The first deploy
+  creates the deployment's bucket. The bucket's `gapp-version` label now
+  holds the full version of the gapp that last deployed it, and a deploy
+  that would apply a gapp upgrade is refused without `--upgrade`, which is
+  refused when none is pending; `--dry-run` says which. `gapp list` lists
+  the fleet's definitions, with no search of cloud projects. New: `gapp
+  project setup <project>`, once per project, which sets up nothing about
+  CI. (MCP: `gapp_deploy`, `gapp_list`, `gapp_project_setup`.) `gapp
+  status` and `gapp secrets` still work the earlier way until they follow.
 - Releasing no longer needs a tag pushed by hand: a workflow tags the
   commit and publishes the GitHub release when the version changes on
   `main`.

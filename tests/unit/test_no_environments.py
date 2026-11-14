@@ -61,23 +61,13 @@ def test_deploy_refuses_a_name_on_two_projects_even_on_a_dry_run(tmp_path, monke
         assert str(exc.value) == AMBIGUOUS
 
 
-def test_the_cli_prints_the_ambiguity_message_for_deploy_and_status(monkeypatch):
+def test_the_cli_prints_the_ambiguity_message_for_status(monkeypatch):
     def ambiguous(*a, **k):
         raise AmbiguousDeployment(AMBIGUOUS)
-    monkeypatch.setattr(GappSDK, "deploy", ambiguous)
     monkeypatch.setattr(GappSDK, "status", ambiguous)
-    for args in (["deploy", "--dry-run"], ["status", "my-app"]):
+    for args in (["status", "my-app"],):
         res = CliRunner().invoke(cli_main, args)
         assert AMBIGUOUS in res.output, (args, res.output)
-
-
-def test_list_with_no_deployments_says_none_have_been_set_up(monkeypatch):
-    monkeypatch.setattr(GappSDK, "list_apps", lambda self, **k: {
-        "apps": [], "warnings": [], "messages": [],
-        "metadata": {"projects": {"count": 0, "limit": 50}}})
-    out = CliRunner().invoke(cli_main, ["list"]).output
-    assert "  No apps found: no deployments have been set up on any project yet." in out
-    assert "  No apps found.\n" not in out
 
 
 def test_a_ci_run_with_an_explicit_project_reads_no_project_labels(tmp_path, monkeypatch, sdk):

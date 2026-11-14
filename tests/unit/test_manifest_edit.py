@@ -274,7 +274,7 @@ BAD_YAML = "name: demo-app\nenv:\n  - name: A\n   value: b\n"
 
 
 @pytest.mark.parametrize("args", [["init"], ["manifest", "show"], ["manifest", "set", "public", "true"],
-                                  ["secrets", "list"], ["deploy", "--dry-run"]])
+                                  ["secrets", "list"]])
 def test_unreadable_yaml_gives_one_plain_message_and_changes_nothing(tmp_path, monkeypatch, args):
     repo = _repo(tmp_path, monkeypatch, files={"gapp.yaml": BAD_YAML})
     result = _run_entry(args)
