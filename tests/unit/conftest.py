@@ -453,7 +453,7 @@ def fleet_repo(monkeypatch, fake_gh, tmp_path):
         fake_gh.files[(repo, entryfile.FILE_NAME)] = text
         return True
     monkeypatch.setattr(fleetrepo, "write_text", write_text)
-    config_mod.set_fleet_repo("acme/fleet", "fleet use")
+    config_mod.set_fleet_repo("acme/fleet")
     fake_gh.install("acme/fleet")
     return "acme/fleet"
 

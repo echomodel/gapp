@@ -15,193 +15,124 @@ from gapp.admin.sdk.core import (
 @click.version_option(version=__version__)
 @click.pass_context
 def main(ctx):
-    """GCP App Deployer — deploy Cloud Run services with Terraform.
+    """Deploy apps that serve HTTP to Google Cloud Run.
 
     \b
-    Deploy from this machine, in the app's repo:
-      gapp init                          write gapp.yaml; reports how the app starts
-      gapp manifest show                 its settings; gapp manifest set/env set to change them
-      gapp setup --project <project-id>  once per project: APIs, data bucket
-      gapp secrets set <secret>          each secret the app declares without --generate
+    A deployment is defined once, in your fleet, and deployed from a clone
+    of its repo:
+      gapp project setup <project>       once per project
+      gapp add <name> --project <p>      define a deployment
+      gapp show                          its definition and settings
+      gapp set, gapp env set, gapp apply change its settings
+      gapp secrets set <secret-name>     each secret it reads
       gapp deploy                        build and deploy; prints the URL
-      gapp status                        is it up, its URL, the domain's state, the next step
+      gapp status                        its URL, health and domain
 
-    Or deploy through GitHub Actions, with no gcloud or terraform here:
-    `gapp ci --help`. Each command's output names the next step.
+    Or deploy on GitHub Actions runners, with no gcloud or Terraform here:
+    `gapp ci --help`. Each command's output names the next one.
     """
     ctx.obj = GappSDK()
 
 
 # -- gapp config --
 
-@main.group("config", invoke_without_command=True)
-@click.pass_obj
-def config_group(sdk: GappSDK):
-    """View or set workstation configuration."""
-    if click.get_current_context().invoked_subcommand is None:
-        profile = sdk.get_active_profile()
-        from gapp.admin.sdk.config import get_active_config
-        cfg = get_active_config()
-        click.echo(f"Active Profile: {profile}")
-        click.echo("Settings:")
-        click.echo(f"  gcloud account: {cfg.get('account', '(none)')}")
-        click.echo(f"  discovery:      {cfg.get('discovery', 'on').upper()}")
+@main.group("config")
+def config_group():
+    """This machine: profiles, and the Google Cloud login gapp uses."""
+
+
+def _config_end(fn, json_out, say):
+    """Run a config change; print its result, or its refusal with exit code 2."""
+    from gapp.admin.sdk import config
+    try:
+        result = fn(config)
+    except config.ConfigRefusal as e:
+        if json_out:
+            click.echo(json_mod.dumps({"refused": True, "message": str(e)}, indent=2))
+        else:
+            click.echo(str(e), err=True)
+        raise SystemExit(2)
+    except config.ConfigError as e:
+        click.echo(f"  Error: {e}", err=True)
+        raise SystemExit(1)
+    if json_out:
+        click.echo(json_mod.dumps(result, indent=2, default=str))
+        return
+    for line in say(result):
+        click.echo(line)
+
+
+_config_json = click.option("--json", "json_out", is_flag=True, help="Machine-readable output.")
 
 
 @config_group.command("account")
 @click.argument("email", required=False)
-@click.pass_obj
-def config_account(sdk: GappSDK, email):
-    """View or set the global gcloud account email."""
-    if email:
-        try:
-            sdk.set_account(email)
-            click.echo(f"  gcloud account set to: {email}")
-        except RuntimeError as e:
-            click.echo(f"  Error: {e}", err=True)
-            raise SystemExit(1)
-    else:
-        current = sdk.get_account()
-        click.echo(current if current else "No gcloud account configured.")
+@_config_json
+def config_account(email, json_out):
+    """Show or set the Google Cloud login the active profile uses.
 
-
-@config_group.command("discovery")
-@click.argument("state", type=click.Choice(["on", "off"]), required=False)
-@click.pass_obj
-def config_discovery(sdk: GappSDK, state):
-    """Enable (on) or disable (off) discovery of hosted projects (gapp=hosted)."""
-    if state:
-        sdk.set_discovery(state)
-        click.echo(f"  Discovery turned {state.upper()}")
-    else:
-        click.echo("on" if sdk.is_discovery_on() else "off")
-
-
-@config_group.command("profile")
-@click.argument("name", required=False)
-@click.option("--list", "list_profiles", is_flag=True, help="List all available profiles.")
-@click.pass_obj
-def config_profile(sdk: GappSDK, name, list_profiles):
-    """View, switch, or list configuration profiles."""
-    from gapp.admin.sdk.config import load_config
-    if list_profiles:
-        config = load_config()
-        active = config.get("active", "default")
-        click.echo("Profiles:")
-        for p in sorted(config.get("profiles", {}).keys()):
-            prefix = "* " if p == active else "  "
-            click.echo(f"{prefix}{p}")
-        return
-    if name:
-        sdk.set_active_profile(name)
-        click.echo(f"  Switched to profile: {name}")
-    else:
-        click.echo(sdk.get_active_profile())
-
-
-# -- gapp init/setup/deploy --
-
-@main.command()
-@click.option("--fresh", is_flag=True,
-              help="Start over: keep the current gapp.yaml as gapp.yaml.bak and write a new one with only the name. "
-                   "Works on a file gapp can't read or that fails the schema.")
-@click.pass_obj
-def init(sdk: GappSDK, fresh):
-    """Write gapp.yaml for this repo and register the solution locally.
-
-    Needs no cloud login. Idempotent: re-run it to check gapp.yaml and the
-    app's start method (a Procfile with a web: line, or a Dockerfile).
-
-    The deployment's name is the name in gapp.yaml if it has one, else the
-    origin repo's name, else the folder's; init writes it to gapp.yaml so it
-    stays the same wherever the repo is cloned. The name keys the service,
-    data bucket and secrets, so a different name is a different deployment.
-    Everything else (public access, domain, environment variables, secrets,
-    sizing) is set with `gapp manifest set` and `gapp manifest env set`; `gapp manifest show` shows what is
-    set now.
-
-    A gapp.yaml gapp can't read, or one with settings it doesn't accept, is
-    never changed: init says what's wrong. To start over instead of fixing
-    it, `gapp init --fresh` moves it to gapp.yaml.bak and writes a new one
-    with the deployment's name (the old file's if it can be read). Nothing
-    is deleted. Next: gapp setup --project <project-id>.
+    With no EMAIL, shows it. gapp runs gcloud as that login; with none
+    set, as whichever login gcloud itself has active.
     """
-    from gapp.admin.sdk.init import init_solution
-    try:
-        result = init_solution(fresh=fresh)
-    except RuntimeError as e:
-        click.echo(f"  Error: {e}", err=True)
-        raise SystemExit(1)
-    click.echo()
-    click.echo(f"  Initialized gapp app: {result['name']}")
-    if fr := result.get("fresh_result"):
-        click.echo(f"    Kept the old file as {fr['backup']}.")
-    click.echo(f"    gapp.yaml {result['manifest_status']} ✓")
-    source = {"gapp.yaml": "from the old file" if fr else "from gapp.yaml",
-              "repo": "the origin repo's name, now written to gapp.yaml",
-              "folder": "the folder's name (no origin remote), now written to gapp.yaml"}[result["name_source"]]
-    if fr and fr["old_name_unknown"]:
-        source += (f"; the old file's name couldn't be read. If {fr['backup']} names the deployment "
-                   "differently, put that name back with: gapp manifest set name <name> --new-deployment "
-                   "(the flag is needed because this file's name changes; it points the file back at that "
-                   "existing deployment)")
-    click.echo(f"    Name: {result['name']} ({source})")
-    click.echo("      The name keys the service, data bucket and secrets; changing it later makes a new deployment.")
-    topic = {"already_set": "already set"}.get(result["topic_status"], result["topic_status"])
-    click.echo(f"    GitHub topic 'gapp-solution' {topic} ✓")
-    from gapp.admin.sdk.start import describe
-    if result["start"]["method"]:
-        click.echo(f"    Starts with: {describe(result['start'])}")
-    click.echo("    Settings (public access, domain, environment variables, secrets): gapp manifest show")
-    click.echo()
-    if result.get("next_step"):
-        first, _, rest = result["next_step"]["hint"].partition("\n")
-        click.echo(f"  Not deployable yet: {first}")
-        for line in rest.splitlines():
-            click.echo(f"  {line}")
-        return
-    click.echo("  No GCP project attached yet.")
-    click.echo("  Next: gapp setup --project <project-id>")
+    _config_end(lambda c: c.account(email), json_out, lambda r: [
+        (f"gapp runs gcloud as {r['account']} in profile '{r['profile']}'." if r["account"]
+         else f"No login is set in profile '{r['profile']}': gapp runs gcloud as its active login.")])
 
 
-@main.command("setup")
-@click.option("--project", help="Explicit GCP Project ID.")
-@click.pass_obj
-def setup_cmd(sdk: GappSDK, project):
-    """GCP foundation: enable APIs, create and label the solution bucket, mark the project hosted.
+@config_group.group("profile")
+def config_profile_group():
+    """Profiles: separate fleets and accounts on one machine.
 
-    Once per solution per project, idempotent. Needs a gcloud login with
-    project-admin rights (enable services, create buckets, edit IAM).
-    Runs in the app's checkout. --project is required the first time;
-    later runs find it among the projects marked gapp=hosted. Next: `gapp secrets set` for any declared secrets,
-    then `gapp deploy`. (CI deploys are the other fleet system: `gapp ci`.)
+    A profile has its own fleet and its own Google Cloud login. One is
+    active at a time, and every command works in it.
     """
-    try:
-        result = sdk.setup(project)
-    except (RuntimeError, ValueError) as e:
-        click.echo(f"  Error: {e}", err=True)
-        raise SystemExit(1)
 
-    click.echo()
-    click.echo(f"  {result['name']} → {result['project_id']}")
-    click.echo()
-    if result["apis"]:
-        for api in result["apis"]:
-            click.echo(f"    API {api} enabled ✓")
-    click.echo(f"    Bucket gs://{result['bucket']} {result['bucket_status']} ✓")
-    if result["label_status"] == "skipped":
-        click.echo(f"    Project {result['project_id']} not marked hosted: a CI run never writes project labels "
-                   f"(`gapp ci project setup {result['project_id']}` marks it)")
-    else:
-        click.echo(f"    Project {result['project_id']} marked hosted (gapp=hosted) {result['label_status']} ✓")
-    click.echo()
-    if result.get("start_problem"):
-        first, _, rest = result["start_problem"].partition("\n")
-        click.echo(f"  Next: {first}")
-        for line in rest.splitlines():
-            click.echo(f"  {line}")
-        click.echo()
 
+@config_profile_group.command("list")
+@_config_json
+def config_profile_list(json_out):
+    """Every profile, the active one marked."""
+    _config_end(lambda c: c.profiles(), json_out, lambda r: [
+        f"{'*' if p['active'] else ' '} {p['name']}" for p in r["profiles"]])
+
+
+@config_profile_group.command("use")
+@click.argument("name")
+@_config_json
+def config_profile_use(name, json_out):
+    """Switch to a profile. Refused when it does not exist."""
+    _config_end(lambda c: c.use_profile(name), json_out, lambda r: [
+        f"Profile '{r['profile']}' is active." if r["changed"] else f"Profile '{r['profile']}' was already active."])
+
+
+@config_profile_group.command("add")
+@click.argument("name")
+@_config_json
+def config_profile_add(name, json_out):
+    """Make a profile, with an empty fleet and no login set. Does not switch to it."""
+    _config_end(lambda c: c.add_profile(name), json_out, lambda r: [
+        f"Made profile '{r['profile']}'.", f"Next: gapp config profile use {r['profile']}"])
+
+
+@config_profile_group.command("remove")
+@click.argument("name")
+@_config_json
+def config_profile_remove(name, json_out):
+    """Remove a profile. Refused for the active one, and for one whose fleet on this machine holds deployments."""
+    _config_end(lambda c: c.remove_profile(name), json_out, lambda r: [f"Removed profile '{r['profile']}'."])
+
+
+@config_profile_group.command("rename")
+@click.argument("old")
+@click.argument("new")
+@_config_json
+def config_profile_rename(old, new, json_out):
+    """Rename a profile. Its fleet and login go with it."""
+    _config_end(lambda c: c.rename_profile(old, new), json_out, lambda r: [
+        f"Profile '{r['was']}' is now '{r['profile']}'."])
+
+
+# -- gapp deploy --
 
 @main.command("deploy")
 @click.option("--deployment", "-d", "deployment", default=None, metavar="NAME",
@@ -260,34 +191,6 @@ def deploy(sdk: GappSDK, deployment, dry_run, rebuild, replace_domain, upgrade, 
         click.echo(f"Upgraded from gapp {result['upgraded_from']} to {result['gapp']}.")
     if result.get("service_url"):
         click.echo(f"URL: {result['service_url']}")
-
-
-def _render_status(data: dict) -> list[str]:
-    """The lines of `gapp status` from its result dict (also what `gapp ci status --live` prints)."""
-    lines = []
-    deployment = data.get("deployment") or {}
-    lines.append("App:      (not initialized here)" if not data.get("initialized") else f"App:      {data.get('name')}")
-    if deployment.get("project"):
-        lines.append(f"Project:  {deployment['project']}")
-    if data.get("initialized") and deployment:
-        lines.append(f"Status:   {'READY' if not deployment.get('pending', True) else 'PENDING'}")
-        for s in deployment.get("services") or []:
-            lines.append(f"  Service: {s.get('name')}")
-            lines.append(f"  URL:     {s.get('url')}")
-            lines.append(f"  Healthy: {'✓' if s.get('healthy') else 'X'}")
-    if domain := data.get("domain"):
-        lines.append(f"Domain:   {domain.get('name')} ({domain.get('status')})")
-        if domain.get("status") == "pending_dns":
-            lines.append(f"  CNAME:   {domain.get('name')} -> {domain.get('cname_target')}")
-        if domain.get("detail"):
-            lines.append(f"  {domain['detail']}")
-    for warning in data.get("warnings") or []:
-        lines.append(warning)
-    if next_step := data.get("next_step"):
-        lines.append(f"\nNext Step: {next_step.get('action')}")
-        if next_step.get("hint"):
-            lines.append(f"  {next_step['hint']}")
-    return lines
 
 
 @main.command("status")
@@ -612,89 +515,6 @@ def ci_runner_status_cmd(deployment):
     raise SystemExit(runner_status(deployment))
 
 
-# -- gapp manifest --
-
-def _show_manifest(r):
-    if r.get("file"):
-        click.echo(f"  {r['file']}" + ("" if r["exists"] else " (not created yet: set something to create it)"))
-    elif not r["exists"]:
-        click.echo("  No gapp.yaml in this repo. Run `gapp init` to write one.")
-        return
-    else:
-        click.echo(f"  gapp.yaml in {r['repo']}")
-    for row in r["settings"]:
-        value = row["value"]
-        if isinstance(value, bool):
-            value = str(value).lower()
-        elif isinstance(value, list):
-            value = ", ".join(value)
-        elif value is None:
-            value = "not set"
-        click.echo(f"    {row['key']:<15} {str(value):<24} {row['meaning']}")
-    if r["env"]:
-        click.echo("    env")
-        for e in r["env"]:
-            click.echo(f"      {e['name']:<24} {e['meaning']}" + (f": {e['value']}" if e["kind"] == "value" else ""))
-    else:
-        click.echo(f"    {'env':<15} {'none':<24} add one: gapp manifest env set NAME VALUE")
-    from gapp.admin.sdk.start import describe as describe_start, missing
-    if r["start"] is None:
-        pass
-    elif r["start"]["method"]:
-        click.echo(f"    {'starts':<15} {describe_start(r['start'])}")
-    else:
-        click.echo(f"    {'starts':<15} {missing(r['name'], r['start']).splitlines()[0]}")
-    if r["issues"]:
-        click.echo("  gapp.yaml has settings gapp doesn't accept:")
-        for issue in r["issues"]:
-            click.echo(f"    {issue['path']}: {issue['message']}")
-        click.echo("  Fix those lines in gapp.yaml, or start over with `gapp init --fresh` (keeps it as gapp.yaml.bak).")
-
-
-def _echo_lines(text, err=True):
-    for line in str(text).splitlines():
-        click.echo(f"  {line}", err=err)
-
-
-def _manifest_file():
-    return click.get_current_context().meta.get("manifest_file")
-
-
-def _manifest_write(fn, json_out, *args, **kwargs):
-    kwargs["file"] = _manifest_file()
-    from gapp.admin.sdk.manifest_edit import ManifestChangeRefused
-    from gapp.admin.sdk.schema import ManifestUnreadable, ManifestValidationError
-    try:
-        result = fn(*args, **kwargs)
-    except (ManifestChangeRefused, RuntimeError) as e:
-        if json_out:
-            _emit_json({"ok": False, "error": str(e)})
-        _echo_lines(f"Not changed: {e}")
-        raise SystemExit(1)
-    except (ManifestValidationError, ManifestUnreadable) as e:
-        if json_out:
-            _emit_json({"ok": False, **e.to_dict()})
-        _echo_lines(f"Not changed: {e}")
-        raise SystemExit(1)
-    if json_out:
-        _emit_json(result)
-    click.echo(f"  {'Changed' if result['changed'] else 'Unchanged'}: {result['change']}")
-    if result.get("new_deployment"):
-        nd = result["new_deployment"]
-        click.echo(f"  The next setup and deploy make a new deployment, '{nd['new_name']}'; "
-                   f"'{nd['old_name']}' keeps running until you remove it.")
-    click.echo()
-    _show_manifest(result)
-
-
-_json_option = click.option("--json", "json_out", is_flag=True,
-                            help="Print the result as JSON (the same dict the MCP tool returns) and nothing else.")
-_new_deployment_option = click.option(
-    "--new-deployment", is_flag=True,
-    help="Allow a change to the deployment's name. The name keys its service, data bucket and secrets, "
-         "so the new name is a new, empty deployment.")
-
-
 @main.group("fleet", invoke_without_command=True)
 @click.option("--json", "json_out", is_flag=True, help="Machine-readable output.")
 @click.pass_context
@@ -768,6 +588,89 @@ def fleet_use_cmd(target, create, json_out):
                     + (", carried across." if result.get("carried") else "."))
     if result.get("backup"):
         click.echo(f"The file it was in is kept as {result['backup']}.")
+
+
+def _fleet_end(fn, json_out, say):
+    """Run a fleet copy; print its result, a refusal with exit code 2, or a failure with 1."""
+    from gapp.admin.sdk import fleetstore
+    from gapp.admin.sdk.fleet import FleetRefusal
+    try:
+        result = fn(fleetstore)
+    except FleetRefusal as e:
+        if json_out:
+            click.echo(json_mod.dumps({"refused": True, "message": e.message}, indent=2))
+        else:
+            click.echo(e.message, err=True)
+        raise SystemExit(2)
+    except fleetstore.FleetUnavailable as e:
+        click.echo(f"  Error: {e}", err=True)
+        raise SystemExit(1)
+    if json_out:
+        click.echo(json_mod.dumps(result, indent=2, default=str))
+        return
+    for line in say(result):
+        click.echo(line)
+
+
+@fleet_group.command("export")
+@click.argument("file", required=False, type=click.Path(dir_okay=False))
+@click.option("--json", "json_out", is_flag=True, help="Machine-readable output.")
+def fleet_export_cmd(file, json_out):
+    """Copy your fleet out: to FILE, or printed when no FILE is given.
+
+    The copy is a whole fleet file, as `gapp fleet import` takes it.
+    Refused when FILE exists. It holds no secret values: a fleet names
+    its secrets and never holds them.
+    """
+    from gapp.admin.sdk.fleet import FleetRefusal
+
+    def export(fleetstore):
+        text = fleetstore.export_text()
+        if not file:
+            return {"file": None, "text": text}
+        path = Path(file)
+        if path.exists():
+            raise FleetRefusal("exists", f"{file} is already there, and gapp does not write over it. Name another file.")
+        path.write_text(text)
+        return {"file": file, "deployments": len(fleetstore.read())}
+
+    def say(result):
+        if result["file"] is None:
+            return [result["text"].rstrip("\n")]
+        count = result["deployments"]
+        return [f"Copied your fleet to {result['file']}: {count} deployment{'' if count == 1 else 's'}."]
+    _fleet_end(export, json_out, say)
+
+
+@fleet_group.command("import")
+@click.argument("file", type=click.Path(dir_okay=False))
+@click.option("--json", "json_out", is_flag=True, help="Machine-readable output.")
+def fleet_import_cmd(file, json_out):
+    """Replace your fleet with the one in FILE, all of it or none of it.
+
+    FILE is a whole fleet file, as `gapp fleet export` writes one. Every
+    definition in it is checked first. The fleet it replaces is kept: a
+    fleet on this machine as a backup file beside it, a fleet in a repo
+    as the commit before this one. Touches no cloud.
+    """
+    from gapp.admin.sdk.fleet import FleetRefusal
+
+    def run(fleetstore):
+        path = Path(file)
+        if not path.is_file():
+            raise FleetRefusal("no-file", f"{file} is not a file.")
+        return fleetstore.import_text(path.read_text(), file)
+
+    def say(result):
+        count, was = result["deployments"], result["replaced"]
+        lines = [f"Your fleet, kept in {result['where']}, now holds {count} deployment{'' if count == 1 else 's'} "
+                 f"(it held {was})."]
+        if result["backup"]:
+            lines.append(f"The fleet it replaced is kept as {result['backup']}.")
+        elif result["kind"] != "local":
+            lines.append("The fleet it replaced is the commit before this one in that repo.")
+        return lines
+    _fleet_end(run, json_out, say)
 
 
 # --- definitions and their settings (the fleet; no cloud) ---
@@ -1022,169 +925,6 @@ def apply_cmd(file, dry_run, deployment, json_out):
                         lambda d: d.apply, path.read_text(), deployment=deployment, source=file, dry_run=dry_run)
 
 
-@main.group("manifest")
-@click.option("--file", "manifest_file", default=None, metavar="FILE",
-              help="Show or change FILE, a gapp.yaml-shaped file such as a deployment's fleet-side manifest "
-                   "(from `gapp ci manifest`), instead of the repo's gapp.yaml. Created on the first change.")
-@click.pass_context
-def manifest_group(ctx, manifest_file):
-    """Show or change this app's gapp.yaml.
-
-    \b
-    gapp manifest show                     this repo's settings, each with what it means
-    gapp manifest set KEY VALUE            name, public, domain, start, memory, cpu, max-instances
-    gapp manifest unset KEY                remove one of those (back to its default)
-    gapp manifest env set NAME VALUE       a plain environment variable
-    gapp manifest env set NAME --secret S [--generate]   a variable read from a secret
-    gapp manifest env set NAME --data-path [SUBFOLDER]   the data volume's path
-    gapp manifest env unset NAME
-    gapp manifest example                  every key gapp.yaml takes, annotated
-    gapp manifest schema                   the JSON Schema, for tools
-
-    Each change is checked against the schema and written only when the
-    file changes. How the app starts is not in gapp.yaml: it is a Procfile
-    web: line or a Dockerfile. A file gapp can't read is never changed;
-    `gapp init --fresh` starts over and keeps it as gapp.yaml.bak.
-
-    --file FILE points every command at another gapp.yaml-shaped file, such
-    as a deployment's fleet-side manifest: `gapp ci manifest NAME > FILE`,
-    `gapp manifest --file FILE set memory 1Gi`, then `gapp ci setup NAME ...
-    --manifest FILE --update`. Such a file has no name.
-
-    Two advanced keys have no command; edit gapp.yaml at the root of the
-    app's git repo (`gapp manifest show` prints its path) for them: `paths`,
-    for a repo with several services, and `prerequisites.apis`, for extra
-    GCP APIs. `gapp manifest example` shows their format, and every gapp
-    command checks the file.
-    """
-    ctx.meta["manifest_file"] = manifest_file
-
-
-
-@manifest_group.command("show")
-@_json_option
-def manifest_show_cmd(json_out):
-    """This repo's gapp.yaml settings as configured now, each with what it means.
-
-    Every setting is listed, set or not (an unset one shows its default),
-    with each environment variable by kind and how the app starts. --json
-    prints the result dict and nothing else.
-    """
-    from gapp.admin.sdk.manifest_edit import describe
-    try:
-        result = describe(file=_manifest_file())
-    except RuntimeError as e:
-        click.echo(f"  Error: {e}", err=True)
-        raise SystemExit(1)
-    if json_out:
-        _emit_json(result)
-    _show_manifest(result)
-    if result.get("file"):
-        click.echo()
-        click.echo(f"  Change: gapp manifest --file {result['file']} set|unset KEY, ... env set|unset NAME")
-        click.echo(f"  Upload: gapp ci setup NAME --repo OWNER/REPO --project PROJECT --manifest {result['file']} --update")
-    elif result["exists"]:
-        click.echo()
-        click.echo("  Change: gapp manifest set|unset KEY, gapp manifest env set|unset NAME")
-        click.echo("  Every key: gapp manifest example. paths and prerequisites.apis have no command:")
-        click.echo(f"  edit {Path(result['repo']) / 'gapp.yaml'} for those.")
-
-
-@manifest_group.command("set")
-@click.argument("key")
-@click.argument("value")
-@_new_deployment_option
-@_json_option
-def manifest_set_cmd(key, value, new_deployment, json_out):
-    """Set KEY to VALUE in gapp.yaml.
-
-    \b
-    KEY is one of:
-      name           the deployment's name (needs --new-deployment to change it)
-      public         true: anyone can call the URL; false: invoker access only
-      domain         custom subdomain, e.g. app.example.com
-      start          the start command, only for a repo with no Dockerfile or Procfile
-      memory         memory per instance, e.g. 1Gi (default 512Mi)
-      cpu            CPUs per instance, e.g. 2 (default 1)
-      max-instances  most instances at once (default 1)
-    """
-    from gapp.admin.sdk.manifest_edit import set_value
-    _manifest_write(set_value, json_out, key, value, new_deployment=new_deployment)
-
-
-@manifest_group.command("unset")
-@click.argument("key")
-@_new_deployment_option
-@_json_option
-def manifest_unset_cmd(key, new_deployment, json_out):
-    """Remove KEY from gapp.yaml, so it takes its default.
-
-    KEY is one of the settings `gapp manifest set` takes. Unsetting name
-    makes the name the repo's again, which needs --new-deployment if that
-    differs.
-    """
-    from gapp.admin.sdk.manifest_edit import unset_value
-    _manifest_write(unset_value, json_out, key, new_deployment=new_deployment)
-
-
-@manifest_group.group("env")
-def manifest_env_group():
-    """Environment variables the deployed service gets."""
-
-
-@manifest_env_group.command("set")
-@click.argument("name")
-@click.argument("value", required=False)
-@click.option("--secret", "secret", metavar="SECRET",
-              help="Read the value from this secret. Set the secret's value with `gapp secrets set SECRET`.")
-@click.option("--generate", is_flag=True, help="With --secret: gapp generates a random value on the first deploy.")
-@click.option("--data-path", is_flag=True,
-              help="The data volume's path, kept across deploys; VALUE is an optional subfolder.")
-@_json_option
-def manifest_env_set_cmd(name, value, secret, generate, data_path, json_out):
-    """Add or replace the variable NAME.
-
-    \b
-      gapp manifest env set LOG_LEVEL INFO
-      gapp manifest env set API_KEY --secret api-key
-      gapp manifest env set SIGNING_KEY --secret signing-key --generate
-      gapp manifest env set APP_USERS_PATH --data-path users
-    """
-    from gapp.admin.sdk.manifest_edit import env_set
-    _manifest_write(env_set, json_out, name, value, secret=secret, generate=generate, data_path=data_path)
-
-
-@manifest_env_group.command("unset")
-@click.argument("name")
-@_json_option
-def manifest_env_unset_cmd(name, json_out):
-    """Remove the variable NAME. A secret it read stays in Secret Manager."""
-    from gapp.admin.sdk.manifest_edit import env_unset
-    _manifest_write(env_unset, json_out, name)
-
-
-@manifest_group.command("schema")
-def manifest_schema_cmd():
-    """Print the JSON Schema for gapp.yaml, and nothing else.
-
-    It comes from the model gapp validates against, so it always matches
-    this version of gapp. For a commented gapp.yaml: gapp manifest example.
-    """
-    from gapp.admin.sdk.schema import get_schema
-    click.echo(json_mod.dumps(get_schema(), indent=2))
-
-
-@manifest_group.command("example")
-def manifest_example_cmd():
-    """Print an annotated gapp.yaml with every key, and nothing else.
-
-    Each key's comment is its schema description, so the example always
-    matches this version of gapp. The output is valid YAML.
-    """
-    from gapp.admin.sdk.manifest_edit import example as example_text
-    click.echo(example_text(), nl=False)
-
-
 @main.group("secrets")
 def secrets_group():
     """List, get, and set a deployment's secret values.
@@ -1296,13 +1036,8 @@ def secrets_set_cmd(name, from_stdin, deployment, json_out):
 
 def cli_entry():
     from gapp.admin.sdk.config import ConfigError
-    from gapp.admin.sdk.schema import ManifestUnreadable, ManifestValidationError
     try:
         main(standalone_mode=True)
-    except (ManifestUnreadable, ManifestValidationError) as e:
-        for line in str(e).splitlines():
-            click.echo(f"  {line}", err=True)
-        sys.exit(1)
     except ConfigError as e:
         click.echo(f"  Error: {e}", err=True)
         sys.exit(1)

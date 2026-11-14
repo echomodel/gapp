@@ -292,7 +292,7 @@ def test_apply_with_anything_wrong_changes_nothing(my_app, text, says):
 def write_version(name, version):
     deployments = fleet()
     deployments[name]["gapp"] = version
-    fleetstore.write_local(deployments)
+    fleetstore.write(deployments)
 
 
 def test_upgrade_with_nothing_to_upgrade_is_refused(my_app):
@@ -334,7 +334,7 @@ def test_a_change_to_one_definition_leaves_a_newer_one_beside_it_untouched(my_ap
     definitions.add("theirs", project="my-project", repo="acme/theirs")
     deployments = fleet()
     deployments["theirs"].update({"gapp": "9.0.0", "settings": {"from_the_future": True}})
-    fleetstore.write_local(deployments)
+    fleetstore.write(deployments)
     definitions.set_value("public", "true", deployment="my-app")
     assert fleet()["theirs"]["settings"] == {"from_the_future": True}
 

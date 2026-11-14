@@ -66,7 +66,7 @@ def test_moving_to_a_repo_carries_the_fleet_as_one_file_and_nothing_else(remote)
     local_file = fleetstore.location().path
     result = fleetstore.use(remote)
     assert result["moved"] and result["carried"] and result["deployments"] == 1
-    assert get_fleet_repo()[0] == remote
+    assert get_fleet_repo() == remote
     assert in_remote(remote).startswith("format: 1\ndeployments:\n  my-app:\n")
     assert git(remote, "ls-tree", "--name-only", "-r", "main").splitlines() == ["gapp.yaml"]
     assert log(remote) == ["gapp: the fleet moves here"]
@@ -126,7 +126,7 @@ def test_moving_back_to_this_machine_carries_the_fleet_and_forgets_the_repo(remo
     fleetstore.use(remote)
     definitions.add("my-app", project="my-project", repo="acme/my-app")
     result = fleetstore.use("local")
-    assert result["where"].startswith("a file on this machine") and get_fleet_repo()[0] is None
+    assert result["where"].startswith("a file on this machine") and get_fleet_repo() is None
     assert list(fleetstore.read()) == ["my-app"]
 
 

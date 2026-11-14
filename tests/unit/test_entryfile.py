@@ -111,7 +111,7 @@ def test_a_newer_definition_is_refused_and_names_the_gapp_to_install(monkeypatch
 
 
 def test_the_local_fleet_is_kept_in_the_entry_files_shape(local_machine):
-    fleetstore.write_local({"my-app": {"id": "my-app", "project": "my-proj"}})
+    fleetstore.write({"my-app": {"id": "my-app", "project": "my-proj"}})
     text = fleetstore.location().path.read_text()
     assert text.startswith("format: 1\ndeployments:\n  my-app:\n")
     assert fleetstore.read() == {"my-app": {"id": "my-app", "project": "my-proj"}}
@@ -126,7 +126,7 @@ def test_a_local_file_without_a_format_is_neither_read_nor_written_over(local_ma
         fleetstore.read()
     assert "has no 'format' at its top" in str(caught.value)
     with pytest.raises(FleetUnavailable):
-        fleetstore.write_local({"other": {"id": "other", "project": "my-proj"}})
+        fleetstore.write({"other": {"id": "other", "project": "my-proj"}})
     assert where.path.read_text() == old
 
 
@@ -134,5 +134,5 @@ def test_writing_the_local_fleet_keeps_top_level_keys_it_does_not_know(local_mac
     where = fleetstore.location()
     where.path.parent.mkdir(parents=True)
     where.path.write_text("format: 1\ndeployments: {}\nsomething_later: 7\n")
-    fleetstore.write_local({"my-app": {"id": "my-app", "project": "my-proj"}})
+    fleetstore.write({"my-app": {"id": "my-app", "project": "my-proj"}})
     assert entryfile.parse(where.path.read_text())["something_later"] == 7

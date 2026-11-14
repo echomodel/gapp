@@ -1,143 +1,212 @@
-"""Configuration and path resolution for gapp."""
+"""This machine's gapp config: profiles, and what each one holds.
+
+A profile is a separate fleet and a separate Google Cloud login on one
+machine. One is active at a time, and every command works in it. The file
+holds the active profile's name and, per profile, the login gapp runs
+gcloud as and the repo its fleet is kept in when it is not kept on this
+machine.
+
+gapp is the only writer of the file. A key it does not know is left out
+of what it reads and of what it next writes.
+"""
+
+from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 import yaml
 
+DEFAULT_PROFILE = "default"
+PROFILE_KEYS = ("account", "fleet_repo")
+PROFILE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
+
+
+class ConfigError(RuntimeError):
+    """The config file could not be read."""
+
+
+class ConfigRefusal(Exception):
+    """A config change that was refused. Nothing was changed."""
+
 
 def get_config_dir() -> Path:
-    """Return the gapp config directory, respecting XDG_CONFIG_HOME."""
+    """The gapp config directory, respecting XDG_CONFIG_HOME."""
     base = os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config"))
     return Path(base) / "gapp"
 
 
 def get_config_file() -> Path:
-    """Return the path to config.yaml."""
     return get_config_dir() / "config.yaml"
 
 
-def get_legacy_file() -> Path:
-    """Return the path to solutions.yaml."""
-    return get_config_dir() / "solutions.yaml"
-
-
-class ConfigError(RuntimeError):
-    """The user config holds something gapp does not accept."""
-
-
-TOP_LEVEL_KEYS = ("active", "profiles")
-PROFILE_KEYS = ("account", "discovery", "fleet_repo", "fleet_repo_set_by")
-
-
-def _refuse_removed_keys(data: dict, path: Path) -> None:
-    """gapp must not accept config it does not understand: an unknown key is
-    an error, never ignored. An `owner:` key (owner namespaces were removed
-    in 4.0) gets its own message."""
-    for key in data:
-        if key not in TOP_LEVEL_KEYS:
-            raise ConfigError(
-                f"Your gapp config {path} has an unknown top-level key `{key}` (gapp knows "
-                f"{', '.join(TOP_LEVEL_KEYS)}). Fix or delete it, then run the command again."
-            )
-    for name, settings in (data.get("profiles") or {}).items():
-        if not isinstance(settings, dict):
-            continue
-        if "owner" in settings:
-            raise ConfigError(
-                f"Your gapp config {path} has an `owner:` key in profile '{name}'. Owner namespaces "
-                f"were removed in gapp 4.0, so gapp no longer accepts it: delete that line, then run "
-                f"the command again."
-            )
-        for key in settings:
-            if key not in PROFILE_KEYS:
-                raise ConfigError(
-                    f"Your gapp config {path} has an unknown key `{key}` in profile '{name}' (gapp knows "
-                    f"{', '.join(PROFILE_KEYS)}). Fix or delete it, then run the command again."
-                )
-
-
 def load_config() -> dict:
-    """Load the global config (active profile + all profiles)."""
+    """The config: {"active": name, "profiles": {name: {key: value}}}. With
+    no file there is one profile, `default`, and it is active."""
     path = get_config_file()
+    data = {}
     if path.exists():
-        with open(path) as f:
-            data = yaml.safe_load(f) or {}
-            # Ensure basic structure
-            if "profiles" not in data:
-                data = {"active": "default", "profiles": {"default": data}}
-            if "active" not in data:
-                data["active"] = "default"
-            _refuse_removed_keys(data, path)
-            return data
-    
-    # Try legacy migration
-    legacy_path = get_legacy_file()
-    if legacy_path.exists():
-        with open(legacy_path) as f:
-            legacy_data = yaml.safe_load(f) or {}
-        
-        account = legacy_data.get("account")
-
-        p = {"discovery": "on"}
-        if account: p["account"] = account
-        
-        return {
-            "active": "default",
-            "profiles": {"default": p}
-        }
-        
-    return {
-        "active": "default",
-        "profiles": {"default": {"discovery": "on"}}
-    }
+        try:
+            data = yaml.safe_load(path.read_text()) or {}
+        except (OSError, yaml.YAMLError) as e:
+            raise ConfigError(f"Your gapp config {path} could not be read: {e}") from e
+        if not isinstance(data, dict):
+            raise ConfigError(f"Your gapp config {path} is not a mapping.")
+    profiles = {}
+    for name, held in (data.get("profiles") or {}).items():
+        held = held if isinstance(held, dict) else {}
+        profiles[str(name)] = {k: held[k] for k in PROFILE_KEYS if held.get(k)}
+    active = str(data.get("active") or DEFAULT_PROFILE)
+    profiles.setdefault(active, {})
+    return {"active": active, "profiles": profiles}
 
 
 def save_config(config: dict) -> None:
-    """Save the global config, pruning missing attributes."""
     path = get_config_file()
     path.parent.mkdir(parents=True, exist_ok=True)
-    
-    # Prune None values from all profiles
-    clean_profiles = {}
-    for name, settings in config.get("profiles", {}).items():
-        clean_profiles[name] = {k: v for k, v in settings.items() if v is not None}
-    
-    out = {
-        "active": config.get("active", "default"),
-        "profiles": clean_profiles
-    }
-    
-    with open(path, "w") as f:
-        yaml.dump(out, f, default_flow_style=False)
-
-
-def get_fleet_repo() -> tuple[str | None, str | None]:
-    """The fleet repo set on this machine for the active profile, and how it was set.
-
-    Only `gapp ci init` writes it (`set_fleet_repo`); every other `ci`
-    command reads it here and never looks it up anywhere else.
-    """
-    cfg = get_active_config()
-    return cfg.get("fleet_repo") or None, cfg.get("fleet_repo_set_by") or None
-
-
-def set_fleet_repo(repo: str | None, set_by: str | None = None) -> None:
-    """Record the fleet repo for the active profile (None clears it)."""
-    config = load_config()
-    profile = config["profiles"].setdefault(config["active"], {"discovery": "on"})
-    profile["fleet_repo"] = repo
-    profile["fleet_repo_set_by"] = set_by if repo else None
-    save_config(config)
+    profiles = {name: {k: held[k] for k in PROFILE_KEYS if held.get(k)}
+                for name, held in (config.get("profiles") or {}).items()}
+    out = {"active": config.get("active") or DEFAULT_PROFILE, "profiles": profiles}
+    path.write_text(yaml.safe_dump(out, default_flow_style=False))
 
 
 def get_active_profile() -> str:
-    """Return the name of the active profile."""
-    return load_config().get("active", "default")
+    return load_config()["active"]
 
 
 def get_active_config() -> dict:
-    """Return the settings for the currently active profile."""
+    """What the active profile holds."""
     config = load_config()
-    active_name = config["active"]
-    return config["profiles"].get(active_name, {"discovery": "on"})
+    return config["profiles"][config["active"]]
+
+
+# --- the fleet repo of the active profile ---
+
+
+def get_fleet_repo() -> str | None:
+    """The repo the active profile's fleet is kept in, or None when it is
+    kept on this machine. `gapp fleet use` is the only writer."""
+    return get_active_config().get("fleet_repo") or None
+
+
+def set_fleet_repo(repo: str | None) -> None:
+    config = load_config()
+    config["profiles"][config["active"]]["fleet_repo"] = repo
+    save_config(config)
+
+
+# --- gapp config account ---
+
+
+def account(email: str | None = None) -> dict:
+    """Show the Google Cloud login the active profile uses, or set it."""
+    config = load_config()
+    name = config["active"]
+    held = config["profiles"][name]
+    changed = False
+    if email is not None:
+        email = email.strip().lower()
+        if not email or "@" not in email or " " in email:
+            raise ConfigRefusal(f"'{email}' is not an email address. Give the Google Cloud login: gapp config account <email>")
+        changed = held.get("account") != email
+        held["account"] = email
+        save_config(config)
+    return {"profile": name, "account": held.get("account") or None, "changed": changed}
+
+
+# --- gapp config profile ---
+
+
+def _name(name: str) -> str:
+    name = (name or "").strip()
+    if not PROFILE_NAME_RE.match(name):
+        raise ConfigRefusal(f"'{name}' is not a profile name: lowercase letters, digits and hyphens, "
+                            f"starting with a letter or digit.")
+    return name
+
+
+def _existing(config: dict, name: str) -> str:
+    name = (name or "").strip()
+    if name not in config["profiles"]:
+        have = ", ".join(sorted(config["profiles"]))
+        raise ConfigRefusal(f"There is no profile '{name}'. You have: {have}. Make one: gapp config profile add {name}")
+    return name
+
+
+def _fleet_dir(name: str) -> Path:
+    return get_config_dir() / "fleets" / name
+
+
+def profiles() -> dict:
+    """Every profile, with what it holds and which is active."""
+    config = load_config()
+    return {"active": config["active"], "profiles": [
+        {"name": name, "active": name == config["active"], "account": held.get("account") or None,
+         "fleet_repo": held.get("fleet_repo") or None}
+        for name, held in sorted(config["profiles"].items())]}
+
+
+def use_profile(name: str) -> dict:
+    config = load_config()
+    name = _existing(config, name)
+    changed = config["active"] != name
+    config["active"] = name
+    save_config(config)
+    return {"profile": name, "changed": changed}
+
+
+def add_profile(name: str) -> dict:
+    config = load_config()
+    name = _name(name)
+    if name in config["profiles"]:
+        raise ConfigRefusal(f"There is already a profile '{name}'. Switch to it: gapp config profile use {name}")
+    config["profiles"][name] = {}
+    save_config(config)
+    return {"profile": name, "changed": True}
+
+
+def remove_profile(name: str) -> dict:
+    """Forget a profile. Its fleet is never removed with it: a fleet in a
+    repo stays in the repo, and one on this machine that holds deployments
+    refuses the removal."""
+    from gapp.admin.sdk import fleetstore
+    config = load_config()
+    name = _existing(config, name)
+    if name == config["active"]:
+        raise ConfigRefusal(f"'{name}' is the active profile. Switch to another first: gapp config profile use <name>")
+    if not config["profiles"][name].get("fleet_repo"):
+        local = fleetstore.Location("local", path=fleetstore.local_path(name))
+        try:
+            count = len(fleetstore.read(local))
+        except fleetstore.FleetUnavailable as e:
+            raise ConfigRefusal(f"Profile '{name}' keeps its fleet on this machine, and it could not be read, so the "
+                                f"profile was not removed. {e}") from e
+        if count:
+            raise ConfigRefusal(
+                f"Profile '{name}' keeps its fleet on this machine, and it holds {count} "
+                f"deployment{'' if count == 1 else 's'}. Removing the profile would leave them defined nowhere. "
+                f"Move that fleet to a repo first: gapp config profile use {name}, then gapp fleet use <owner>/<repo>")
+    del config["profiles"][name]
+    save_config(config)
+    return {"profile": name, "changed": True}
+
+
+def rename_profile(old: str, new: str) -> dict:
+    """Give a profile another name. Its login and its fleet go with it."""
+    config = load_config()
+    old = _existing(config, old)
+    new = _name(new)
+    if new in config["profiles"]:
+        raise ConfigRefusal(f"There is already a profile '{new}'.")
+    was, now = _fleet_dir(old), _fleet_dir(new)
+    if was.exists() and now.exists():
+        raise ConfigRefusal(f"A fleet folder for '{new}' is already on this machine, so '{old}' was not renamed. "
+                            f"Pick another name.")
+    if was.exists():
+        os.replace(was, now)
+    config["profiles"][new] = config["profiles"].pop(old)
+    if config["active"] == old:
+        config["active"] = new
+    save_config(config)
+    return {"profile": new, "was": old, "changed": True}

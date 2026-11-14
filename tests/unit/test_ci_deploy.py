@@ -6,7 +6,6 @@ first, before any run is started."""
 import datetime
 import json
 
-import pytest
 
 from gapp import __version__
 from gapp.admin.sdk import ci as ci_mod
@@ -99,7 +98,7 @@ def test_a_name_that_is_not_a_deployment_is_refused(ci):
 
 
 def test_a_fleet_on_this_machine_is_refused(ci):
-    config_mod.set_fleet_repo(None, "fleet use")
+    config_mod.set_fleet_repo(None)
     res = ci_mod.deploy("my-app")
     assert res["refused"] is True and res["next_step"]["action"] == "fleet use" and ci.dispatched == []
 

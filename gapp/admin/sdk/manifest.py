@@ -1,125 +1,6 @@
-"""Parse and validate gapp.yaml files."""
-
-from pathlib import Path
-
-import yaml
-
-from gapp.admin.sdk.schema import ManifestUnreadable, ManifestValidationError, validate_manifest
-
-
-def load_manifest(repo_path: Path, strict: bool = True) -> dict:
-    """Load gapp.yaml from a repo. Returns empty dict if missing.
-
-    When strict (default), validates against the schema and raises
-    ManifestValidationError on failure. The message names each offending
-    field by yaml path.
-
-    When not strict, skips schema enforcement and returns the parsed dict
-    as-is. Use for read-only operations (status, list) where a stale or
-    unsupported gapp.yaml should not block cloud reads — a deployment can
-    still be probed even if its local manifest predates the current
-    schema. Strict mode remains the default for setup/deploy, which need
-    a manifest the build pipeline can actually consume.
-    """
-    manifest_path = repo_path / "gapp.yaml"
-    if not manifest_path.exists():
-        return {}
-    data = parse_manifest_text(manifest_path.read_text())
-    if strict:
-        validate_manifest(data)
-    return data
-
-
-def parse_manifest_text(text: str) -> dict:
-    """Parse gapp.yaml's text. Raises ManifestUnreadable (with line and
-    column) for text that isn't YAML or isn't a mapping of keys."""
-    try:
-        data = yaml.safe_load(text)
-    except yaml.YAMLError as e:
-        mark = getattr(e, "problem_mark", None)
-        problem = getattr(e, "problem", None) or str(e).splitlines()[0]
-        raise ManifestUnreadable(problem, mark.line + 1 if mark else None,
-                                 mark.column + 1 if mark else None) from None
-    if data is None:
-        return {}
-    if not isinstance(data, dict):
-        raise ManifestUnreadable("the file is not a list of key: value settings")
-    return data
-
-
-class _ManifestDumper(yaml.SafeDumper):
-    """gapp.yaml's written style: list items indented under their key, and
-    double quotes where a value needs quoting, as the docs show it."""
-
-    def increase_indent(self, flow=False, indentless=False):
-        return super().increase_indent(flow, False)
-
-    def choose_scalar_style(self):
-        style = super().choose_scalar_style()
-        return '"' if style == "'" else style
-
-
-def dump_manifest(manifest: dict) -> str:
-    """The text gapp writes for a manifest, keys in their given order."""
-    return yaml.dump(manifest, Dumper=_ManifestDumper, default_flow_style=False, sort_keys=False)
-
-
-def save_manifest(repo_path: Path, manifest: dict) -> None:
-    """Write manifest dict back to gapp.yaml."""
-    (repo_path / "gapp.yaml").write_text(dump_manifest(manifest))
-
-
-def get_paths(manifest: dict) -> list[str]:
-    """Return paths from the manifest, or empty list if none."""
-    return manifest.get("paths", [])
-
-
-def get_name(manifest: dict) -> str | None:
-    """Return explicit name override if set, else None."""
-    return manifest.get("name")
-
-
-def get_solution_name(manifest: dict, repo_path: Path) -> str:
-    """Derive the solution name: manifest `name`, else the origin repo name,
-    else the checkout directory name.
-
-    The origin remote is preferred over the directory because a checkout
-    can live in any folder (a CI runner's workspace, a scratch clone) while
-    the repo name is what the solution is known by everywhere else.
-    """
-    name = get_name(manifest)
-    if name:
-        return name
-    origin = _origin_repo_name(repo_path)
-    if origin:
-        return origin
-    return repo_path.name
-
-
-def _origin_repo_name(repo_path: Path) -> str | None:
-    """Return the repository name from the `origin` remote, or None."""
-    import subprocess
-    try:
-        res = subprocess.run(
-            ["git", "-C", str(repo_path), "remote", "get-url", "origin"],
-            capture_output=True, text=True, timeout=5,
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return None
-    if res.returncode != 0:
-        return None
-    url = res.stdout.strip().rstrip("/")
-    if not url:
-        return None
-    tail = url.rsplit("/", 1)[-1].rsplit(":", 1)[-1]
-    if tail.endswith(".git"):
-        tail = tail[:-4]
-    return tail or None
-
-
-def get_required_apis(manifest: dict) -> list:
-    """Return required GCP APIs from the manifest."""
-    return manifest.get("prerequisites", {}).get("apis", [])
+"""The settings a deploy reads, in the shape the deploy code takes them
+(`settings.as_manifest` makes it): variables as one list, sizing under
+`service`, extra APIs under `prerequisites`."""
 
 
 def get_service_config(manifest: dict) -> dict:
@@ -177,8 +58,7 @@ def resolve_env_vars(env_list: list[dict], gapp_vars: dict) -> list[dict]:
             def replacer(m):
                 var_name = m.group(1)
                 if var_name not in GAPP_VARIABLES:
-                    raise ValueError(f"Unknown gapp variable: {{{{{var_name}}}}}. "
-                                     f"Valid: {', '.join(sorted(GAPP_VARIABLES))}")
+                    raise ValueError(f"Unknown gapp variable: {{{{{var_name}}}}}.")
                 if var_name not in gapp_vars:
                     raise ValueError(f"gapp variable {{{{{var_name}}}}} not available in this context.")
                 return gapp_vars[var_name]

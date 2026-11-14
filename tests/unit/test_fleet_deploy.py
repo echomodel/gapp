@@ -17,6 +17,7 @@ from gapp.admin.sdk.definitions import Refused
 
 PROJECT = "my-project"
 BUCKET = "gapp-my-app-my-project"
+REAL_VALIDATE, REAL_MATERIALIZE = secrets.validate_declared_secrets, secrets.materialize_generated_secrets
 
 
 def git(path, *args):
@@ -257,6 +258,162 @@ def test_the_label_is_written_only_after_the_deploy_succeeds(sdk, cloud, monkeyp
     with pytest.raises(RuntimeError):
         sdk.deploy_definition()
     assert not cloud.label_writes
+
+
+# --- what Terraform is given ---
+
+
+@pytest.mark.parametrize("key", ["project_id", "service_name", "image", "memory", "cpu", "max_instances", "env",
+                                 "secrets", "public", "custom_domain", "data_bucket", "labels"])
+def test_every_variable_the_service_module_requires_is_passed(sdk, cloud, key):
+    """The module declares these with no default, so a deploy that drops
+    one fails at plan instead of deploying without, say, its data volume."""
+    sdk.deploy_definition()
+    assert key in cloud.last_tfvars
+    assert cloud.last_tfvars["labels"] == {"gapp-deployment": "my-app",
+                                           "gapp-version": settings.version_label(__version__)}
+
+
+# --- secrets at deploy ---
+
+
+@pytest.fixture
+def secret_calls(monkeypatch, clone):
+    """The real secret checks of a deploy, with Secret Manager stood in for.
+    `present` holds the ids of the secrets the project already has."""
+    monkeypatch.setattr(secrets, "validate_declared_secrets", REAL_VALIDATE)
+    monkeypatch.setattr(secrets, "materialize_generated_secrets", REAL_MATERIALIZE)
+    calls = {"present": set(), "made": [], "versions": []}
+    monkeypatch.setattr(secrets, "list_secrets_by_label", lambda project, id: [{"id": i} for i in calls["present"]])
+    monkeypatch.setattr(secrets, "_ensure_secret", lambda project, secret_id, id: calls["made"].append(secret_id) or "created")
+    monkeypatch.setattr(secrets, "_add_secret_version",
+                        lambda project, secret_id, value: calls["versions"].append((secret_id, len(value))))
+    monkeypatch.setattr(secrets, "_classify_unlabeled", lambda project, secret_id: {"kind": "missing"})
+    return calls
+
+
+def test_a_generated_secret_is_made_at_the_first_deploy_with_a_value_no_one_sees(sdk, cloud, secret_calls):
+    definitions.env_set("SIGNING_KEY", secret="", generate=True, deployment="my-app")
+    sdk.deploy_definition()
+    assert secret_calls["made"] == ["my-app-signing-key"] and secret_calls["versions"] == [("my-app-signing-key", 32)]
+    assert cloud.last_tfvars["secrets"] == {"SIGNING_KEY": "my-app-signing-key"}
+
+
+def test_a_generated_secret_that_exists_is_never_written_again(sdk, cloud, secret_calls):
+    definitions.env_set("SIGNING_KEY", secret="", generate=True, deployment="my-app")
+    secret_calls["present"].add("my-app-signing-key")
+    sdk.deploy_definition()
+    assert secret_calls["made"] == [] and secret_calls["versions"] == []
+    assert cloud.last_tfvars["secrets"] == {"SIGNING_KEY": "my-app-signing-key"}
+
+
+def test_a_secret_with_no_value_stops_the_deploy_before_terraform(sdk, cloud, secret_calls):
+    definitions.env_set("API_TOKEN", secret="", deployment="my-app")
+    with pytest.raises(RuntimeError, match="api-token"):
+        sdk.deploy_definition()
+    assert cloud.last_tfvars is None and not cloud.label_writes
+
+
+# --- the custom domain is never taken down by accident ---
+#
+# Terraform replaces a changed domain mapping by destroying the old one
+# first, so a typo or a removed `domain` would take the live domain down. A
+# deploy refuses those before any build or apply unless told to replace
+# it, and refuses a domain the deploying identity has not verified.
+
+
+@pytest.fixture
+def builds(sdk, cloud, monkeypatch):
+    count = {"n": 0}
+    real = cloud.submit_build_sync
+
+    def counting(*args, **kwargs):
+        count["n"] += 1
+        return real(*args, **kwargs)
+    monkeypatch.setattr(cloud, "submit_build_sync", counting)
+    monkeypatch.setattr(cloud, "image_exists", lambda *a, **k: False)
+    return count
+
+
+def live_domain(cloud, domain):
+    cloud.buckets[BUCKET] = {"project": PROJECT, "labels": {"gapp-version": settings.version_label(__version__)}}
+    cloud.tf_outputs[(BUCKET, "terraform/state")] = {"service_url": "https://my-app.a.run.app", "custom_domain": domain}
+
+
+def test_replacing_a_live_domain_is_refused_before_anything_is_built(sdk, cloud, builds):
+    live_domain(cloud, "mcp.example.net")
+    cloud.verified_domains.add("example.com")
+    definitions.set_value("domain", "mcp.example.com", deployment="my-app")
+    with pytest.raises(RuntimeError, match="replace the live domain mapping") as caught:
+        sdk.deploy_definition()
+    text = str(caught.value)
+    assert "mcp.example.net" in text and "mcp.example.com" in text and "--replace-domain" in text
+    assert text.endswith("gapp set domain mcp.example.net")
+    assert builds["n"] == 0 and cloud.last_tfvars is None
+
+
+def test_removing_a_live_domain_is_refused_before_anything_is_built(sdk, cloud, builds):
+    live_domain(cloud, "mcp.example.com")
+    with pytest.raises(RuntimeError, match="remove the live domain mapping mcp.example.com") as caught:
+        sdk.deploy_definition()
+    assert str(caught.value).endswith("gapp set domain mcp.example.com")
+    assert builds["n"] == 0 and cloud.last_tfvars is None
+
+
+def test_replace_domain_allows_the_change_and_the_removal(sdk, cloud, builds):
+    live_domain(cloud, "mcp.example.net")
+    cloud.verified_domains.add("example.com")
+    definitions.set_value("domain", "mcp.example.com", deployment="my-app")
+    sdk.deploy_definition(replace_domain=True)
+    assert cloud.last_tfvars["custom_domain"] == "mcp.example.com"
+    definitions.unset_value("domain", deployment="my-app")
+    sdk.deploy_definition(replace_domain=True)
+    assert cloud.last_tfvars["custom_domain"] == ""
+
+
+def test_a_domain_the_identity_has_not_verified_is_refused_before_anything_is_built(sdk, cloud, builds):
+    cloud.verified_domains.add("example.net")
+    definitions.set_value("domain", "mcp.example.com", deployment="my-app")
+    with pytest.raises(RuntimeError, match="not verified ownership of mcp.example.com") as caught:
+        sdk.deploy_definition()
+    text = str(caught.value)
+    assert "gcloud domains verify example.com" in text and "gapp-deploy@" in text and "verified owner" in text
+    assert builds["n"] == 0 and cloud.last_tfvars is None
+
+
+def test_a_domain_verified_at_a_parent_is_accepted(sdk, cloud, builds):
+    cloud.verified_domains.add("example.com")
+    definitions.set_value("domain", "mcp.app.example.com", deployment="my-app")
+    sdk.deploy_definition()
+    assert cloud.last_tfvars["custom_domain"] == "mcp.app.example.com"
+
+
+def test_a_redeploy_that_keeps_the_domain_needs_no_verification_and_no_flag(sdk, cloud, builds):
+    """The mapping is untouched, so an identity that never verified the
+    domain (a runner's deploy identity, say) can still redeploy."""
+    live_domain(cloud, "mcp.example.com")
+    definitions.set_value("domain", "mcp.example.com", deployment="my-app")
+    sdk.deploy_definition()
+    assert cloud.last_tfvars["custom_domain"] == "mcp.example.com"
+
+
+def test_state_that_cannot_be_read_is_never_taken_for_no_live_domain(sdk, cloud, builds):
+    live_domain(cloud, "mcp.example.com")
+    cloud.unreadable_state.add((BUCKET, "terraform/state"))
+    with pytest.raises(RuntimeError, match="Refusing to deploy 'my-app': its Terraform state could not be read") as caught:
+        sdk.deploy_definition(replace_domain=True)          # not even the flag gets past an unknown state
+    assert "Nothing was built or changed" in str(caught.value) and BUCKET in str(caught.value)
+    assert builds["n"] == 0 and cloud.last_tfvars is None
+
+
+def test_a_domain_counts_as_verified_at_itself_or_a_parent_only():
+    from gapp.admin.sdk.core import _domain_is_verified
+    assert _domain_is_verified("mcp.example.com", ["example.com"])
+    assert _domain_is_verified("mcp.example.com", ["MCP.example.com."])
+    assert _domain_is_verified("a.b.example.com", ["b.example.com"])
+    assert not _domain_is_verified("mcp.example.com", ["ample.com"])      # not a label boundary
+    assert not _domain_is_verified("mcp.example.com", ["mcp.example.com.au"])
+    assert not _domain_is_verified("mcp.example.com", [])
 
 
 # --- project setup and list ---

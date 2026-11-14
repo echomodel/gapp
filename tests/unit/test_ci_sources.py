@@ -63,7 +63,7 @@ def test_sources_without_an_owner_a_bad_action_or_gh_are_refused(gh, monkeypatch
 
 def test_sources_are_refused_when_the_fleet_is_not_in_a_github_repo(gh):
     from gapp.admin.sdk import config as config_mod
-    config_mod.set_fleet_repo(None, "fleet use")
+    config_mod.set_fleet_repo(None)
     res = ci_mod.manage_sources("list")
     assert res["ok"] is False and res["refused"] is True and res["next_step"]["action"] == "fleet use"
     assert "gapp fleet use <owner>/<repo>" in res["next_step"]["hint"]

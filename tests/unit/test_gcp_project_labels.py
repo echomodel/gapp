@@ -84,20 +84,6 @@ def test_label_write_failure_raises(provider, monkeypatch):
         provider.set_project_labels("my-proj", {"gapp__my-app": "v-3"})
 
 
-def test_project_listing_failure_raises_with_gcloud_stderr(provider, monkeypatch):
-    monkeypatch.setattr(provider, "_run_gcloud", lambda args, **kw: _proc(
-        1, "", "ERROR: (gcloud.projects.list) There was a problem refreshing your current auth tokens: "
-               "Reauthentication failed. Please run `gcloud auth login`."))
-    with pytest.raises(CloudAccessError, match="Reauthentication failed"):
-        provider.list_projects(filter_query="labels:gapp__my-app")
-
-
-def test_project_listing_success_returns_projects(provider, monkeypatch):
-    monkeypatch.setattr(provider, "_run_gcloud", lambda args, **kw: _proc(
-        0, json.dumps([{"projectId": "my-proj", "labels": {"gapp__my-app": "v-3"}}])))
-    assert provider.list_projects()[0]["projectId"] == "my-proj"
-
-
 def test_token_failure_raises_with_gcloud_stderr(monkeypatch):
     p = GCPProvider(account="deployer@example.com")
     monkeypatch.setattr(p, "_run_gcloud", lambda args, **kw: _proc(
