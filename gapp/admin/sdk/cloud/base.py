@@ -31,7 +31,7 @@ def ci_identity_hint(account: Optional[str] = None, project_id: Optional[str] = 
     project = project_id or "<project>"
     return (
         f"This is a CI run as {who}, so signing in again does not apply: the error above names what "
-        f"it lacks. `gapp ci project setup {project}` grants the deploy identity its roles; run it as "
+        f"it lacks. `gapp ci projects connect {project}` grants the deploy identity its roles; run it as "
         f"a project Owner, then deploy again."
     )
 
