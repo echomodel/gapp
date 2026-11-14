@@ -525,7 +525,7 @@ string. Two derived locations track it:
 
 ### Release workflow
 
-A release is one local prep command plus two publish steps. The local
+A release is one local prep command, a merge, and a reinstall. The local
 prep is automated via `scripts/release.py` so the version files can
 never drift and the test suite is never skipped.
 
@@ -564,10 +564,22 @@ This script:
 If anything fails, the script aborts before tagging. Re-run after
 fixing.
 
-#### 2. Push the commit and the tag
+#### 2. Get the commit onto main; the tag follows
+
+Merge the release's pull request (or push the commit to `main`). The
+`Tag release` workflow (`.github/workflows/tag-release.yml`) runs when
+`gapp/__init__.py` changes on `main`: it tags that commit `v<version>`
+and publishes a GitHub release for it, marked a pre-release for an rc. It
+does nothing when the tag already exists. Nobody types or pushes a tag,
+so a release can be finished from a phone or from a session that cannot
+push tags. When the release goes through a pull request, delete the
+local tag `scripts/release.py` made (`git tag -d vX.Y.Z`): the workflow
+tags the merge commit.
+
+To tag by hand instead, push the tag before the commit reaches `main`:
 
 ```bash
-git push origin main && git push origin vX.Y.Z
+git push origin vX.Y.Z && git push origin main
 ```
 
 Every released version gets a tag; untagged versions break pinned
