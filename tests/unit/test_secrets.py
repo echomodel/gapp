@@ -230,7 +230,7 @@ def test_validate_conflict_secret_names_other_owner():
             validate_declared_secrets("proj-x", "my-app", manifest)
     msg = str(exc.value)
     assert "labeled for solution 'other-app'" in msg
-    assert "rename in gapp.yaml" in msg
+    assert "give the secret another name (gapp manifest env set <ENV_VAR> --secret <new-name>)" in msg
 
 
 # -- list_secrets statuses + hints --
@@ -445,8 +445,9 @@ def test_list_secrets_conflict_hint_full_structure(tmp_path, monkeypatch):
     assert "another-app" in hint["message"]
     assert len(hint["options"]) == 2
     rename_opt, relabel_opt = hint["options"]
-    assert "rename" in rename_opt["label"].lower()
-    assert "edit gapp.yaml" in rename_opt["command"]
+    assert "another name" in rename_opt["label"]
+    assert rename_opt["command"].startswith("gapp manifest env set ") and "--secret <new-name>" in rename_opt["command"]
+    assert "edit gapp.yaml" not in rename_opt["command"]
     assert "Re-label" in relabel_opt["label"]
     assert "gcloud secrets update my-app-api-token" in relabel_opt["command"]
     assert "--update-labels=gapp-solution=my-app" in relabel_opt["command"]
@@ -479,6 +480,11 @@ def test_list_secrets_orphan_hint_full_structure(tmp_path, monkeypatch):
     assert "Delete" in delete_opt["label"]
     assert "gcloud secrets delete my-app-stale-key" in delete_opt["command"]
     assert "--project=my-project" in delete_opt["command"]
+    declare_opt = hint["options"][1]
+    assert hint["message"] == ("Secret 'my-app-stale-key' is labeled for solution 'my-app' but 'my-app' no longer "
+                               "declares it. No deployed env var reads it.")
+    assert declare_opt["command"] == "gapp manifest env set <ENV_VAR> --secret stale-key"
+    assert "gapp.yaml" not in hint["message"] + declare_opt["label"] + declare_opt["command"]
 
 
 # -- CLI rendering --
