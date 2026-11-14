@@ -57,16 +57,11 @@ def _guard(fn):
 
 def _load() -> tuple[fleetstore.Location, dict]:
     where = fleetstore.location()
-    if where.kind != "local":
-        raise Refused(
-            f"Your fleet is kept in {where.repo} on GitHub. This command does not work on a GitHub fleet yet; "
-            f"it changes a fleet kept on this machine."
-        )
     return where, fleetstore.read(where)
 
 
-def _save(where: fleetstore.Location, deployments: dict) -> None:
-    fleetstore.write_local(deployments, where)
+def _save(where: fleetstore.Location, deployments: dict, message: str = "gapp: change the fleet") -> None:
+    fleetstore.write(deployments, where, message)
 
 
 def which(deployments: dict, deployment: str | None, cwd: Path | None, command: str) -> str:
@@ -151,7 +146,7 @@ def add(name: str | None = None, *, project: str | None = None, repo: str | None
         copied.pop("domain", None)
         definition["settings"] = copied
     deployments[name] = definition
-    _save(where, deployments)
+    _save(where, deployments, f"gapp: add {name}")
     return _result(name, [{"key": "deployment", "before": "not defined", "after": "defined"}], where,
                    definition=definition, copied_from=copy_of)
 
@@ -176,7 +171,7 @@ def rename(old: str, new: str) -> dict:
     if new in deployments:
         raise Refused(f"'{new}' is already a deployment. Pick another name.")
     renamed = {(new if n == old else n): d for n, d in deployments.items()}
-    _save(where, renamed)
+    _save(where, renamed, f"gapp: rename {old} to {new}")
     return _result(new, [{"key": "name", "before": old, "after": new}], where)
 
 
@@ -230,7 +225,7 @@ def upgrade(deployment: str | None = None, *, cwd: Path | None = None) -> dict:
             f"--deployment {name}`, then come back to this one."
         )
     definition["gapp"] = __version__
-    _save(where, deployments)
+    _save(where, deployments, f"gapp: upgrade {name} to gapp {__version__}")
     return _result(name, [{"key": "gapp", "before": recorded, "after": __version__}], where,
                    plan={"definition": [], "next_deploy": [], "by_hand": []})
 
@@ -249,7 +244,7 @@ def _open(deployment: str | None, cwd: Path | None, command: str) -> tuple:
 def _close(where, deployments, name, definition, new_settings: dict, changes: list[dict]) -> dict:
     if changes:
         definition["settings"] = settings_mod.validate(new_settings)
-        _save(where, deployments)
+        _save(where, deployments, "gapp: change " + ", ".join(c["key"] for c in changes) + f" on {name}")
     return _result(name, changes, where)
 
 
@@ -264,7 +259,7 @@ def set_value(key: str, value: str, *, deployment: str | None = None, cwd: Path 
         if before == new:
             return _result(name, [], where)
         definition[key] = new
-        _save(where, deployments)
+        _save(where, deployments, f"gapp: set {key} on {name}")
         return _result(name, [{"key": key, "before": before or "not set", "after": new}], where)
     if key in ("id", "project", "gapp"):
         raise Refused(_fixed(key, name))
@@ -292,7 +287,7 @@ def unset_value(key: str, *, deployment: str | None = None, cwd: Path | None = N
         if "ref" not in definition:
             return _result(name, [], where)
         before = definition.pop("ref")
-        _save(where, deployments)
+        _save(where, deployments, f"gapp: unset ref on {name}")
         return _result(name, [{"key": "ref", "before": before, "after": "the repo's default branch"}], where)
     if key in ("id", "project", "gapp", "repo"):
         raise Refused(f"A deployment's {key} cannot be cleared.")

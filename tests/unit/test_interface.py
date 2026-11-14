@@ -27,7 +27,7 @@ PAGE = (ROOT / "docs" / "INTERFACE.md").read_text()
 # In the page, not built yet.
 PENDING = {
     "ci projects connect", "ci projects list",
-    "fleet use", "fleet export", "fleet import",
+    "fleet export", "fleet import",
     "config profile list", "config profile use", "config profile add",
     "config profile remove", "config profile rename",
 }
@@ -49,7 +49,7 @@ DIFFERENT = {
 }
 
 MCP_PENDING = {
-    "gapp_ci_projects", "gapp_fleet_use", "gapp_fleet_export",
+    "gapp_ci_projects", "gapp_fleet_export",
     "gapp_fleet_import",
 }
 

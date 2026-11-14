@@ -1065,8 +1065,8 @@ def fleet_group(ctx, json_out):
     \b
     Your fleet is the record of your deployments: for each, its name, the
     repo it runs, its project and its settings. It lives in one place: a
-    file on this machine, or a GitHub repo once you set one with
-    `gapp ci init`. There is never a second copy.
+    file on this machine, or a repo once you choose one with
+    `gapp fleet use`. There is never a second copy.
     """
     if ctx.invoked_subcommand is not None:
         return
@@ -1084,6 +1084,51 @@ def fleet_group(ctx, json_out):
                else f"It holds {count} deployment{'' if count == 1 else 's'}.")
     if result["backup"]:
         click.echo(f"The copy from before its last change: {result['backup']}")
+
+
+@fleet_group.command("use")
+@click.argument("target")
+@click.option("--create", is_flag=True, help="Make the repo on GitHub first, private, when it is not there.")
+@click.option("--json", "json_out", is_flag=True, help="Machine-readable output.")
+def fleet_use_cmd(target, create, json_out):
+    """Move your fleet to a repo, or back to this machine.
+
+    \b
+    gapp fleet use owner/my-fleet     keep it in that repo, as gapp.yaml at its root
+    gapp fleet use local              keep it in a file on this machine
+    TARGET is owner/repo on GitHub, host/path on another git host, or a git
+    address. The fleet is carried across when the place it is going holds
+    none. Each later change is one commit to that file. Nothing else is
+    put in the repo, and no CI is set up.
+    """
+    from gapp.admin.sdk import fleetstore
+    from gapp.admin.sdk.fleet import FleetRefusal
+    try:
+        result = fleetstore.use(target, create=create)
+    except FleetRefusal as e:
+        if json_out:
+            click.echo(json_mod.dumps({"refused": True, "message": e.message}, indent=2))
+        else:
+            click.echo(e.message, err=True)
+        raise SystemExit(2)
+    except fleetstore.FleetUnavailable as e:
+        click.echo(f"  Error: {e}", err=True)
+        raise SystemExit(1)
+    if json_out:
+        click.echo(json_mod.dumps(result, indent=2, default=str))
+        return
+    if not result["moved"]:
+        click.echo(f"Your fleet is already kept in {result['where']}.")
+        return
+    if result["created"]:
+        click.echo("The repo was created, private.")
+    count = result["deployments"]
+    click.echo(f"Your fleet is now kept in {result['where']}.")
+    click.echo("It holds no deployments yet." if not count
+               else f"It holds {count} deployment{'' if count == 1 else 's'}"
+                    + (", carried across." if result.get("carried") else "."))
+    if result.get("backup"):
+        click.echo(f"The file it was in is kept as {result['backup']}.")
 
 
 # --- definitions and their settings (the fleet; no cloud) ---

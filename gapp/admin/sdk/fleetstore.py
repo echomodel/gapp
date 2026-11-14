@@ -1,19 +1,19 @@
 """Where the fleet lives, and reading and writing it there.
 
-The fleet is the set of deployment definitions (`fleet.py` holds their
-shape and rules). It lives in exactly one place for a profile:
+The fleet is the set of deployment definitions, kept in the entry file
+(`entryfile.py`). It lives in exactly one place for a profile:
 
-- a file on this machine, the default, in the entry file's shape
-  (`entryfile.py`); or
-- a GitHub repo, once one is set (`gapp ci init`), at `gapp/deployments.yaml`.
+- a file on this machine, the default; or
+- a git repo, once one is set (`gapp fleet use`), as `gapp.yaml` at its
+  root (`fleetrepo.py`).
 
 There is never a second copy, so nothing here syncs. Which of the two it
 is comes from one explicit setting, the profile's fleet repo; nothing is
 detected.
 
-A local fleet is changed here: the file is replaced, and the copy it
-replaces is kept beside it. A GitHub fleet is read here and changed by a
-run in that repo (`gapp ci setup`), which records each change as a commit.
+A local fleet is changed by replacing the file, keeping the copy it
+replaces beside it. A fleet in a repo is changed by one commit, pushed.
+Neither involves CI.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from gapp.admin.sdk import entryfile, fleet
+from gapp.admin.sdk import entryfile, fleetrepo
 from gapp.admin.sdk.config import get_active_profile, get_config_dir, get_fleet_repo
 from gapp.admin.sdk.entryfile import EntryFileRefusal
 from gapp.admin.sdk.fleet import FleetRefusal
@@ -48,7 +48,7 @@ class Location:
 
     def describe(self) -> str:
         if self.kind == "github":
-            return f"{self.repo} on GitHub ({fleet.DEPLOYMENTS_FILE})"
+            return f"{self.repo} ({entryfile.FILE_NAME})"
         return f"a file on this machine ({self.path})"
 
 
@@ -79,19 +79,12 @@ def read(where: Location | None = None) -> dict:
             raise FleetUnavailable(_local_unreadable(where, e.message)) from e
         except OSError as e:
             raise FleetUnavailable(f"Your fleet file {where.path} could not be read: {e}.") from e
-    from gapp.admin.sdk import ci
-    doc, rd = ci._load_fleet(where.repo)
-    if doc is not None:
-        return doc
-    if rd.absent:
-        raise FleetUnavailable(
-            f"{where.repo} has no {fleet.DEPLOYMENTS_FILE}, so your fleet there holds nothing yet. "
-            f"Install gapp's files in it: gapp ci init {where.repo}"
-        )
-    raise FleetUnavailable(
-        f"Your fleet is kept in {where.repo} on GitHub, and it could not be read: {rd.note} "
-        f"Nothing was assumed about what it holds."
-    )
+    try:
+        return entryfile.parse(fleetrepo.read_text(where.repo), f"{entryfile.FILE_NAME} in {where.repo}")["deployments"]
+    except EntryFileRefusal as e:
+        raise FleetUnavailable(e.message) from e
+    except fleetrepo.FleetRepoError as e:
+        raise FleetUnavailable(f"{e} Nothing was assumed about what it holds.") from e
 
 
 def _local_unreadable(where: Location, why: str) -> str:
@@ -101,18 +94,28 @@ def _local_unreadable(where: Location, why: str) -> str:
     return text
 
 
-def write_local(doc: dict, where: Location | None = None) -> Path | None:
-    """Replace the local fleet with `doc`. The file it replaces is kept
+def write(doc: dict, where: Location | None = None, message: str = "gapp: change the fleet") -> Path | None:
+    """Replace the fleet's deployments with `doc`.
+
+    A local fleet: the file is replaced, and the one it replaces is kept
     beside it as the backup, whose path is returned (None for the first
-    write). Refuses a GitHub fleet: that is changed by a run in its repo."""
+    write). A fleet in a repo: one commit with `message`, pushed.
+    Top-level keys this gapp does not know are kept either way, and a file
+    this gapp cannot read is never written over.
+    """
     where = where or location()
-    if where.kind != "local":
-        raise FleetUnavailable(
-            f"Your fleet is kept in {where.repo} on GitHub, not on this machine. "
-            f"Change it there with `gapp ci setup`."
-        )
     if not isinstance(doc, dict) or not all(isinstance(entry, dict) for entry in doc.values()):
         raise FleetRefusal("bad-file", "A fleet is a mapping of deployment names to their definitions.")
+    if where.kind != "local":
+        try:
+            whole = entryfile.parse(fleetrepo.read_text(where.repo), f"{entryfile.FILE_NAME} in {where.repo}")
+            whole["deployments"] = doc
+            fleetrepo.write_text(where.repo, entryfile.dump(whole), message)
+        except EntryFileRefusal as e:
+            raise FleetUnavailable(e.message) from e
+        except fleetrepo.FleetRepoError as e:
+            raise FleetUnavailable(str(e)) from e
+        return None
     whole = entryfile.empty()
     if where.path.exists():
         try:
@@ -135,6 +138,60 @@ def write_local(doc: dict, where: Location | None = None) -> Path | None:
             os.replace(backup, where.path)              # leave the fleet as it was
         raise
     return backup
+
+
+write_local = write
+
+
+def use(target: str, *, create: bool = False) -> dict:
+    """Move the fleet: to a repo, or back to this machine with "local".
+
+    The fleet is carried across when the place it is going holds none.
+    When both hold deployments the move is refused: there is never a
+    second copy, and gapp does not merge two fleets.
+    """
+    from gapp.admin.sdk.config import set_fleet_repo
+    now = location()
+    target = (target or "").strip()
+    if not target:
+        raise FleetRefusal("invalid-input", "Say where: gapp fleet use <owner>/<repo>, or gapp fleet use local.")
+    then = Location("local", path=local_path()) if target == "local" else Location("github", repo=fleetrepo.normalize(target))
+    if (now.kind, now.repo) == (then.kind, then.repo):
+        return {"moved": False, "where": now.describe(), "deployments": len(read(now)), "created": False}
+    created = False
+    if create and then.kind == "github":
+        created = _create_repo(then.repo)
+    here = read(now)
+    there = read(then)
+    if here and there:
+        raise FleetRefusal("two-fleets", (
+            f"Both hold deployments: {now.describe()} has {len(here)} and {then.describe()} has {len(there)}. "
+            f"gapp does not merge two fleets. Empty one of them first, or keep using the one you have."
+        ))
+    if here:
+        write(here, then, "gapp: the fleet moves here")
+    set_fleet_repo(then.repo if then.kind == "github" else None, "fleet use")
+    if here and now.kind == "local" and now.path.exists():
+        os.replace(now.path, now.backup_path)            # the fleet is in one place; keep the old file as a backup
+    return {"moved": True, "where": then.describe(), "deployments": len(here or there), "created": created,
+            "carried": bool(here), "backup": str(now.backup_path) if here and now.kind == "local" else None}
+
+
+def _create_repo(repo: str) -> bool:
+    """Make the repo on GitHub when it is not there, private. True when it was made."""
+    import subprocess
+    if "/" not in repo or "." in repo.split("/", 1)[0]:
+        raise FleetRefusal("invalid-input", "--create makes a repo on GitHub, so it takes <owner>/<repo>.")
+    try:
+        seen = subprocess.run(["gh", "repo", "view", repo], capture_output=True, text=True)
+        if seen.returncode == 0:
+            return False
+        made = subprocess.run(["gh", "repo", "create", repo, "--private"], capture_output=True, text=True)
+    except FileNotFoundError as e:
+        raise FleetUnavailable("--create needs the GitHub CLI (`gh`), which is not installed.") from e
+    if made.returncode != 0:
+        raise FleetUnavailable(f"{repo} could not be created: {(made.stderr or made.stdout).strip()}")
+    return True
 
 
 def describe_fleet() -> dict:

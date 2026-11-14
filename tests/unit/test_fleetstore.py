@@ -75,34 +75,6 @@ def test_a_document_that_would_not_read_back_is_refused_and_the_fleet_is_untouch
     assert not fleetstore.location().backup_path.exists()
 
 
-def test_with_a_fleet_repo_set_the_fleet_is_that_repo_and_is_read_from_it(fleet_repo, fake_gh):
-    fake_gh.deploy(fleet_repo, "my-app", "me/my-app", "my-proj")
-    where = fleetstore.location()
-    assert where.kind == "github" and where.repo == fleet_repo and where.path is None
-    doc = fleetstore.read()
-    assert list(doc) == ["my-app"] and doc["my-app"]["repo"] == "me/my-app"
-    assert not fake_gh.puts and not fake_gh.dispatched
-
-
-def test_a_github_fleet_is_never_written_from_here(fleet_repo):
-    with pytest.raises(FleetUnavailable, match="Change it there with `gapp ci setup`"):
-        fleetstore.write_local({"my-app": ENTRY})
-    assert not fleetstore.local_path().exists()
-
-
-def test_a_github_fleet_that_cannot_be_read_is_an_error_not_an_empty_fleet(fleet_repo, fake_gh):
-    fake_gh.unreadable.add(fleet_repo)
-    with pytest.raises(FleetUnavailable) as exc:
-        fleetstore.read()
-    assert "could not be read" in str(exc.value) and "Nothing was assumed" in str(exc.value)
-
-
-def test_a_github_fleet_with_no_deployments_file_says_how_to_install_it(fleet_repo, fake_gh):
-    del fake_gh.files[(fleet_repo, fleetstore.fleet.DEPLOYMENTS_FILE)]
-    with pytest.raises(FleetUnavailable, match=f"gapp ci init {fleet_repo}"):
-        fleetstore.read()
-
-
 def test_cli_fleet_says_where_a_local_fleet_is_and_what_it_holds(local_machine):
     out = CliRunner().invoke(main, ["fleet"]).output
     assert out == (f"Your fleet is kept in a file on this machine ({fleetstore.local_path()}).\n"
@@ -112,19 +84,6 @@ def test_cli_fleet_says_where_a_local_fleet_is_and_what_it_holds(local_machine):
     out = CliRunner().invoke(main, ["fleet"]).output
     assert "It holds 1 deployment.\n" in out
     assert f"The copy from before its last change: {fleetstore.location().backup_path}\n" in out
-
-
-def test_cli_fleet_names_the_github_repo(fleet_repo, fake_gh):
-    fake_gh.deploy(fleet_repo, "a", "me/a", "p")
-    fake_gh.deploy(fleet_repo, "b", "me/b", "p")
-    out = CliRunner().invoke(main, ["fleet"]).output
-    assert out == "Your fleet is kept in acme/fleet on GitHub (gapp/deployments.yaml).\nIt holds 2 deployments.\n"
-
-
-def test_cli_fleet_fails_when_the_fleet_cannot_be_read(fleet_repo, fake_gh):
-    fake_gh.unreadable.add(fleet_repo)
-    res = CliRunner().invoke(main, ["fleet"])
-    assert res.exit_code == 1 and "could not be read" in res.output
 
 
 def test_the_mcp_tool_returns_the_same_description(local_machine):
