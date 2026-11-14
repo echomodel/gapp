@@ -203,74 +203,63 @@ def setup_cmd(sdk: GappSDK, project):
         click.echo()
 
 
-@main.command()
-@click.option("--ref", default=None, hidden=True)
-@click.option("--project", help="Explicit GCP Project ID override.")
-@click.option("--dry-run", is_flag=True, help="Preview deployment.")
-@click.option("--rebuild", is_flag=True, help="Force docker build even if an image already exists for the resolved SHA.")
-@click.option(
-    "--replace-domain", is_flag=True,
-    help="Allow this deploy to replace or remove the live custom domain mapping. "
-         "Without it, a deploy whose domain differs from the mapped one is refused.",
-)
+@main.command("deploy")
+@click.option("--deployment", "-d", "deployment", default=None, metavar="NAME",
+              help="The deployment. Left out inside a clone: the one this repo has.")
+@click.option("--dry-run", is_flag=True, help="Say what a deploy would do, and build and change nothing.")
+@click.option("--rebuild", is_flag=True, help="Build the image even if one exists for this commit.")
+@click.option("--replace-domain", is_flag=True,
+              help="Allow the deploy to replace or remove the live custom domain. The old domain stops serving.")
+@click.option("--upgrade", is_flag=True,
+              help="Apply a pending gapp upgrade. Required when one is pending, refused when none is.")
+@click.option("--json", "json_out", is_flag=True, help="Machine-readable output.")
 @click.pass_obj
-def deploy(sdk: GappSDK, ref, project, dry_run, rebuild, replace_domain):
-    """Build the image with Cloud Build and apply Terraform; prints the service URL.
+def deploy(sdk: GappSDK, deployment, dry_run, rebuild, replace_domain, upgrade, json_out):
+    """Build a deployment's ref from this clone and deploy it. Prints the URL.
 
-    Builds the commit this clone is on. Needs a gcloud login, terraform
-    on PATH, and a clean git tree: the build ships `git archive HEAD`, so
-    uncommitted changes never deploy.
-    An image already built for this commit is reused. To deploy without
-    gcloud or terraform on this machine, use the CI system instead
-    (`gapp ci setup` once, then `gapp ci deploy`); a solution is deployed
-    by one system or the other.
-
-    A custom domain is guarded: the deploy stops before Terraform when the
-    domain is not verified by the deploying identity, or when it would
-    replace or remove a live mapping and --replace-domain is not given.
+    \b
+    Run it in a clone of the deployment's repo, checked out at what its
+    definition builds. What it deploys comes from the definition:
+      gapp show         the definition and its settings
+      gapp set ref ...  what it builds
+    Once per project first: gapp project setup <project>
     """
-    from gapp.admin.sdk.cloud.base import on_ci_runner
-    if ref and not on_ci_runner():
-        click.echo("  Error: `gapp deploy` takes no --ref: it builds the commit this clone is on. Check out what "
-                   "you want built and deploy again. Through your fleet, what a deploy builds is the "
-                   "deployment's ref: gapp ci setup <name> ... --ref <ref> --update, then gapp ci deploy <name>.",
-                   err=True)
-        raise SystemExit(2)
+    from gapp.admin.sdk.definitions import Refused
     try:
-        result = sdk.deploy(
-            ref=ref, dry_run=dry_run, project_id=project,
-            rebuild=rebuild, replace_domain=replace_domain,
-        )
+        result = sdk.deploy_definition(deployment, dry_run=dry_run, rebuild=rebuild,
+                                       replace_domain=replace_domain, upgrade=upgrade)
+    except Refused as e:
+        if json_out:
+            click.echo(json_mod.dumps({"refused": True, "message": e.message}, indent=2))
+        else:
+            click.echo(e.message, err=True)
+        raise SystemExit(2)
     except (RuntimeError, ValueError) as e:
         first, _, rest = str(e).partition("\n")
         click.echo(f"  Error: {first}", err=True)
         for line in rest.splitlines():
             click.echo(f"  {line}", err=True)
         raise SystemExit(1)
-
-    if dry_run:
-        click.echo()
-        click.echo("  DRY RUN: Project Deployment Preview")
-        click.echo(f"    Deployment:  {result['name']}")
-        click.echo(f"    Labels:      {result['labels']}")
-        if result["project_id"]:
-            click.echo(f"    Project:     {result['project_id']}")
-        if result["bucket"]:
-            click.echo(f"    GCS Bucket:  gs://{result['bucket']}/")
-        click.echo(f"    Status:      {result['status'].upper()}")
-        if result.get("start_problem"):
-            first, _, rest = result["start_problem"].partition("\n")
-            click.echo(f"\n  Not deployable yet: {first}")
-            for line in rest.splitlines():
-                click.echo(f"  {line}")
-        if result.get("services"):
-            click.echo("\n  Services to deploy:")
-            for svc in result["services"]:
-                click.echo(f"    + {svc['name']} (from ./{svc['path']})")
-        click.echo()
+    if json_out:
+        click.echo(json_mod.dumps(result, indent=2, default=str))
         return
-
-    click.echo("  Deployed successfully.")
+    builds = f"{result['ref'] or 'the default branch'} at {result['commit']}"
+    if dry_run:
+        click.echo(f"{result['deployment']} would deploy to {result['project']}, building {builds}, with gapp {result['gapp']}.")
+        if result["first_deploy"]:
+            click.echo("It has not been deployed before: this would be its first deploy.")
+        elif result["upgrade_pending"]:
+            click.echo(f"It was last deployed by gapp {result['last_deployed_by']}: this deploy applies an upgrade "
+                       f"and needs --upgrade.")
+        else:
+            click.echo("No upgrade is pending.")
+        click.echo("Nothing was built or changed.")
+        return
+    click.echo(f"{result['deployment']} is deployed to {result['project']}, built from {builds}.")
+    if result.get("upgraded_from"):
+        click.echo(f"Upgraded from gapp {result['upgraded_from']} to {result['gapp']}.")
+    if result.get("service_url"):
+        click.echo(f"URL: {result['service_url']}")
 
 
 def _render_status(data: dict) -> list[str]:
@@ -329,33 +318,62 @@ def status(sdk: GappSDK, name, project):
 
 
 @main.command("list")
-@click.option("--project-limit", default=50, help="Max projects to scan.")
+@click.option("--json", "json_out", is_flag=True, help="Machine-readable output.")
 @click.pass_obj
-def list_cmd(sdk: GappSDK, project_limit):
-    """List deployments found on projects marked gapp=hosted."""
-    res = sdk.list_apps(project_limit=project_limit)
+def list_cmd(sdk: GappSDK, json_out):
+    """Every deployment in your fleet: its repo, project, what it builds, and its gapp version."""
+    from gapp.admin.sdk.definitions import Refused
+    try:
+        result = sdk.list_definitions()
+    except Refused as e:
+        click.echo(e.message, err=True)
+        raise SystemExit(2)
+    if json_out:
+        click.echo(json_mod.dumps(result, indent=2, default=str))
+        return
+    click.echo(f"Your fleet is kept in {result['fleet']}.")
+    rows = result["deployments"]
+    if not rows:
+        click.echo("It holds no deployments yet. Define one: gapp add <name> --project <project>")
+        return
+    width = max(len(r["deployment"]) for r in rows)
+    for r in rows:
+        note = f"  ({'upgrade available' if r['upgrade'] == 'available' else r['upgrade']})" if r["upgrade"] else ""
+        click.echo(f"  {r['deployment']:<{width}}  {r['repo'] or 'no repo'}  on {r['project']}  "
+                   f"builds {r['ref'] or 'the default branch'}  gapp {r['gapp']}{note}")
 
-    for msg in res["messages"]:
-        click.echo(msg)
 
-    if not res["apps"]:
-        click.echo("\n  No apps found: no deployments have been set up on any project yet.")
-    else:
-        header = f"\n  {'App':<20} {'Project':<20} {'Contract':<10}"
-        click.echo(header)
-        click.echo("  " + "-" * (len(header) - 2))
-        for app in res["apps"]:
-            contract = "legacy" if app["is_legacy"] else f"v-{app['contract_major']}"
-            click.echo(f"  {app['name']:<20} {app['project']:<20} {contract:<10}")
+@main.group("project")
+def project_group():
+    """Google Cloud projects that host deployments."""
 
-    apps, projects = res['metadata']['apps']['count'], res['metadata']['projects']['count']
-    click.echo(
-        f"\nSummary: {apps} app{'s' if apps != 1 else ''} across "
-        f"{projects} project{'s' if projects != 1 else ''} "
-        f"(this build: v-{res['metadata']['contract_major']})."
-    )
-    for warn in res["warnings"]:
-        click.echo(click.style(f"WARNING: {warn}", fg="yellow"))
+
+@project_group.command("setup")
+@click.argument("project")
+@click.option("--json", "json_out", is_flag=True, help="Machine-readable output.")
+@click.pass_obj
+def project_setup_cmd(sdk: GappSDK, project, json_out):
+    """Make a project ready for gapp deployments. Once per project.
+
+    Turns on the Google Cloud APIs every deployment needs, gives Cloud
+    Build its permissions, and marks the project. Needs gcloud signed in as
+    an Owner of the project. It sets up nothing about CI.
+    """
+    from gapp.admin.sdk.definitions import Refused
+    try:
+        result = sdk.project_setup(project)
+    except Refused as e:
+        click.echo(e.message, err=True)
+        raise SystemExit(2)
+    except (RuntimeError, ValueError) as e:
+        click.echo(f"  Error: {e}", err=True)
+        raise SystemExit(1)
+    if json_out:
+        click.echo(json_mod.dumps(result, indent=2, default=str))
+        return
+    click.echo(f"{result['project']} is ready for gapp deployments."
+               + (" It already was; anything missing was added." if result["was_set_up"] else ""))
+    click.echo(f"Next: gapp add <name> --project {result['project']}")
 
 
 # -- gapp ci --
@@ -1130,7 +1148,7 @@ def add_cmd(name, project, repo, ref, id_, copy_of, json_out):
                f"building {d.get('ref') or 'the default branch'}.")
     if result["copied_from"]:
         click.echo(f"Its settings are {result['copied_from']}'s, without the domain.")
-    click.echo(f"Nothing is deployed yet. See it: gapp show --deployment {result['deployment']}")
+    click.echo(f"Nothing is deployed yet. Deploy it from a clone of its repo: gapp deploy --deployment {result['deployment']}")
 
 
 @main.command("rename")
