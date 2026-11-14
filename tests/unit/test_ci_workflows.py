@@ -52,13 +52,14 @@ def test_deploy_workflow_resolves_the_entry_then_calls_the_reusable_workflow_in_
     assert doc["run-name"] == "Deploy ${{ inputs.deployment }} (${{ inputs.ref || 'default branch' }}) ${{ inputs.request_id }}"
     assert doc[True]["workflow_dispatch"]["inputs"]["ref"]["default"] == ""        # empty: the app repo's default branch
     resolve, deploy = doc["jobs"]["resolve"], doc["jobs"]["deploy"]
-    assert set(resolve["outputs"]) == {"repo", "project", "id", "overlay", "app_id"}
+    assert set(resolve["outputs"]) == {"repo", "project", "id", "ref", "overlay", "app_id"}
     assert deploy["needs"] == "resolve"
     assert deploy["uses"] == f"{GAPP_REPO}/.github/workflows/deploy.yml@{GAPP_REF}"
     assert deploy["with"]["environment"] == "${{ needs.resolve.outputs.project }}"
     assert deploy["with"]["solution-repo"] == "${{ needs.resolve.outputs.repo }}"
     assert deploy["with"]["solution-name"] == "${{ needs.resolve.outputs.id }}"
     assert deploy["with"]["overlay"] == "${{ needs.resolve.outputs.overlay }}"
+    assert deploy["with"]["ref"] == "${{ needs.resolve.outputs.ref }}"             # the entry's ref, never the input
     assert deploy["with"]["gapp-repo"] == GAPP_REPO and deploy["with"]["gapp-ref"] == GAPP_REF
     assert deploy["secrets"] == {"solution-repo-app-private-key": "${{ secrets.HOSTING_GITHUB_APP_PRIVATE_KEY }}"}
     assert deploy["permissions"] == {"id-token": "write", "contents": "read"}
@@ -219,7 +220,44 @@ def _with_fleet_file(tmp_path, doc):
     (tmp_path / "gapp" / "deployments.yaml").write_text(fleet.dump(doc))
 
 
-DEPLOY_ENV = {"DEPLOYMENT": "my-app", "APP_ID": "", "ALLOWED_SOURCES": "me", "GH_TOKEN": "x", "DATA_FILE": "gapp/deployments.yaml"}
+DEPLOY_ENV = {"DEPLOYMENT": "my-app", "REQUESTED_REF": "", "APP_ID": "", "ALLOWED_SOURCES": "me", "GH_TOKEN": "x",
+              "DATA_FILE": "gapp/deployments.yaml"}
+
+
+@needs_yq
+def test_deploy_builds_the_entrys_ref_and_keeps_it_out_of_the_overlay(tmp_path):
+    _with_fleet_file(tmp_path, {"my-app": {"id": "my-app", "repo": "me/my-app", "project": "my-proj", "ref": "v1.4.0",
+                                           "domain": "mcp.example.com"}})
+    runner = _Runner(tmp_path, {"environments": ["my-proj"], "repos": {"me/my-app": False}})
+    ok, log = runner.run_resolve({**DEPLOY_ENV, "REQUESTED_REF": "v1.4.0"})
+    assert ok, log
+    out = runner.outputs()
+    assert out["ref"] == "v1.4.0"
+    assert json.loads(out["overlay"]) == {"domain": "mcp.example.com", "name": "my-app"}
+
+
+@needs_yq
+def test_deploy_with_no_ref_in_the_entry_passes_an_empty_ref(tmp_path):
+    _with_fleet_file(tmp_path, {"my-app": {"id": "my-app", "repo": "me/my-app", "project": "my-proj"}})
+    runner = _Runner(tmp_path, {"environments": ["my-proj"], "repos": {"me/my-app": False}})
+    ok, log = runner.run_resolve(DEPLOY_ENV)
+    assert ok, log
+    assert runner.outputs()["ref"] == ""
+
+
+@needs_yq
+@pytest.mark.parametrize("entry_ref,asked", [("v1.4.0", "my-branch"), ("v1.4.0", ""), (None, "my-branch")])
+def test_deploy_refuses_a_ref_that_is_not_the_entrys(tmp_path, entry_ref, asked):
+    entry = {"id": "my-app", "repo": "me/my-app", "project": "my-proj"}
+    if entry_ref:
+        entry["ref"] = entry_ref
+    _with_fleet_file(tmp_path, {"my-app": entry})
+    runner = _Runner(tmp_path, {"environments": ["my-proj"], "repos": {"me/my-app": False}})
+    ok, log = runner.run_resolve({**DEPLOY_ENV, "REQUESTED_REF": asked})
+    assert not ok and runner.outputs() == {}
+    assert "nothing was deployed. A deploy builds the deployment's own ref." in log
+    assert f"builds '{entry_ref or 'the default branch'}'" in log and f"asked for '{asked or 'the default branch'}'" in log
+    assert "gapp ci setup my-app --repo me/my-app --project my-proj --ref <ref> --update" in log
 
 
 @needs_yq

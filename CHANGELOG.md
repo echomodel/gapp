@@ -5,6 +5,20 @@ source is `gapp/__init__.py`.
 
 ## Unreleased
 
+Breaking changes:
+
+- `gapp ci deploy` and `gapp deploy` take no `--ref` (MCP: `gapp_ci_deploy`,
+  `gapp_ci_trigger` and `gapp_deploy` take no `ref`). What a deploy builds
+  is the deployment's ref, part of its definition: a branch (its tip at
+  each deploy), a tag or a commit, set with `gapp ci setup <name> --repo
+  <owner>/<repo> --project <project> --ref <ref> --update` (MCP:
+  `gapp_ci_setup(..., ref=, update=True)`); with none, the app repo's
+  default branch. A release, a rollback and trying a branch are changes to
+  the ref, and a copy keeps its source's unless one is given. `gapp deploy`
+  from a clone builds the commit the clone is on. Re-run `gapp ci init` so
+  the fleet repo's deploy workflow reads the ref from the entry: it then
+  refuses a run that asks for any other.
+
 - `gapp fleet` (MCP: `gapp_fleet`) says where your fleet lives and how
   many deployments it holds. With no fleet repo set, the fleet is a file
   on this machine, one per profile; with one set, it is that repo. Nothing

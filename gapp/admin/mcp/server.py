@@ -217,7 +217,6 @@ def gapp_setup(
 
 @_tool()
 def gapp_deploy(
-    ref: str | None = None,
     dry_run: bool = False,
     project_id: str | None = None,
     rebuild: bool = False,
@@ -226,7 +225,8 @@ def gapp_deploy(
     """Deploy a gapp solution to Cloud Run (build + terraform apply).
 
     Prerequisites: gapp_init and gapp_setup must have been run first.
-    Always deploys the app in the current directory.
+    Always deploys the app in the current directory, at the commit that
+    clone is on. There is no ref argument: check out what should be built.
 
     Custom domains are guarded. The deploy stops before Terraform when
     the domain in gapp.yaml is not verified by the deploying identity
@@ -235,7 +235,6 @@ def gapp_deploy(
     redeploy that keeps the same domain is unaffected.
 
     Args:
-        ref: Git ref to build from (commit, tag, branch). Defaults to HEAD.
         dry_run: Preview only — do not build or apply.
         project_id: Explicit GCP project ID override. Discovered if omitted.
         rebuild: Force docker build even if an image already exists in
@@ -249,7 +248,7 @@ def gapp_deploy(
     """
     from gapp.admin.sdk.core import GappSDK
     return GappSDK().deploy(
-        ref=ref, dry_run=dry_run, project_id=project_id,
+        dry_run=dry_run, project_id=project_id,
         rebuild=rebuild, replace_domain=replace_domain,
     )
 
@@ -454,6 +453,7 @@ def gapp_ci_setup(
     manifest: dict | None = None,
     update: bool = False,
     watch: bool = True,
+    ref: str | None = None,
 ) -> dict:
     """Add or update a deployment of the fleet: `name` deploys `repo` to `project`. Never uses gcloud.
 
@@ -481,6 +481,10 @@ def gapp_ci_setup(
         repo: The repo to deploy, owner/name. Never the fleet repo.
         project: GCP project id. Required unless copy_of (then the source's by default).
         domain: Custom domain the deploy maps; "" removes it; None keeps it.
+        ref: The branch, tag or commit of the repo a deploy builds; "" removes
+            it (the repo's default branch); None keeps it. It is part of the
+            definition, and gapp_ci_deploy takes none: a release, a rollback
+            and trying a branch are changes to it. A copy keeps its source's.
         copy_of: An existing deployment to copy.
         manifest: The deployment's whole fleet-side manifest (gapp.yaml keys as an
             object). It replaces the entry's keys, a key it lacks is removed, and
@@ -497,7 +501,7 @@ def gapp_ci_setup(
     did not succeed.
     """
     from gapp.admin.sdk.ci import setup_deployment
-    return setup_deployment(name, repo=repo, project=project, domain=domain, update=update,
+    return setup_deployment(name, repo=repo, project=project, domain=domain, update=update, ref=ref,
                             copy_of=copy_of, manifest=manifest, watch=watch)
 
 
@@ -539,36 +543,38 @@ def gapp_ci_rename(old: str, new: str, watch: bool = True) -> dict:
 
 
 @_tool()
-def gapp_ci_deploy(name: str, ref: str | None = None, watch: bool = True) -> dict:
+def gapp_ci_deploy(name: str, watch: bool = True) -> dict:
     """Deploy one deployment through the fleet repo's deploy workflow. Mirrors gapp_deploy for the fleet.
 
-    Dispatches gapp-deploy.yml with the deployment's name; the run reads
-    its entry from gapp/deployments.yaml, merges the entry's gapp.yaml keys
-    over the repo's file and deploys through the project's GitHub
-    Environment. Needs only a gh login that can dispatch workflows; no
+    Builds the deployment's ref: the branch, tag or commit in its
+    definition, or the app repo's default branch when it has none (`ref`
+    in the result). There is no ref argument: to build something else,
+    change the definition with gapp_ci_setup(name, repo, project, ref=...,
+    update=True), then deploy. Dispatches gapp-deploy.yml with the
+    deployment's name; the run reads its entry from gapp/deployments.yaml,
+    merges the entry's gapp.yaml keys over the repo's file and deploys
+    through the project's GitHub Environment. Needs only a gh login that can dispatch workflows; no
     gcloud or terraform. A name that is not a deployment comes back as ok
     false naming gapp_ci_setup; a failed run with its link.
 
     Args:
         name: The deployment.
-        ref: Git ref of the deployed repo (default: its default branch).
         watch: Stream the run to completion (default True).
     """
     from gapp.admin.sdk.ci import deploy_deployment
-    return deploy_deployment(name, ref=ref, watch=watch)
+    return deploy_deployment(name, watch=watch)
 
 
 @_tool()
-def gapp_ci_trigger(name: str, ref: str | None = None, watch: bool = True) -> dict:
+def gapp_ci_trigger(name: str, watch: bool = True) -> dict:
     """Former name of gapp_ci_deploy; use that. Kept for one release.
 
     Args:
         name: The deployment.
-        ref: Git ref to deploy (default: its default branch).
         watch: Stream the run to completion (default True).
     """
     from gapp.admin.sdk.ci import deploy_deployment
-    return deploy_deployment(name, ref=ref, watch=watch)
+    return deploy_deployment(name, watch=watch)
 
 
 @_tool()

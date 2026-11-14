@@ -322,7 +322,7 @@ def test_rename_refuses_a_missing_deployment_or_a_taken_name(wired):
 def test_setup_has_no_working_directory_parameters():
     import inspect
     params = inspect.signature(ci_mod.setup_deployment).parameters
-    assert set(params) == {"name", "repo", "project", "domain", "copy_of", "manifest", "watch", "command", "update"}
+    assert set(params) == {"name", "repo", "project", "domain", "copy_of", "manifest", "watch", "command", "update", "ref"}
     assert "solution" not in params and "solution_repo" not in params
 
 

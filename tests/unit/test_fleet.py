@@ -205,6 +205,7 @@ def test_overlay_for_an_entry_is_its_gapp_keys_with_name_set_to_the_id():
 
 def test_the_fleet_file_header_says_other_keys_are_the_manifest_merged_over_gapp_yaml():
     header = fleet.DEPLOYMENTS_FILE_INITIAL
-    assert ("Any other keys\n# are the deployment's manifest (gapp.yaml keys, set with `gapp ci setup\n"
-            "# --manifest` or --domain), merged over the app repo's own gapp.yaml.") in header
+    assert ("Any other keys are the deployment's manifest\n# (gapp.yaml keys, set with `gapp ci setup --manifest` "
+            "or --domain), merged\n# over the app repo's own gapp.yaml.") in header
+    assert "ref (the branch, tag or commit of the repo a deploy builds" in header
     assert "supply or override" not in header

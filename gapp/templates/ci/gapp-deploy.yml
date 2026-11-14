@@ -26,7 +26,7 @@ on:
         required: true
         type: string
       ref:
-        description: Git ref of the deployed repo to deploy (commit, tag, or branch); empty deploys its default branch
+        description: Set by gapp to the deployment's ref, which the run builds; it is refused when it is not the ref in gapp/deployments.yaml (empty there means the repo's default branch)
         required: false
         default: ''
         type: string
@@ -44,6 +44,7 @@ jobs:
       repo: ${{ steps.entry.outputs.repo }}
       project: ${{ steps.entry.outputs.project }}
       id: ${{ steps.entry.outputs.id }}
+      ref: ${{ steps.entry.outputs.ref }}
       overlay: ${{ steps.entry.outputs.overlay }}
       app_id: ${{ steps.entry.outputs.app_id }}
     steps:
@@ -56,6 +57,7 @@ jobs:
         id: entry
         env:
           DEPLOYMENT: ${{ inputs.deployment }}
+          REQUESTED_REF: ${{ inputs.ref }}
           APP_ID: ${{ vars.HOSTING_GITHUB_APP_ID }}
           ALLOWED_SOURCES: ${{ vars.GAPP_ALLOWED_SOURCES }}
           GH_TOKEN: ${{ github.token }}
@@ -72,6 +74,14 @@ jobs:
           repo="$(yq "$entry | .repo" "$DATA_FILE")"
           project="$(yq "$entry | .project" "$DATA_FILE")"
           id="$(yq "$entry | .id // strenv(DEPLOYMENT)" "$DATA_FILE")"
+          # What a deploy builds is the entry's ref, never the caller's: a
+          # dispatch naming another ref would build code the definition
+          # does not name. Empty is the repo's default branch.
+          ref="$(yq "$entry | .ref // \"\"" "$DATA_FILE")"
+          if [ "$REQUESTED_REF" != "$ref" ]; then
+            echo "gapp-deploy: '$DEPLOYMENT' builds '${ref:-the default branch}', and this run asked for '${REQUESTED_REF:-the default branch}', so nothing was deployed. A deploy builds the deployment's own ref. Change it with: gapp ci setup $DEPLOYMENT --repo $repo --project $project --ref <ref> --update"
+            exit 1
+          fi
           # The register run checked the repo's owner before writing this
           # entry, but the file is in git and can be edited by hand, so the
           # owner is checked again against the repository variable, which a
@@ -82,10 +92,10 @@ jobs:
             echo "gapp-deploy: Apps owned by $owner aren't allowed in this fleet, so '$DEPLOYMENT' ($repo) was not deployed. Allow the owner with: gapp ci sources add $owner"
             exit 1
           fi
-          # Every key but id, repo and project is a gapp.yaml key the deploy
+          # Every key but id, repo, project and ref is a gapp.yaml key the deploy
           # merges over the repo's gapp.yaml; name is set to the id so gapp
           # keys every resource by it.
-          overlay="$(yq -o=json -I=0 "$entry | . as \$e | del(.id, .repo, .project) | .name = (\$e.id // strenv(DEPLOYMENT))" "$DATA_FILE")"
+          overlay="$(yq -o=json -I=0 "$entry | . as \$e | del(.id, .repo, .project, .ref) | .name = (\$e.id // strenv(DEPLOYMENT))" "$DATA_FILE")"
           # The deploy job runs in the Environment named after the project; it
           # must exist here, or the job cannot authenticate to GCP.
           if ! gh api "repos/$GITHUB_REPOSITORY/environments/$project" --silent 2>/dev/null; then
@@ -106,6 +116,7 @@ jobs:
             echo "repo=$repo"
             echo "project=$project"
             echo "id=$id"
+            echo "ref=$ref"
             echo "overlay=$overlay"
             echo "app_id=$app_id"
           } >> "$GITHUB_OUTPUT"
@@ -120,7 +131,7 @@ jobs:
     uses: __GAPP_REPO__/.github/workflows/deploy.yml@__GAPP_REF__
     with:
       solution-repo: ${{ needs.resolve.outputs.repo }}
-      ref: ${{ inputs.ref }}
+      ref: ${{ needs.resolve.outputs.ref }}
       environment: ${{ needs.resolve.outputs.project }}
       # The project comes from the fleet entry, so gapp setup and deploy run
       # with --project and never search for it on the runner.

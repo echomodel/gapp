@@ -35,12 +35,19 @@ import yaml
 
 DEPLOYMENTS_FILE = "gapp/deployments.yaml"
 ENTRY_FIELDS = ("id", "repo", "project")
+# Settings of the definition itself, set by their own options. They are not
+# gapp.yaml keys, so they are never merged into the app's manifest.
+DEFINITION_KEYS = ("ref",)
+OWN_KEYS = ENTRY_FIELDS + DEFINITION_KEYS
 # The service account is `<id>-sa`, and a service account id is at most
 # 30 characters.
 ID_MAX = 27
 
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+# A branch, tag or commit of the app's repo. No spaces, and no leading dash
+# so it can never be read as an option by git.
+REF_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_./@+-]{0,199}$")
 PROJECT_RE = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
 
 DEPLOYMENTS_FILE_INITIAL = """\
@@ -48,9 +55,11 @@ DEPLOYMENTS_FILE_INITIAL = """\
 # an entry through the register workflow and `gapp ci deploy` reads it.
 # One entry per deployment, keyed by its name: id (what the GCP resources
 # are keyed by), repo (owner/name), project (the GCP project id; the GitHub
-# Environment of the same name holds the deploy identity). Any other keys
-# are the deployment's manifest (gapp.yaml keys, set with `gapp ci setup
-# --manifest` or --domain), merged over the app repo's own gapp.yaml.
+# Environment of the same name holds the deploy identity), and optionally
+# ref (the branch, tag or commit of the repo a deploy builds; without it,
+# the repo's default branch). Any other keys are the deployment's manifest
+# (gapp.yaml keys, set with `gapp ci setup --manifest` or --domain), merged
+# over the app repo's own gapp.yaml.
 {}
 """
 
@@ -88,14 +97,19 @@ def dump(doc: dict) -> str:
     ordered = {}
     for name in sorted(doc):
         entry = doc[name]
-        ordered[name] = {**{k: entry[k] for k in ENTRY_FIELDS if k in entry},
-                         **{k: v for k, v in entry.items() if k not in ENTRY_FIELDS}}
+        ordered[name] = {**{k: entry[k] for k in OWN_KEYS if k in entry},
+                         **{k: v for k, v in entry.items() if k not in OWN_KEYS}}
     return header + yaml.safe_dump(ordered, sort_keys=False, default_flow_style=False)
 
 
 def manifest_keys(entry: dict) -> dict:
-    """The gapp.yaml keys an entry carries: everything but its own fields."""
-    return {k: copy.deepcopy(v) for k, v in entry.items() if k not in ENTRY_FIELDS}
+    """The gapp.yaml keys an entry carries: everything but its own fields and settings."""
+    return {k: copy.deepcopy(v) for k, v in entry.items() if k not in OWN_KEYS}
+
+
+def ref_of(entry: dict) -> str | None:
+    """The branch, tag or commit a deploy of this definition builds; None is the repo's default branch."""
+    return entry.get("ref") or None
 
 
 def overlay_for(entry: dict) -> dict:
@@ -130,6 +144,16 @@ def validate_repo(repo: str) -> str:
     return repo
 
 
+def validate_ref(ref: str) -> str:
+    ref = (ref or "").strip()
+    if not REF_RE.match(ref) or ".." in ref:
+        raise FleetRefusal("invalid-input", (
+            f"'{ref}' is not a ref gapp accepts: a branch, tag or commit of the app's repo, "
+            f"with no spaces and not starting with a dash."
+        ))
+    return ref
+
+
 def validate_project(project: str) -> str:
     project = (project or "").strip()
     if not PROJECT_RE.match(project):
@@ -161,7 +185,9 @@ def validate_changes(changes: dict | None) -> dict:
         raise FleetRefusal("invalid-input", (
             "'name' is not a key a deployment can set: gapp keys the deployment's resources by its id."
         ))
-    for key in unknown_keys(changes):
+    if changes.get("ref") is not None:
+        changes["ref"] = validate_ref(changes["ref"])
+    for key in unknown_keys({k: v for k, v in changes.items() if k not in DEFINITION_KEYS}):
         raise FleetRefusal("invalid-input", (
             f"'{key}' is not a gapp.yaml key (check for typos); `gapp manifest schema` lists them."
         ))
@@ -175,6 +201,11 @@ def validate_manifest_upload(manifest) -> dict:
     from gapp.admin.sdk.schema import ManifestValidationError, validate_manifest
     if not isinstance(manifest, dict):
         raise FleetRefusal("invalid-input", "The manifest is not a list of key: value settings.")
+    for key in DEFINITION_KEYS:
+        if key in manifest:
+            raise FleetRefusal("invalid-input", (
+                f"'{key}' is not a gapp.yaml setting, so it does not go in the manifest; it is set by its own option."
+            ))
     validate_changes(manifest)
     try:
         validate_manifest(manifest)
@@ -289,7 +320,7 @@ def set_entry(doc: dict, name: str, *, repo: str, project: str, changes: dict | 
 def copy_entry(doc: dict, new: str, source: str, *, project: str | None = None,
                changes: dict | None = None) -> tuple[dict, dict, dict]:
     """A new deployment from an existing one: the same repo and gapp.yaml
-    keys, never its id, domain, deploy history or secret values. Returns
+    keys and ref, never its id, domain, deploy history or secret values. Returns
     (doc, entry, info) where info says whether the project is the source's.
     """
     new = validate_name(new)
@@ -309,7 +340,8 @@ def copy_entry(doc: dict, new: str, source: str, *, project: str | None = None,
     project = validate_project(project) if project else src.get("project")
     keys = manifest_keys(without_unknown_keys(src))
     keys.pop("domain", None)
-    entry = {"id": allocate_id(doc, new, project), "repo": src.get("repo"), "project": project, **keys}
+    own = {k: src[k] for k in DEFINITION_KEYS if k in src}
+    entry = {"id": allocate_id(doc, new, project), "repo": src.get("repo"), "project": project, **own, **keys}
     entry = _apply_changes(entry, changes)
     doc[new] = entry
     info = {
