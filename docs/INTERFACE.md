@@ -59,6 +59,7 @@ deployments:
     repo: github.com/owner/my-app
     project: my-project
     ref: main
+    gapp: 4.0.0
     settings:
       public: true
       domain: app.example.com
@@ -86,6 +87,7 @@ that knows both reads both.
 | `repo` | Where the code is. Absent for an app with no remote | `gapp set repo` |
 | `project` | The Google Cloud project | Never |
 | `ref` | The branch, tag or commit a deploy builds. Absent: the default branch | `gapp set ref` |
+| `gapp` | The gapp version this definition was written by, and the one that deploys it. Never typed | `gapp upgrade` |
 | `settings` | Everything below | The settings commands |
 
 Settings:
@@ -106,6 +108,59 @@ mounted. `{{NAME}}` is the deployment's id.
 would add a `services:` map inside `settings`, each with its own keys, and
 a `--service <name>` flag on the settings commands. A definition without
 `services:` keeps meaning exactly what it means now.
+
+## Versions
+
+Two things record a version, and every gapp checks them before anything
+else. Their names and places never change.
+
+| Where | Says | Checked |
+|---|---|---|
+| `format`, at the top of the entry file | How the file is laid out | Before anything else in the file is read |
+| The `gapp-version` label on the deployment's bucket | Which gapp last deployed it, written like `4-0-0` | Before a deploy builds or changes anything |
+
+A gapp that finds a value it does not support, or none, stops there. It
+says what it found and where, reads no further, writes nothing and
+touches no deployment.
+
+Each definition also records, in `gapp`, the version of the gapp that
+wrote it. `gapp add` writes the version of the gapp that ran it.
+
+**A runner deploys with the definition's version**, whatever is installed
+on the machine that asked. So a gapp upgrade on a workstation changes
+nothing by itself. There is no fleet-wide version.
+
+**A newer gapp and an older definition.** Within the range the newer gapp
+supports:
+
+| Action | Allowed |
+|---|---|
+| Read it, show it, start a runner deploy | Yes |
+| Change a setting the definition's version knows | Yes |
+| Use a setting it does not know | No: `gapp upgrade` first |
+| Deploy from this machine | No: `gapp upgrade` first |
+
+So an upgrade can be available without being required. `gapp list` and
+`gapp show` say which.
+
+**Upgrading is two deliberate steps.**
+
+1. `gapp upgrade` changes the definition to the installed gapp's version
+   and prints the plan: what changes in the definition, what the next
+   deploy will change in the cloud, and anything to do by hand before or
+   after. It never goes down, and only the gapp being upgraded to knows
+   the way there, so it takes no version.
+2. The next deploy applies it. A deploy that would apply an upgrade is
+   refused without `--upgrade`, and `--upgrade` is refused when no upgrade
+   is pending. `gapp show` and `gapp deploy --dry-run` say in advance
+   which it is.
+
+Which earlier versions a gapp can upgrade from is that release's choice,
+and may be none. When a definition is too old, the refusal names a gapp
+to install first: install it, upgrade, and repeat.
+
+What this depends on: the way a workflow starts a gapp on a runner stays
+the same across releases, and a test holds it there.
 
 ## Which deployment a command means
 
@@ -143,9 +198,10 @@ Every command takes `--json`. Commands that start a run on GitHub take
 |---|---|
 | `gapp add [<name>] --project <p> [--repo <r>] [--ref <r>] [--id <id>]` | Defines a deployment. Touches no cloud. Refused if the name exists. Inside a clone, name and repo default to the clone's |
 | `gapp add <name> --copy-of <existing> [--project <p>] [--ref <r>]` | A second deployment of the same repo. Copies settings except `domain`. Project and ref default to the original's |
+| `gapp upgrade` | Brings one definition to the installed gapp's version. Takes no version. Prints its plan first. Changes the definition only. Refused when there is nothing to upgrade, when the definition is newer than this gapp, or when it is older than this gapp can upgrade from; the refusal names the gapp to install |
 | `gapp rename <old> <new>` | Changes the name only. The id and the cloud resources stay |
-| `gapp list` | Every definition: name, repo, project, ref. Says where the fleet lives |
-| `gapp show` | One definition, and the settings a deploy would use, each marked as from the definition, from `app.json`, or a default |
+| `gapp list` | Every definition: name, repo, project, ref, gapp version, and "upgrade available" or "upgrade required" where that applies. Says where the fleet lives |
+| `gapp show` | One definition, and the settings a deploy would use, each marked as from the definition, from `app.json`, or a default. Says when the next deploy would apply an upgrade, and from which version to which |
 
 ### Settings
 
@@ -157,6 +213,7 @@ Each changes one definition and nothing else.
 | `gapp unset <key>` | Clears one of those. `repo`, `project` and `id` cannot be cleared |
 | `gapp apis add <api>` / `gapp apis remove <api>` | Changes the extra APIs |
 | `gapp env set <NAME> <value>` | A plain variable |
+| `gapp env set <NAME> --data-path [<subfolder>]` | The variable points at the deployment's data folder, which survives restarts |
 | `gapp env set <NAME> --secret [<secret-name>] [--generate]` | The variable comes from a secret. The secret's value is set with `gapp secrets set` |
 | `gapp env unset <NAME>` | Removes the variable from the definition. Leaves any secret in place |
 | `gapp apply <file>` | Replaces a definition's settings with the file's, all at once or not at all. The file has the shape of `settings:` above. Prints what changes first |
@@ -165,7 +222,7 @@ Each changes one definition and nothing else.
 
 | Command | Does | Needs |
 |---|---|---|
-| `gapp deploy [--dry-run] [--rebuild] [--replace-domain]` | Builds the definition's ref from this clone and deploys it. Refused when the clone is not at that ref. Creates the deployment's bucket the first time | gcloud, Terraform, a clone |
+| `gapp deploy [--dry-run] [--rebuild] [--replace-domain] [--upgrade]` | Builds the definition's ref from this clone and deploys it. Refused when the clone is not at that ref. Creates the deployment's bucket the first time | gcloud, Terraform, a clone |
 | `gapp status` | What is live: URL, revision, domain state | gcloud |
 | `gapp secrets list` | The definition's secrets and whether each has a value | gcloud |
 | `gapp secrets set <secret-name> [--from-stdin]` | Stores a value, typed at a prompt or piped | gcloud |
@@ -175,7 +232,7 @@ Each changes one definition and nothing else.
 
 | Command | Does | Needs |
 |---|---|---|
-| `gapp ci deploy` | The same deploy, on a runner | `gh` |
+| `gapp ci deploy [--upgrade]` | The same deploy, on a runner | `gh` |
 | `gapp ci status [--live]` | The last run and what it deployed | `gh` |
 | `gapp ci sources add <owner>` / `remove <owner>` / `list` | Whose repos runners may deploy | `gh` |
 
@@ -184,9 +241,8 @@ Each changes one definition and nothing else.
 | Command | Does |
 |---|---|
 | `gapp fleet` | Where the fleet lives |
-| `gapp fleet use <owner>/<repo> [--create]` | Moves the fleet to that repo and installs the workflows there |
+| `gapp fleet use <owner>/<repo> [--create]` | Moves the fleet to that repo and installs the workflows there, if it has none |
 | `gapp fleet use local` | Moves it to this machine |
-| `gapp fleet upgrade` | Updates the workflows in the fleet repo to this gapp's version |
 | `gapp fleet export [<file>]` / `gapp fleet import <file>` | Copies the fleet out or in. Import keeps a backup first |
 | `gapp fleet recover` | Rebuilds the fleet from the copy saved in each deployment's bucket |
 
@@ -202,11 +258,11 @@ Each changes one definition and nothing else.
 One tool per command, named after it, with the same arguments. A
 deployment is always the `deployment` argument.
 
-`gapp_project_setup`, `gapp_add`, `gapp_rename`, `gapp_list`, `gapp_show`,
+`gapp_project_setup`, `gapp_add`, `gapp_upgrade`, `gapp_rename`, `gapp_list`, `gapp_show`,
 `gapp_set`, `gapp_unset`, `gapp_apis`, `gapp_env_set`, `gapp_env_unset`,
 `gapp_apply`, `gapp_deploy`, `gapp_status`, `gapp_secrets_list`,
 `gapp_secrets_set`, `gapp_secrets_get`, `gapp_ci_deploy`, `gapp_ci_status`,
-`gapp_ci_sources`, `gapp_fleet`, `gapp_fleet_use`, `gapp_fleet_upgrade`,
+`gapp_ci_sources`, `gapp_fleet`, `gapp_fleet_use`,
 `gapp_fleet_export`, `gapp_fleet_import`, `gapp_fleet_recover`.
 
 No tool takes a secret's value or a path on the server's machine.
@@ -236,13 +292,8 @@ No tool takes a secret's value or a path on the server's machine.
    later; it adds a command and changes none.
 6. **`app.json` in 4.0.0 or the release after.** Proposed: 4.0.0, as the
    last stage.
-7. **Updating the workflows in a fleet repo.** Proposed: `gapp fleet
-   upgrade` is its own command, and `gapp fleet use` only chooses where
-   the fleet lives. Every command that starts a run compares the fleet
-   repo's gapp version to this one first. The same: it runs. The fleet is
-   older: refused, nothing started, and `gapp fleet upgrade` is printed.
-   The fleet is newer: refused, with a line to install the newer gapp. No
-   confirm flag.
+7. **The flag's name.** `--upgrade` on `gapp deploy` and `gapp ci deploy`
+   (see "Versions"). Proposed: `--upgrade`.
 8. **The file's name and place.** It is the entry point for whatever
    gapp keeps in a repo, so its name should assume nothing about what is
    inside: not that it is a list of deployments, and not that there is one
