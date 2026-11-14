@@ -39,9 +39,11 @@ repo.
 
 Every other key in `app.json` is ignored, never refused.
 
-`gapp.yaml` is not read. On the first run of 4.0.0, each existing
-deployment's `gapp.yaml` settings are copied into its definition once, and
-the result is printed. The file can then be deleted from the repo.
+`gapp.yaml` is not read.
+
+Nothing in 4.0.0 exists to carry an earlier setup forward: no import of
+old files, no old names accepted. A fleet is brought in with `gapp fleet
+import`.
 
 ## The fleet file
 
@@ -201,23 +203,6 @@ deployment is always the `deployment` argument.
 
 No tool takes a secret's value or a path on the server's machine.
 
-## Gone from 4.0.0rc13
-
-| Gone | Use |
-|---|---|
-| `gapp setup` | `gapp project setup`, then `gapp add` |
-| `gapp init`, `gapp manifest ...`, `gapp.yaml` | Settings commands on the definition; `app.json` in the repo |
-| `gapp ci init` | `gapp fleet use` |
-| `gapp ci setup`, `--update`, `--manifest` | `gapp add`, the settings commands, `gapp apply` |
-| `gapp ci project setup` | `gapp project setup` |
-| `gapp ci rename`, `gapp ci list`, `gapp ci manifest` | `gapp rename`, `gapp list`, `gapp show` |
-| `gapp ci trigger` | `gapp ci deploy` |
-| `--ref` on any deploy | `gapp set ref` |
-| `--project` on `deploy`, `status`, `secrets` | `--deployment` |
-| A name as an argument to `status` and `secrets list` | `--deployment` |
-| `gapp config discovery`, `gapp list --project-limit` | Nothing: the fleet is the list |
-| `gapp config profile <name>` creating a profile by typing its name | `gapp config profile add` |
-
 ## Not in 4.0.0, and addable without a break
 
 - Removing a definition (`gapp remove <name>`).
@@ -239,10 +224,10 @@ No tool takes a secret's value or a path on the server's machine.
    alone and says `app.json` was not read.
 4. **Exit codes.** Proposed: 0 done, 1 failed, 2 refused with nothing
    changed. The same for every command.
-5. **Placeholders.** `{{SOLUTION_DATA_PATH}}` and `{{SOLUTION_NAME}}`
-   become `{{DATA_PATH}}` and `{{NAME}}`; the import rewrites them.
-   Proposed: yes, since nothing else is called a solution any more.
-6. **A self-describing command for agents** (`gapp guide`). Proposed:
+5. **A self-describing command for agents** (`gapp guide`). Proposed:
    later; it adds a command and changes none.
-7. **`app.json` in 4.0.0 or the release after.** Proposed: 4.0.0, as the
-   last stage, so a repo can drop `gapp.yaml` in one move.
+6. **`app.json` in 4.0.0 or the release after.** Proposed: 4.0.0, as the
+   last stage.
+7. **Updating the workflows in a fleet repo.** `gapp fleet upgrade` as
+   above, or `gapp fleet use <repo>` doing both jobs. Proposed: the
+   separate command.
