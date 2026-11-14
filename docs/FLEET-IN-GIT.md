@@ -61,18 +61,24 @@ with any git host.
 
 There are two styles.
 
-| Style | How it works | Good for |
+| | The tool commits | You commit |
 |---|---|---|
-| The tool commits | A command commits and pushes for you | One operator; no setup; no paths to know; machines with no clone of the fleet |
-| You commit | The tool edits a file in your own clone; you commit, push and open a pull request | Teams that want each change reviewed |
+| A change is | One command | A command, then a commit, a push, a pull request, a merge and a pull |
+| A clone of the fleet | Not needed; gapp keeps its own, out of sight | Needed on every machine, and kept up to date by hand |
+| Acting on a stale copy | Cannot happen: gapp fetches before each read | Routine: a clone holds what it held at the last pull |
+| Two changes at once | The second is refused and run again | Merged by hand |
+| A change takes effect | At once | When someone merges it |
+| Each change is reviewed | No | Yes |
 
 gapp uses the first. A tool must work on a fresh machine with nothing to
-configure, and its operator should not need to know where state is kept.
-gapp keeps its own clone of the fleet repo out of sight and never touches
-a clone of yours.
+configure, its operator should not need to know where state is kept, and
+changing one setting should be one step. gapp never touches a clone of
+yours.
 
-The cost is review: a direct push skips it. The second style answers
-that, and can be added without changing the first: a fleet that is a file
-in a clone you point gapp at, where gapp writes the file and stops. That
-is also the simple route to requiring a merged pull request for every
-fleet change.
+The second style multiplies the steps of every change, for everyone,
+every time. It buys one thing: review. For an operator who needs each
+fleet change approved before it counts, that is worth the cost, and it
+can be added without changing the first: a fleet that is a file in a
+clone you point gapp at, where gapp writes the file and stops. It is not
+the better way waiting to be built. It is a heavier way, for the one case
+that needs it.
