@@ -4,6 +4,9 @@
 in CONTRIBUTING, "Direction: one fleet". "Picks for the open questions"
 gives a proposed answer to each question that section leaves open.
 
+The full list of commands, flags and files is in
+[INTERFACE.md](INTERFACE.md). Where the two differ, that page wins.
+
 ## Three things, three words
 
 | Word | What it is | Where |
