@@ -231,7 +231,9 @@ Each changes one definition and nothing else.
 |---|---|---|
 | `gapp ci deploy [--upgrade]` | The same deploy, on a runner | `gh` |
 | `gapp ci status [--live]` | The last run and what it deployed | `gh` |
-| `gapp ci sources add <owner>` / `remove <owner>` / `list` | Whose repos runners may deploy | `gh` |
+| `gapp ci sources add <owner>` | Lets runners deploy that owner's repos | `gh` |
+| `gapp ci sources remove <owner>` | Stops that | `gh` |
+| `gapp ci sources list` | Whose repos runners may deploy | `gh` |
 
 ### The fleet
 
@@ -241,13 +243,16 @@ Each changes one definition and nothing else.
 | `gapp fleet use <owner>/<repo> [--create]` | Moves the fleet to that repo and installs the workflows there, if it has none |
 | `gapp fleet use local` | Moves it to this machine |
 | `gapp fleet export [<file>]` / `gapp fleet import <file>` | Copies the fleet out or in. Import keeps a backup first |
-| `gapp fleet recover` | Rebuilds the fleet from the copy saved in each deployment's bucket |
 
 ### This machine
 
 | Command | Does |
 |---|---|
-| `gapp config profile list` / `use <name>` / `add <name>` / `remove <name>` / `rename <old> <new>` | Profiles: separate fleets and accounts on one machine. `use` refuses a name that does not exist |
+| `gapp config profile list` | Profiles: separate fleets and accounts on one machine |
+| `gapp config profile use <name>` | Switches to one. Refused when it does not exist |
+| `gapp config profile add <name>` | Makes one |
+| `gapp config profile remove <name>` | Removes one |
+| `gapp config profile rename <old> <new>` | Renames one |
 | `gapp config account [<email>]` | Shows or sets the Google Cloud login the active profile uses |
 
 ## MCP tools
@@ -260,7 +265,7 @@ deployment is always the `deployment` argument.
 `gapp_apply`, `gapp_deploy`, `gapp_status`, `gapp_secrets_list`,
 `gapp_secrets_set`, `gapp_secrets_get`, `gapp_ci_deploy`, `gapp_ci_status`,
 `gapp_ci_sources`, `gapp_fleet`, `gapp_fleet_use`,
-`gapp_fleet_export`, `gapp_fleet_import`, `gapp_fleet_recover`.
+`gapp_fleet_export`, `gapp_fleet_import`.
 
 No tool takes a secret's value or a path on the server's machine.
 
