@@ -16,20 +16,40 @@ A definition has a **name** (unique in the fleet, the word you type), an
 **id** (the prefix on its cloud resources, fixed, the name by default)
 and a **project**.
 
+## What gets built is in the definition
+
+A definition can carry a **ref**: a branch, a tag or a commit of the app's
+repo. A deploy builds that, and takes no ref of its own.
+
+- No ref: the repo's default branch, at its tip.
+- A branch: its tip at the time of the deploy. An environment is a
+  definition whose ref is a branch.
+- A tag or a commit: exactly that.
+
+Deploying something else is a change to the definition (`gapp manifest
+<name> set ref <r>`), then a deploy. So a release, a rollback and trying
+a branch (a copy with that branch as its ref) are all fleet changes, and
+the fleet records what each deployment is meant to run.
+
+Why no `--ref` on deploy: with one, whoever can start a deploy can build
+code that was never merged, whatever the app repo's branch rules say. The
+ref belongs with the rest of the definition, where a fleet that takes
+changes by pull request can review it.
+
 ## The commands
 
 | Command | Does | Needs |
 |---|---|---|
 | `gapp project setup <project>` | Once per project: APIs, Cloud Build's permissions, the hosted mark. With a GitHub fleet, also the trust that lets runners deploy there | gcloud as an Owner (and `gh` as an admin of the fleet repo, for a GitHub fleet) |
-| `gapp add [<name>] --project <p> [--repo <r>] [--domain <d>]` | Defines a deployment. Touches no cloud | the fleet |
-| `gapp add <name> --copy-of <existing> [--project <p>]` | Another deployment of the same repo | the fleet |
+| `gapp add [<name>] --project <p> [--repo <r>] [--ref <r>] [--domain <d>]` | Defines a deployment. Touches no cloud | the fleet |
+| `gapp add <name> --copy-of <existing> [--project <p>] [--ref <r>]` | Another deployment of the same repo | the fleet |
 | `gapp manifest [<name>] set\|unset\|env ...` | Changes one setting of a definition, in place | the fleet |
 | `gapp rename <old> <new>` | Changes the name only | the fleet |
-| `gapp deploy [<name>] [--ref <r>]` | Builds and deploys from this machine. Creates the deployment's bucket the first time | gcloud, Terraform, a clone |
+| `gapp deploy [<name>]` | Builds and deploys from this machine, at the definition's ref. Creates the deployment's bucket the first time | gcloud, Terraform, a clone |
 | `gapp status [<name>]` | What is live | gcloud |
 | `gapp secrets list\|get\|set ... [--deployment <name>]` | The deployment's secrets | gcloud |
 | `gapp list` | Every definition, and where the fleet lives | the fleet |
-| `gapp ci deploy <name> [--ref <r>]` | The same deploy, on a runner | `gh`, a GitHub fleet |
+| `gapp ci deploy <name>` | The same deploy, on a runner | `gh`, a GitHub fleet |
 | `gapp ci status <name>` | The same status, on a runner | `gh`, a GitHub fleet |
 | `gapp ci sources add\|remove\|list <owner>` | Whose repos runners may deploy | `gh` |
 | `gapp fleet` | Where the fleet lives | nothing |
@@ -54,6 +74,8 @@ stays, optional, for a repo owner who wants a `gapp.yaml`.
 | Name, outside a clone | Required |
 | A clone with no remote | Type a name; else `name:` in its gapp.yaml; else refused. A name alone matches only a definition with no repo |
 | `--project`, on a copy | The original's project |
+| `--ref`, on `add` | None: the repo's default branch |
+| `--ref`, on a copy | The original's |
 | Domain, on a copy | Not copied |
 | The fleet's location | A file on this machine |
 
@@ -80,6 +102,10 @@ deployments" to the ones on that project. It never creates anything.
 8. **Changing a definition's repo** (renamed or moved): `gapp add <name>
    --repo <new> --move`, which says what it re-points.
 9. **Removing a definition:** not in 4.0.0.
+9a. **Fleet changes by pull request** (a GitHub fleet whose default
+    branch takes changes only through a merged pull request, set up by
+    one opt-in command): not in 4.0.0. The ref in the definition is
+    what makes it worth adding later.
 10. **Secrets from a session with no gcloud:** not in 4.0.0.
 11. **A team requiring pull requests on the fleet repo:** not in 4.0.0.
 12. **State:** as today, in the deployment's own bucket. The
