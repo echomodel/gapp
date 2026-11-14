@@ -185,7 +185,8 @@ Every command takes `--json`.
 A command that changes the fleet writes straight to where the fleet lives:
 the file on this machine, or a commit to the repo. No runner is involved,
 so keeping a fleet in a repo needs no CI. Only the `gapp ci` commands use
-GitHub Actions; `gapp ci deploy` starts a run and takes `--no-watch`.
+GitHub Actions; `gapp ci deploy` starts a run and takes `--no-watch`. The
+reasons are in [FLEET-IN-GIT.md](FLEET-IN-GIT.md).
 
 ### Projects
 

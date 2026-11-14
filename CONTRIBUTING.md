@@ -997,7 +997,7 @@ them apart was deliberate, and it costs more than it saves:
 
 ### The intended design
 
-The commands, flags and files are in [docs/INTERFACE.md](docs/INTERFACE.md), and the build order in [docs/ONE-FLEET.md](docs/ONE-FLEET.md). Where a question below is answered there, that page is the answer.
+The commands, flags and files are in [docs/INTERFACE.md](docs/INTERFACE.md), and the build order in [docs/ONE-FLEET.md](docs/ONE-FLEET.md). Where a question below is answered there, that page is the answer. Why a fleet can live in a git repo, why gapp makes the commits itself, and why that is separate from CI are in [docs/FLEET-IN-GIT.md](docs/FLEET-IN-GIT.md).
 
 Written in the present tense for brevity; all of it is intended, none of it built.
 
