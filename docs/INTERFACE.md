@@ -243,6 +243,8 @@ No tool takes a secret's value or a path on the server's machine.
    older: refused, nothing started, and `gapp fleet upgrade` is printed.
    The fleet is newer: refused, with a line to install the newer gapp. No
    confirm flag.
-8. **The file's name.** It is the entry point, not only a list, so
-   `deployments.yaml` may be too narrow a name. Proposed: `fleet.yaml`.
-   A rename after 4.0.0 would be a break.
+8. **The file's name and place.** It is the entry point for whatever
+   gapp keeps in a repo, so its name should assume nothing about what is
+   inside: not that it is a list of deployments, and not that there is one
+   fleet. Proposed: `gapp.yaml` at the repo's root, with the same name for
+   the local file. A rename after 4.0.0 would be a break.
