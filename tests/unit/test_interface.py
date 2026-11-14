@@ -28,7 +28,7 @@ PAGE = (ROOT / "docs" / "INTERFACE.md").read_text()
 PENDING = {
     "project setup", "add", "upgrade", "rename", "show",
     "set", "unset", "apis add", "apis remove", "env set", "env unset", "apply",
-    "fleet use", "fleet export", "fleet import", "fleet recover",
+    "fleet use", "fleet export", "fleet import",
     "config profile list", "config profile use", "config profile add",
     "config profile remove", "config profile rename",
 }
@@ -55,7 +55,7 @@ MCP_PENDING = {
     "gapp_show", "gapp_set", "gapp_unset", "gapp_apis", "gapp_env_set",
     "gapp_env_unset", "gapp_apply", "gapp_secrets_list", "gapp_secrets_set",
     "gapp_secrets_get", "gapp_fleet_use", "gapp_fleet_export",
-    "gapp_fleet_import", "gapp_fleet_recover",
+    "gapp_fleet_import",
 }
 
 MCP_LEAVING = {

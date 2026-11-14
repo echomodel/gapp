@@ -51,7 +51,6 @@ commands:
   fleet use: {args: ["<target>"], options: [--create]}
   fleet export: {args: ["[file]"]}
   fleet import: {args: ["<file>"]}
-  fleet recover: {}
 
   config profile list: {}
   config profile use: {args: ["<name>"]}
@@ -90,4 +89,3 @@ mcp_tools:
   - gapp_fleet_use
   - gapp_fleet_export
   - gapp_fleet_import
-  - gapp_fleet_recover

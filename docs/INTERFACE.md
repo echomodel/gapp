@@ -246,7 +246,6 @@ Each changes one definition and nothing else.
 | `gapp fleet use <owner>/<repo> [--create]` | Moves the fleet to that repo and installs the workflows there, if it has none |
 | `gapp fleet use local` | Moves it to this machine |
 | `gapp fleet export [<file>]` / `gapp fleet import <file>` | Copies the fleet out or in. Import keeps a backup first |
-| `gapp fleet recover` | Rebuilds the fleet from the copy saved in each deployment's bucket |
 
 ### This machine
 
@@ -269,7 +268,7 @@ deployment is always the `deployment` argument.
 `gapp_apply`, `gapp_deploy`, `gapp_status`, `gapp_secrets_list`,
 `gapp_secrets_set`, `gapp_secrets_get`, `gapp_ci_deploy`, `gapp_ci_status`,
 `gapp_ci_sources`, `gapp_fleet`, `gapp_fleet_use`,
-`gapp_fleet_export`, `gapp_fleet_import`, `gapp_fleet_recover`.
+`gapp_fleet_export`, `gapp_fleet_import`.
 
 No tool takes a secret's value or a path on the server's machine.
 
