@@ -37,7 +37,7 @@ same reason.
 4. `deploy`, `status` and `secrets` read the fleet; `project setup`; the
    version label and its checks; the commands the page does not list go.
 5. A GitHub fleet through the same commands.
-6. `fleet export`, `import` and `recover`; then reading `app.json`.
+6. `fleet export` and `import`; then reading `app.json`.
 
 Built so far: where the fleet lives and reading it there
 (`gapp/admin/sdk/fleetstore.py`), the rules for which deployment a command

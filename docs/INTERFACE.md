@@ -272,6 +272,7 @@ No tool takes a secret's value or a path on the server's machine.
 - Secrets from a machine with no gcloud.
 - A shortcut for choosing among several deployments of one repo.
 - Reading more of a repo, such as a Compose file.
+- Rebuilding a lost fleet from what is deployed (`gapp fleet recover`).
 - A command that describes gapp to an agent (`gapp guide`).
 - A gapp version chosen per deployment ahead of an upgrade, and upgrading
   every definition at once.
