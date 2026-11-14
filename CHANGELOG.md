@@ -8,6 +8,11 @@ source is `gapp/__init__.py`.
 - Releasing no longer needs a tag pushed by hand: a workflow tags the
   commit and publishes the GitHub release when the version changes on
   `main`.
+- The advice `gapp secrets list` prints for an orphan or a conflicting
+  secret names the `gapp manifest env set` command where it said to edit
+  gapp.yaml by hand, and no longer says the declaration is missing "in
+  gapp.yaml": with `--deployment` it can come from the fleet's settings,
+  and the advice then says where either can be changed.
 
 ## 4.0.0rc13 (pre-release of 4.0.0)
 

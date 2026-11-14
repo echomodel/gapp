@@ -143,6 +143,20 @@ def test_list_reports_each_declared_secret_for_the_deployment(machine):
     assert sec_mod.list_secrets(deployment="alerts")["secrets"][0]["status"] == "ready"
 
 
+def test_an_orphans_advice_names_the_deployment_and_both_places_it_can_be_declared(machine):
+    machine.deploy(FLEET, "shop", "me/my-app", PROJECT, id="my-app")
+    machine.secret_manager.secrets[(PROJECT, "my-app-old-key")] = {"owner": "my-app", "versions": ["v"]}
+    res = sec_mod.list_secrets(deployment="shop")
+    assert res["orphans"] == ["my-app-old-key"]
+    hint = res["hints"][0]
+    assert hint["message"] == ("Secret 'my-app-old-key' is labeled for solution 'my-app' but 'shop' no longer "
+                               "declares it. No deployed env var reads it.")
+    declare = hint["options"][1]["command"]
+    assert declare.startswith("gapp manifest env set <ENV_VAR> --secret old-key")
+    assert "`gapp ci manifest shop`" in declare and "`gapp ci setup shop --manifest FILE --update`" in declare
+    assert "edit gapp.yaml" not in declare
+
+
 def test_list_says_when_the_app_repo_was_not_read(machine):
     machine.deploy(FLEET, "alerts", "them/alerts", PROJECT)
     machine.unreadable.add("them/alerts")
