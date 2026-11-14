@@ -81,7 +81,6 @@ mcp_tools:
   - gapp_deploy
   - gapp_status
   - gapp_secrets_list
-  - gapp_secrets_set
   - gapp_secrets_get
   - gapp_ci_init
   - gapp_ci_projects

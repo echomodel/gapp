@@ -290,31 +290,41 @@ def _render_status(data: dict) -> list[str]:
     return lines
 
 
-@main.command()
-@click.argument("name", required=False)
-@click.option("--project", default=None, help="Explicit GCP project id; skips the hosted-project search.")
+@main.command("status")
+@click.option("--deployment", "-d", "deployment", default=None, metavar="NAME",
+              help="The deployment. Left out inside a clone: the one this repo has.")
+@click.option("--json", "json_out", is_flag=True, help="Machine-readable output.")
 @click.pass_obj
-def status(sdk: GappSDK, name, project):
-    """Is the deployment up: its project, each service's URL and health, and the domain.
-
-    Reports the project the deployment is on, each service's URL with an
-    HTTP health check, the custom domain's state (with the CNAME to add
-    while it waits for DNS), and the next step when something is missing:
-    init, sign in, setup, or a start method. PENDING means set up but not
-    deployed yet: run `gapp deploy`. Secrets are checked by
-    `gapp secrets list`.
-
-    NAME is the deployment name; with it, status runs from any directory.
-    Without it, status reads the name from the current repo's gapp.yaml. A
-    stale or invalid gapp.yaml does not block these reads.
-    """
+def status(sdk: GappSDK, deployment, json_out):
+    """What is live for a deployment: its URL and health, the domain's state, and the next step."""
+    from gapp.admin.sdk.definitions import Refused
     try:
-        result = sdk.status(name=name, project=project)
+        result = sdk.status_definition(deployment)
+    except Refused as e:
+        if json_out:
+            click.echo(json_mod.dumps({"refused": True, "message": e.message}, indent=2))
+        else:
+            click.echo(e.message, err=True)
+        raise SystemExit(2)
     except (RuntimeError, ValueError) as e:
         click.echo(f"  Error: {e}", err=True)
         raise SystemExit(1)
-    for line in _render_status(result.model_dump()):
-        click.echo(line)
+    if json_out:
+        click.echo(json_mod.dumps(result, indent=2, default=str))
+        return
+    click.echo(f"{result['deployment']}, on {result['project']}")
+    if result["deployed"]:
+        click.echo(f"  URL      {result['url']}")
+        click.echo(f"  Healthy  {'yes' if result['healthy'] else 'no'}")
+        click.echo(f"  Deployed by gapp {result['last_deployed_by'] or 'unknown'}")
+    if domain := result["domain"]:
+        click.echo(f"  Domain   {domain.get('name')} ({domain.get('status')})")
+        if domain.get("status") == "pending_dns":
+            click.echo(f"    CNAME  {domain.get('name')} -> {domain.get('cname_target')}")
+        if domain.get("detail"):
+            click.echo(f"    {domain['detail']}")
+    if result["next_step"]:
+        click.echo(result["next_step"])
 
 
 @main.command("list")
@@ -1485,63 +1495,46 @@ def manifest_example_cmd():
 
 @main.group("secrets")
 def secrets_group():
-    """List, get, and set secret values for an app.
+    """List, get, and set a deployment's secret values.
 
     \b
-    A secret is declared in gapp.yaml as an environment variable read from it:
-      gapp manifest env set API_KEY --secret api-key              you set the value
-      gapp manifest env set SIGNING_KEY --secret signing-key --generate   gapp makes one
+    A variable reads a secret once its definition says so:
+      gapp env set API_KEY --secret                       you set the value
+      gapp env set SIGNING_KEY --secret --generate        gapp makes one on the first deploy
     then:
-      gapp secrets list                  each secret's state, with the commands that fix it
-      gapp secrets set api-key           store a value (prompts; --from-stdin to pipe)
-    Each is stored in Secret Manager as <app name>-<secret name>.
-
-    \b
-    Which app: the one in the current folder, or with --deployment NAME a
-    deployment of your fleet, from any folder:
-      gapp secrets list --deployment my-app
-      gapp secrets set api-key --deployment my-app
-    With --deployment, the project and the declared secrets come from the
-    fleet (its settings for the deployment merged over the app repo's
-    gapp.yaml), so it also works for a deployment configured only in the
-    fleet and for a copy. It needs gh for that read and gcloud for the
-    secret. No runner is involved: the value goes from this machine to
-    Secret Manager.
-
-    \b
-    --deployment is the one case where a command outside `gapp ci` reads
-    your fleet. Every other root command works from the app's folder and
-    Google Cloud alone.
+      gapp secrets list            each secret's state, with the commands that fix it
+      gapp secrets set api-key     store a value (prompts; --from-stdin to pipe)
+    Each is stored in Secret Manager as <deployment id>-<secret name>. The
+    value goes from this machine to Secret Manager and nowhere else.
     """
 
 
-_DEPLOYMENT_OPTION = click.option(
-    "--deployment", default=None, metavar="NAME",
-    help="A deployment of your fleet, instead of the app in the current folder. Its project and declared "
-         "secrets are read from the fleet (needs gh; no runner).")
-
-
-@secrets_group.command("list")
-@click.argument("name", required=False)
-@_DEPLOYMENT_OPTION
-def secrets_list_cmd(name, deployment):
-    """Show declared secrets, deploy-readiness, and remediation hints."""
-    from gapp.admin.sdk.secrets import list_secrets
+def _secrets_call(json_out, fn, *args, **kwargs):
+    from gapp.admin.sdk.definitions import Refused
     try:
-        result = list_secrets(name=name, deployment=deployment)
+        return fn(*args, **kwargs)
+    except Refused as e:
+        _refused(e, json_out)
     except RuntimeError as e:
         click.echo(f"  Error: {e}", err=True)
         raise SystemExit(1)
 
-    click.echo(f"App:     {result.get('deployment') or result['solution']}")
-    if result.get("project_id"):
-        click.echo(f"Project: {result['project_id']}")
-    else:
-        click.echo("Project: (none — run `gapp setup` first)")
 
+@secrets_group.command("list")
+@_DEPLOYMENT
+@_JSON
+def secrets_list_cmd(deployment, json_out):
+    """A deployment's secrets, whether each has a value, and what to do about any that don't."""
+    from gapp.admin.sdk.secrets import list_secrets
+    result = _secrets_call(json_out, list_secrets, deployment=deployment)
+    if json_out:
+        _json(result)
+        return
+    click.echo(f"Deployment: {result['deployment']}")
+    click.echo(f"Project:    {result['project_id']}")
     if result["secrets"]:
         click.echo()
-        click.echo(f"  {'Secret':<20} {'Env Var':<25} {'Status':<18} Generate")
+        click.echo(f"  {'Secret':<20} {'Variable':<25} {'Status':<18} Generate")
         click.echo("  " + "-" * 70)
         for s in result["secrets"]:
             click.echo(
@@ -1549,17 +1542,11 @@ def secrets_list_cmd(name, deployment):
                 f"{s['status']:<18} {'yes' if s['generate'] else 'no'}"
             )
     else:
-        click.echo(f"\n  No secrets declared for {result['deployment']}." if result.get("deployment")
-                   else "\n  No secrets declared in gapp.yaml.")
-    for note in result.get("notes") or []:
-        click.echo(f"\n  Note: {note}")
-
+        click.echo(f"\n  {result['deployment']} reads no secrets.")
     if result["orphans"]:
-        click.echo("\n  Orphans (labeled in GCP but not declared"
-                   + (f" for {result['deployment']}):" if result.get("deployment") else " in gapp.yaml):"))
+        click.echo(f"\n  In Google Cloud for {result['deployment']}, but read by no variable:")
         for orphan_id in result["orphans"]:
             click.echo(f"    - {orphan_id}")
-
     if result["hints"]:
         click.echo("\n" + "=" * 72)
         click.echo("Resolution options")
@@ -1574,18 +1561,16 @@ def secrets_list_cmd(name, deployment):
 
 @secrets_group.command("get")
 @click.argument("name")
-@click.option("--plaintext", is_flag=True, help="Print the actual secret value (default: hash + length only).")
-@_DEPLOYMENT_OPTION
-def secrets_get_cmd(name, plaintext, deployment):
-    """Fetch a secret. Default output is a hash + length; --plaintext prints the value."""
+@click.option("--plaintext", is_flag=True, help="Print the value itself (default: a hash and the length only).")
+@_DEPLOYMENT
+@_JSON
+def secrets_get_cmd(name, plaintext, deployment, json_out):
+    """Whether a secret is set. Prints a hash and the length; --plaintext prints the value."""
     from gapp.admin.sdk.secrets import get_secret
-    try:
-        result = get_secret(name, plaintext=plaintext, deployment=deployment)
-    except RuntimeError as e:
-        click.echo(f"  Error: {e}", err=True)
-        raise SystemExit(1)
-
-    if plaintext:
+    result = _secrets_call(json_out, get_secret, name, plaintext=plaintext, deployment=deployment)
+    if json_out:
+        _json(result)
+    elif plaintext:
         click.echo(result["value"])
     else:
         click.echo(f"  Name:      {result['name']}")
@@ -1596,29 +1581,25 @@ def secrets_get_cmd(name, plaintext, deployment):
 
 @secrets_group.command("set")
 @click.argument("name")
-@click.argument("value", required=False)
-@click.option("--from-stdin", is_flag=True, help="Read value from stdin (use to avoid shell history).")
-@_DEPLOYMENT_OPTION
-def secrets_set_cmd(name, value, from_stdin, deployment):
-    """Store a secret value. Without VALUE, prompts (or pass --from-stdin to pipe)."""
+@click.option("--from-stdin", is_flag=True, help="Read the value from stdin, to pipe it in.")
+@_DEPLOYMENT
+@_JSON
+def secrets_set_cmd(name, from_stdin, deployment, json_out):
+    """Store a secret's value. Prompts for it, or reads it from stdin with --from-stdin.
+
+    The value is never an argument, so it does not land in shell history.
+    """
     from gapp.admin.sdk.secrets import _find_secret, set_secret
-    if deployment and not from_stdin and value is None:
-        # Check the deployment and the secret before asking for the value.
-        try:
-            _find_secret(name, deployment)
-        except RuntimeError as e:
-            click.echo(f"  Error: {e}", err=True)
-            raise SystemExit(1)
+    _secrets_call(json_out, _find_secret, name, deployment)      # the deployment and the secret, before asking
     if from_stdin:
         value = sys.stdin.read().rstrip("\n")
-    elif value is None:
+    else:
         value = click.prompt("Value", hide_input=True, confirmation_prompt=True)
-    try:
-        result = set_secret(name, value, deployment=deployment)
-    except RuntimeError as e:
-        click.echo(f"  Error: {e}", err=True)
-        raise SystemExit(1)
-    click.echo(f"  {result.get('status', 'set')}: {result.get('secret_id', name)}")
+    result = _secrets_call(json_out, set_secret, name, value, deployment=deployment)
+    if json_out:
+        _json(result)
+        return
+    click.echo(f"  set: {result.get('secret_id', name)}")
 
 
 def cli_entry():

@@ -61,15 +61,6 @@ def test_deploy_refuses_a_name_on_two_projects_even_on_a_dry_run(tmp_path, monke
         assert str(exc.value) == AMBIGUOUS
 
 
-def test_the_cli_prints_the_ambiguity_message_for_status(monkeypatch):
-    def ambiguous(*a, **k):
-        raise AmbiguousDeployment(AMBIGUOUS)
-    monkeypatch.setattr(GappSDK, "status", ambiguous)
-    for args in (["status", "my-app"],):
-        res = CliRunner().invoke(cli_main, args)
-        assert AMBIGUOUS in res.output, (args, res.output)
-
-
 def test_a_ci_run_with_an_explicit_project_reads_no_project_labels(tmp_path, monkeypatch, sdk):
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
     _repo(tmp_path, monkeypatch)

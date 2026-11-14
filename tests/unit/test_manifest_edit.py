@@ -273,8 +273,7 @@ def test_cli_schema_and_example_print_only_their_content():
 BAD_YAML = "name: demo-app\nenv:\n  - name: A\n   value: b\n"
 
 
-@pytest.mark.parametrize("args", [["init"], ["manifest", "show"], ["manifest", "set", "public", "true"],
-                                  ["secrets", "list"]])
+@pytest.mark.parametrize("args", [["init"], ["manifest", "show"], ["manifest", "set", "public", "true"]])
 def test_unreadable_yaml_gives_one_plain_message_and_changes_nothing(tmp_path, monkeypatch, args):
     repo = _repo(tmp_path, monkeypatch, files={"gapp.yaml": BAD_YAML})
     result = _run_entry(args)
@@ -284,7 +283,7 @@ def test_unreadable_yaml_gives_one_plain_message_and_changes_nothing(tmp_path, m
     assert _yaml(repo) == BAD_YAML
 
 
-@pytest.mark.parametrize("args", [["init"], ["secrets", "list"], ["manifest", "set", "public", "true"]])
+@pytest.mark.parametrize("args", [["init"], ["manifest", "set", "public", "true"]])
 def test_schema_problems_give_one_plain_message_and_change_nothing(tmp_path, monkeypatch, args):
     repo = _repo(tmp_path, monkeypatch, files={"gapp.yaml": "name: demo-app\npublik: true\n"})
     result = _run_entry(args)

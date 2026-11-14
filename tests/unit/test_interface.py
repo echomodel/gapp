@@ -44,14 +44,12 @@ LEAVING = {
 
 # In both, but the arguments or options are not the page's yet.
 DIFFERENT = {
-    "status", "secrets list", "secrets set", "secrets get",
     "ci deploy", "ci status", "ci sources add", "ci sources remove",
     "ci sources list", "ci init", "config account",
 }
 
 MCP_PENDING = {
-    "gapp_ci_projects", "gapp_secrets_list", "gapp_secrets_set",
-    "gapp_secrets_get", "gapp_fleet_use", "gapp_fleet_export",
+    "gapp_ci_projects", "gapp_fleet_use", "gapp_fleet_export",
     "gapp_fleet_import",
 }
 
@@ -59,7 +57,6 @@ MCP_LEAVING = {
     "gapp_schema", "gapp_manifest_example", "gapp_manifest_show",
     "gapp_manifest_set", "gapp_manifest_unset", "gapp_manifest_env_set",
     "gapp_manifest_env_unset", "gapp_user", "gapp_init", "gapp_setup",
-    "gapp_secret_get", "gapp_secret_set", "gapp_secret_list",
     "gapp_ci_project_setup", "gapp_ci_setup",
     "gapp_ci_manifest", "gapp_ci_rename", "gapp_ci_trigger", "gapp_ci_list",
 }
