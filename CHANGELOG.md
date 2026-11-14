@@ -26,6 +26,17 @@ Breaking changes:
   their labels.
   The local file is `gapp.yaml`, and starts with `format: 1`: a gapp that
   does not know a file's format stops there and changes nothing.
+- New commands that define deployments and change their settings in a
+  fleet kept on this machine, none of which touches the cloud: `gapp add`
+  (with `--copy-of`), `gapp rename`, `gapp show`, `gapp upgrade`, `gapp
+  set`, `gapp unset`, `gapp apis add|remove`, `gapp env set|unset` and
+  `gapp apply <file>` (MCP: `gapp_add`, `gapp_rename`, `gapp_show`,
+  `gapp_upgrade`, `gapp_set`, `gapp_unset`, `gapp_apis`, `gapp_env_set`,
+  `gapp_env_unset`, `gapp_apply`). Each names its deployment with
+  `--deployment`, or inside a clone takes the one its remote has. A
+  refusal changes nothing and exits 2. A definition records the gapp
+  version that wrote it; only `gapp upgrade` moves it. Nothing deploys
+  from these definitions yet, and they do not work on a GitHub fleet yet.
 - Releasing no longer needs a tag pushed by hand: a workflow tags the
   commit and publishes the GitHub release when the version changes on
   `main`.

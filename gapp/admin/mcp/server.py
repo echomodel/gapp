@@ -665,6 +665,129 @@ def gapp_fleet() -> dict:
     return describe_fleet()
 
 
+# --- definitions and their settings (the fleet; no cloud) ---
+
+
+def _definition_tool(fn, *args, **kwargs) -> dict:
+    from gapp.admin.sdk import definitions
+    try:
+        return getattr(definitions, fn)(*args, **kwargs)
+    except definitions.Refused as e:
+        return {"refused": True, "message": e.message}
+
+
+@_tool()
+def gapp_add(name: str | None = None, project: str | None = None, repo: str | None = None,
+             ref: str | None = None, id: str | None = None, copy_of: str | None = None) -> dict:
+    """Define a deployment in the fleet: its name, the repo it runs
+    (`owner/repo`), its Google Cloud project, and optionally the `ref` a
+    deploy builds (a branch, tag or commit; none means the default branch)
+    and the `id` that prefixes its cloud resources (the name by default).
+    Touches no cloud and deploys nothing. Refused when the name exists.
+    With `copy_of`, the new deployment is another deployment of that one's
+    repo: it takes its settings except the domain, and its project and ref
+    unless given. The definition records the gapp version that wrote it.
+    A refusal comes back as `{"refused": true, "message": ...}` and means
+    nothing was changed; the same holds for every tool that changes a
+    definition.
+    """
+    return _definition_tool("add", name, project=project, repo=repo, ref=ref, id=id, copy_of=copy_of)
+
+
+@_tool()
+def gapp_rename(old: str, new: str) -> dict:
+    """Change a deployment's name. Its id, and so every cloud resource it
+    has, stays as it is."""
+    return _definition_tool("rename", old, new)
+
+
+@_tool()
+def gapp_show(deployment: str | None = None) -> dict:
+    """One deployment's definition (repo, project, ref, the gapp version
+    that wrote it) and the settings a deploy would use, each marked as
+    from the definition or a default. `upgrade` is "available" when this
+    gapp is newer than the definition. `deployment` may be left out only
+    when the server runs inside a clone of the app's repo.
+    """
+    return _definition_tool("show", deployment)
+
+
+@_tool()
+def gapp_upgrade(deployment: str | None = None) -> dict:
+    """Bring one deployment's definition to this gapp's version. It takes
+    no version: the target is always the gapp running it. Changes the
+    definition only; the next deploy applies it and must be given
+    `upgrade`. Refused when there is nothing to upgrade, when the
+    definition is newer than this gapp, or when it is too old for this
+    gapp to upgrade from (the message names the gapp to install first).
+    Check `gapp_show` first: call this only when it reports an upgrade.
+    """
+    return _definition_tool("upgrade", deployment)
+
+
+@_tool()
+def gapp_set(key: str, value: str, deployment: str | None = None) -> dict:
+    """Set one value of a deployment's definition. `key` is one of: ref,
+    repo, public (true/false), domain, start, memory (512Mi, 1Gi), cpu,
+    max_instances. A deployment's id, project and gapp version cannot be
+    set. Variables are `gapp_env_set`; extra APIs are `gapp_apis`.
+    """
+    return _definition_tool("set_value", key, value, deployment=deployment)
+
+
+@_tool()
+def gapp_unset(key: str, deployment: str | None = None) -> dict:
+    """Clear one value of a deployment's definition (ref, public, domain,
+    start, memory, cpu or max_instances), so its default applies again."""
+    return _definition_tool("unset_value", key, deployment=deployment)
+
+
+@_tool()
+def gapp_apis(action: str, api: str, deployment: str | None = None) -> dict:
+    """Add or remove one extra Google Cloud API the deployment's app uses
+    (`action`: "add" or "remove"; `api` such as drive.googleapis.com)."""
+    if action not in ("add", "remove"):
+        return {"refused": True, "message": "action is 'add' or 'remove'."}
+    return _definition_tool(f"apis_{action}", api, deployment=deployment)
+
+
+@_tool()
+def gapp_env_set(name: str, value: str | None = None, secret: str | None = None, generate: bool = False,
+                 data_path: str | None = None, deployment: str | None = None) -> dict:
+    """Add or replace one variable the deployment's app reads. Exactly one
+    kind: a plain `value`; `secret`, the name of the secret it reads (pass
+    "" for the default, the variable's name in lower case with dashes),
+    with `generate` to have gapp make the value on the first deploy; or
+    `data_path`, a subfolder of the deployment's data folder, which
+    survives restarts (pass "" for the folder itself). A plain value is
+    stored in the fleet as written, so anything sensitive goes in a
+    secret. This tool never takes a secret's value: `next` names the
+    command the user runs to store it.
+    """
+    return _definition_tool("env_set", name, value, secret=secret, generate=generate,
+                            data_path=data_path, deployment=deployment)
+
+
+@_tool()
+def gapp_env_unset(name: str, deployment: str | None = None) -> dict:
+    """Remove one variable from a deployment's definition. A secret it
+    read is left in place."""
+    return _definition_tool("env_unset", name, deployment=deployment)
+
+
+@_tool()
+def gapp_apply(settings: dict, deployment: str | None = None) -> dict:
+    """Replace a deployment's settings with `settings`, all at once or not
+    at all. `settings` is the whole settings object (public, domain,
+    start, memory, cpu, max_instances, apis, env); anything it leaves out
+    goes back to its default or is removed, variables included. Read the
+    current settings with `gapp_show` first and send them back with the
+    changes made. `changes` lists every value that changed.
+    """
+    import yaml
+    return _definition_tool("apply", yaml.safe_dump(settings or {}), deployment=deployment, source="settings")
+
+
 def main():
     """Run the MCP server on stdio."""
     mcp.run(transport="stdio")

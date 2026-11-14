@@ -6,7 +6,7 @@
 # options: long option names. Every command also takes --json.
 # one:     true when the command is about one deployment, and so takes
 #          --deployment / -d.
-# runs:    true when the command starts a run on a GitHub fleet, and so
+# runs:    true when the command starts a run in GitHub Actions, and so
 #          takes --no-watch.
 
 commands:
@@ -15,23 +15,21 @@ commands:
   add:
     args: ["[name]"]
     options: [--project, --repo, --ref, --id, --copy-of]
-    runs: true
-  upgrade: {one: true, runs: true}
-  rename: {args: ["<old>", "<new>"], runs: true}
+  upgrade: {one: true}
+  rename: {args: ["<old>", "<new>"]}
   list: {}
   show: {one: true}
 
-  set: {args: ["<key>", "<value>"], one: true, runs: true}
-  unset: {args: ["<key>"], one: true, runs: true}
-  apis add: {args: ["<api>"], one: true, runs: true}
-  apis remove: {args: ["<api>"], one: true, runs: true}
+  set: {args: ["<key>", "<value>"], one: true}
+  unset: {args: ["<key>"], one: true}
+  apis add: {args: ["<api>"], one: true}
+  apis remove: {args: ["<api>"], one: true}
   env set:
     args: ["<name>", "[value]"]
     options: [--secret, --generate, --data-path]
     one: true
-    runs: true
-  env unset: {args: ["<name>"], one: true, runs: true}
-  apply: {args: ["<file>"], one: true, runs: true}
+  env unset: {args: ["<name>"], one: true}
+  apply: {args: ["<file>"], one: true}
 
   deploy:
     options: [--dry-run, --rebuild, --replace-domain, --upgrade]

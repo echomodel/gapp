@@ -53,7 +53,7 @@ format: 1
 deployments:
   my-app:
     id: my-app
-    repo: github.com/owner/my-app
+    repo: owner/my-app
     project: my-project
     ref: main
     gapp: 4.0.0
@@ -81,7 +81,7 @@ that knows both reads both.
 |---|---|---|
 | The key under `deployments` (`my-app`) | The name. Unique in the fleet. The word you type | `gapp rename` |
 | `id` | The prefix on the deployment's cloud resources. The name by default | Never |
-| `repo` | Where the code is. Absent for an app with no remote | `gapp set repo` |
+| `repo` | Where the code is: `owner/repo` on GitHub, `host/path` elsewhere. Absent for an app with no remote | `gapp set repo` |
 | `project` | The Google Cloud project | Never |
 | `ref` | The branch, tag or commit a deploy builds. Absent: the default branch | `gapp set ref` |
 | `gapp` | The gapp version this definition was written by, and the one that deploys it. Never typed | `gapp upgrade` |
@@ -180,8 +180,12 @@ A folder's name is never used. A clone with no remote is matched only by
 
 ## Commands
 
-Every command takes `--json`. Commands that start a run on GitHub take
-`--no-watch`.
+Every command takes `--json`.
+
+A command that changes the fleet writes straight to where the fleet lives:
+the file on this machine, or a commit to the repo. No runner is involved,
+so keeping a fleet in a repo needs no CI. Only the `gapp ci` commands use
+GitHub Actions; `gapp ci deploy` starts a run and takes `--no-watch`.
 
 ### Projects
 
