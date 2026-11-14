@@ -26,7 +26,7 @@ PAGE = (ROOT / "docs" / "INTERFACE.md").read_text()
 
 # In the page, not built yet.
 PENDING = {
-    "project setup",
+    "project setup", "ci projects connect", "ci projects list",
     "fleet use", "fleet export", "fleet import",
     "config profile list", "config profile use", "config profile add",
     "config profile remove", "config profile rename",
@@ -37,7 +37,7 @@ LEAVING = {
     "setup", "init",
     "manifest show", "manifest set", "manifest unset", "manifest env set",
     "manifest env unset", "manifest example", "manifest schema",
-    "ci init", "ci setup", "ci project setup", "ci rename", "ci list",
+    "ci setup", "ci project setup", "ci rename", "ci list",
     "ci manifest",
     "config", "config profile", "config discovery",
 }
@@ -46,11 +46,11 @@ LEAVING = {
 DIFFERENT = {
     "deploy", "status", "list", "secrets list", "secrets set", "secrets get",
     "ci deploy", "ci status", "ci sources add", "ci sources remove",
-    "ci sources list", "config account",
+    "ci sources list", "ci init", "config account",
 }
 
 MCP_PENDING = {
-    "gapp_project_setup", "gapp_secrets_list", "gapp_secrets_set",
+    "gapp_project_setup", "gapp_ci_projects", "gapp_secrets_list", "gapp_secrets_set",
     "gapp_secrets_get", "gapp_fleet_use", "gapp_fleet_export",
     "gapp_fleet_import",
 }
@@ -60,7 +60,7 @@ MCP_LEAVING = {
     "gapp_manifest_set", "gapp_manifest_unset", "gapp_manifest_env_set",
     "gapp_manifest_env_unset", "gapp_user", "gapp_init", "gapp_setup",
     "gapp_secret_get", "gapp_secret_set", "gapp_secret_list",
-    "gapp_ci_init", "gapp_ci_project_setup", "gapp_ci_setup",
+    "gapp_ci_project_setup", "gapp_ci_setup",
     "gapp_ci_manifest", "gapp_ci_rename", "gapp_ci_trigger", "gapp_ci_list",
 }
 

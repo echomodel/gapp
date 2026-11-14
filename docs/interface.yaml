@@ -39,6 +39,9 @@ commands:
   secrets set: {args: ["<name>"], options: [--from-stdin], one: true}
   secrets get: {args: ["<name>"], options: [--plaintext], one: true}
 
+  ci init: {}
+  ci projects connect: {args: ["<project>"]}
+  ci projects list: {}
   ci deploy: {options: [--upgrade], one: true, runs: true}
   ci status: {options: [--live], one: true}
   ci sources add: {args: ["<owner>"]}
@@ -80,6 +83,8 @@ mcp_tools:
   - gapp_secrets_list
   - gapp_secrets_set
   - gapp_secrets_get
+  - gapp_ci_init
+  - gapp_ci_projects
   - gapp_ci_deploy
   - gapp_ci_status
   - gapp_ci_sources
