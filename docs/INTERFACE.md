@@ -180,8 +180,12 @@ A folder's name is never used. A clone with no remote is matched only by
 
 ## Commands
 
-Every command takes `--json`. Commands that start a run on GitHub take
-`--no-watch`.
+Every command takes `--json`.
+
+A command that changes the fleet writes straight to where the fleet lives:
+the file on this machine, or a commit to the repo. No runner is involved,
+so keeping a fleet in a repo needs no CI. Only the `gapp ci` commands use
+GitHub Actions; `gapp ci deploy` starts a run and takes `--no-watch`.
 
 ### Projects
 

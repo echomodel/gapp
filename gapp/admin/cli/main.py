@@ -1063,8 +1063,6 @@ def fleet_group(ctx, json_out):
 _DEPLOYMENT = click.option("--deployment", "-d", "deployment", default=None, metavar="NAME",
                            help="The deployment. Left out inside a clone: the one this repo has.")
 _JSON = click.option("--json", "json_out", is_flag=True, help="Machine-readable output.")
-_NO_WATCH = click.option("--no-watch", is_flag=True,
-                         help="On a GitHub fleet: start the run and return without waiting for it.")
 
 
 def _json(result):
@@ -1110,9 +1108,8 @@ def _definition_command(json_out, nothing, fn, *args, **kwargs):
 @click.option("--ref", default=None, metavar="REF", help="The branch, tag or commit a deploy builds. Left out: the default branch.")
 @click.option("--id", "id_", default=None, metavar="ID", help="The prefix on its cloud resources. Left out: the name.")
 @click.option("--copy-of", default=None, metavar="EXISTING", help="Make it a second deployment of that one's repo, with its settings.")
-@_NO_WATCH
 @_JSON
-def add_cmd(name, project, repo, ref, id_, copy_of, no_watch, json_out):
+def add_cmd(name, project, repo, ref, id_, copy_of, json_out):
     """Define a deployment. Touches no cloud.
 
     \b
@@ -1139,9 +1136,8 @@ def add_cmd(name, project, repo, ref, id_, copy_of, no_watch, json_out):
 @main.command("rename")
 @click.argument("old")
 @click.argument("new")
-@_NO_WATCH
 @_JSON
-def rename_cmd(old, new, no_watch, json_out):
+def rename_cmd(old, new, json_out):
     """Change a deployment's name. Its cloud resources keep theirs."""
     _definition_command(json_out, "", lambda d: d.rename, old, new)
 
@@ -1173,9 +1169,8 @@ def show_cmd(deployment, json_out):
 
 @main.command("upgrade")
 @_DEPLOYMENT
-@_NO_WATCH
 @_JSON
-def upgrade_cmd(deployment, no_watch, json_out):
+def upgrade_cmd(deployment, json_out):
     """Bring one deployment's definition to this gapp's version.
 
     Changes the definition only. The next deploy applies it, and needs
@@ -1199,9 +1194,8 @@ def upgrade_cmd(deployment, no_watch, json_out):
 @click.argument("key")
 @click.argument("value")
 @_DEPLOYMENT
-@_NO_WATCH
 @_JSON
-def set_cmd(key, value, deployment, no_watch, json_out):
+def set_cmd(key, value, deployment, json_out):
     """Set one value of a deployment's definition.
 
     \b
@@ -1214,9 +1208,8 @@ def set_cmd(key, value, deployment, no_watch, json_out):
 @main.command("unset")
 @click.argument("key")
 @_DEPLOYMENT
-@_NO_WATCH
 @_JSON
-def unset_cmd(key, deployment, no_watch, json_out):
+def unset_cmd(key, deployment, json_out):
     """Clear one value of a deployment's definition; its default applies again."""
     _definition_command(json_out, f"Nothing to change: {key} is not set.",
                         lambda d: d.unset_value, key, deployment=deployment)
@@ -1230,9 +1223,8 @@ def apis_group():
 @apis_group.command("add")
 @click.argument("api")
 @_DEPLOYMENT
-@_NO_WATCH
 @_JSON
-def apis_add_cmd(api, deployment, no_watch, json_out):
+def apis_add_cmd(api, deployment, json_out):
     """Add an API, such as drive.googleapis.com."""
     _definition_command(json_out, f"Nothing to change: {api} is already listed.",
                         lambda d: d.apis_add, api, deployment=deployment)
@@ -1241,9 +1233,8 @@ def apis_add_cmd(api, deployment, no_watch, json_out):
 @apis_group.command("remove")
 @click.argument("api")
 @_DEPLOYMENT
-@_NO_WATCH
 @_JSON
-def apis_remove_cmd(api, deployment, no_watch, json_out):
+def apis_remove_cmd(api, deployment, json_out):
     """Remove an API from the list."""
     _definition_command(json_out, f"Nothing to change: {api} is not listed.",
                         lambda d: d.apis_remove, api, deployment=deployment)
@@ -1263,9 +1254,8 @@ def env_group():
 @click.option("--data-path", default=None, is_flag=False, flag_value="", metavar="[SUBFOLDER]",
               help="Point it at the deployment's data folder, which survives restarts.")
 @_DEPLOYMENT
-@_NO_WATCH
 @_JSON
-def env_set_cmd(name, value, secret, generate, data_path, deployment, no_watch, json_out):
+def env_set_cmd(name, value, secret, generate, data_path, deployment, json_out):
     """Add or replace one variable.
 
     \b
@@ -1282,9 +1272,8 @@ def env_set_cmd(name, value, secret, generate, data_path, deployment, no_watch, 
 @env_group.command("unset")
 @click.argument("name")
 @_DEPLOYMENT
-@_NO_WATCH
 @_JSON
-def env_unset_cmd(name, deployment, no_watch, json_out):
+def env_unset_cmd(name, deployment, json_out):
     """Remove one variable. A secret it read is left in place."""
     _definition_command(json_out, f"Nothing to change: {name} is not set.",
                         lambda d: d.env_unset, name, deployment=deployment)
@@ -1293,9 +1282,8 @@ def env_unset_cmd(name, deployment, no_watch, json_out):
 @main.command("apply")
 @click.argument("file", type=click.Path(dir_okay=False))
 @_DEPLOYMENT
-@_NO_WATCH
 @_JSON
-def apply_cmd(file, deployment, no_watch, json_out):
+def apply_cmd(file, deployment, json_out):
     """Replace a deployment's settings with a file's, all at once.
 
     \b
