@@ -167,6 +167,13 @@ class CloudProvider(ABC):
     # -- Miscellaneous --
 
     @abstractmethod
+    def active_account(self) -> Optional[str]:
+        """The identity this machine acts as in the cloud right now: a
+        person's login, or on a runner the deploy service account. None when
+        it cannot be told."""
+        pass
+
+    @abstractmethod
     def get_auth_token(self) -> str:
         """Return a fresh GCP access token."""
         pass

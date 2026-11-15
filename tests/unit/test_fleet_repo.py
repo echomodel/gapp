@@ -100,6 +100,22 @@ def test_remove_gives_the_git_command_that_shows_what_it_took_out(remote):
     assert "gapp: remove my-app" in shown and "-      public: true" in shown
 
 
+def test_a_change_a_git_hook_refuses_shows_everything_the_hook_said(remote, machine):
+    fleetstore.use(remote)
+    definitions.add("my-app", project="my-project", repo="acme/my-app")
+    hook = machine / "no-hooks" / "pre-commit"
+    hook.write_text("#!/bin/sh\necho '  [FAIL] Patterns'\necho '         gapp.yaml:4 [domain] app.example.test'\n"
+                    "echo 'FAILED: 1 check(s) found issues'\nexit 1\n")
+    hook.chmod(0o755)
+    with pytest.raises(Refused) as caught:
+        definitions.set_value("domain", "app.example.test", deployment="my-app")
+    said = caught.value.message
+    assert "Nothing was changed." in said
+    assert "gapp.yaml:4 [domain] app.example.test" in said and "FAILED: 1 check(s) found issues" in said
+    assert "domain" not in (fleetstore.read()["my-app"].get("settings") or {})
+    assert log(remote) == ["gapp: add my-app"]
+
+
 def test_a_change_that_changes_nothing_makes_no_commit(remote):
     fleetstore.use(remote)
     definitions.add("my-app", project="my-project", repo="acme/my-app")
