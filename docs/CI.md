@@ -50,9 +50,17 @@ Google Cloud login.
 | Works with GitHub access only | Needs a Google Cloud login |
 |---|---|
 | `gapp add`, `set`, `env`, `upgrade`, `rename`, `remove` (each a commit to the fleet repo) | `gapp project setup`, `gapp ci projects connect` (once per project, as an Owner) |
-| `gapp list`, `gapp show` | `gapp secrets set` (a value someone supplies; generated secrets need nothing) |
-| `gapp ci deploy`, `gapp ci status --live` | `gapp deployments list`, `gapp deployments scan` |
-| `gapp ci init`, `gapp ci sources` (as an admin of the fleet repo) | `gapp deploy`, `gapp status` (they act from this machine) |
+| `gapp list`, `gapp show` | `gapp secrets set`, `list`, `get` (generated secrets need nothing) |
+| `gapp ci deploy`, `gapp ci status`, `gapp ci status --live` | `gapp deployments list`, `gapp deployments scan` |
+| | `gapp deploy`, `gapp status` (they act from this machine) |
+
+The fleet repo's admin steps, `gapp ci init`, `gapp ci sources` and
+`gapp ci projects list`, need no Google Cloud login, but they read and
+write the repo's workflows, Actions variables and Environments, which
+some GitHub access does not reach: a narrowly scoped token, or the GitHub
+access of an agent's sandbox. Run them where `gh` is signed in as an
+admin of the fleet repo. Allowing a new owner's repos (`gapp ci sources
+add`) widens what can be deployed, so it belongs there anyway.
 
 ## What a run does
 
