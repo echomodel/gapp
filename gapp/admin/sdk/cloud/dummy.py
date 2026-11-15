@@ -21,7 +21,6 @@ class DummyCloudProvider(CloudProvider):
         self.tf_outputs = {} # (bucket, prefix) -> outputs_dict
         self.iam_bindings = [] # list of dicts
         self.last_tfvars = None
-        self.verified_domains = set() # domains the identity has verified
         self.domain_mappings = {} # (project_id, domain) -> mapping resource dict
         self.unreadable_state = set()  # (bucket, prefix) whose Terraform state cannot be read
         self.services = {}  # (project_id, service_name) -> labels
@@ -89,9 +88,6 @@ class DummyCloudProvider(CloudProvider):
 
 
     # -- Custom domains --
-
-    def list_verified_domains(self) -> List[str]:
-        return sorted(self.verified_domains)
 
     def get_domain_mapping(self, project_id: str, region: str, domain: str) -> Optional[Dict]:
         return self.domain_mappings.get((project_id, domain))
