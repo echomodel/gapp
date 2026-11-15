@@ -125,9 +125,11 @@ working.
 Subdomains only (`app.example.com`).
 
 1. **Verify ownership first.** Cloud Run maps a domain only for an
-   identity that has verified it or a parent. Check with `gcloud
-   domains list-user-verified`; if it is not listed, the user runs
-   `gcloud domains verify <parent>` and finishes in Search Console.
+   identity that has verified it or a parent; gapp does not check this
+   before deploying, and an unverified domain fails at the end of the
+   deploy with Cloud Run's error. Ask the user whether the parent is
+   verified; if not, they run `gcloud domains verify <parent>` and
+   finish in Search Console.
    Verify at the narrowest parent that is useful: `example.com` covers
    every `*.example.com`. For deploys on a runner, the user also adds
    `gapp-deploy@<project-id>.iam.gserviceaccount.com` as a verified

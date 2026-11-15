@@ -229,6 +229,11 @@ def test_remove_says_what_stays_and_gives_no_teardown_commands(my_app):
 # --- set and unset ---
 
 
+def test_setting_a_value_to_its_default_changes_nothing(my_app):
+    result = definitions.set_value("memory", "512Mi", deployment="my-app")
+    assert result["changed"] is False and "memory" not in (fleet()["my-app"].get("settings") or {})
+
+
 def test_set_parses_each_key_as_its_type(my_app):
     for key, value in (("public", "true"), ("max_instances", "3"), ("memory", "1Gi"),
                        ("domain", "App.Example.com"), ("start", "my-app serve")):

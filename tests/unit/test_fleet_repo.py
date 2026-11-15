@@ -127,8 +127,8 @@ def test_a_change_a_git_hook_refuses_shows_everything_the_hook_said(remote, mach
 def test_a_change_that_changes_nothing_makes_no_commit(remote):
     fleetstore.use(remote)
     definitions.add("my-app", project="my-project", repo="acme/my-app")
-    definitions.set_value("public", "false", deployment="my-app")
-    assert definitions.set_value("public", "false", deployment="my-app")["changed"] is False
+    definitions.set_value("public", "true", deployment="my-app")
+    assert definitions.set_value("public", "true", deployment="my-app")["changed"] is False
     assert len(log(remote)) == 2
 
 

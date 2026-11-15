@@ -967,6 +967,19 @@ For development, use an editable install: `pipx install -e .`
   has lost updates and stale reads, with or without git.
 - **The fleet in GitHub variables.** No history, last write wins, small
   size limits.
+- **Checking that the deploying identity has verified a new domain
+  before deploying.** The only way to list an identity's verified domains
+  is `gcloud domains list-user-verified`, which needs the App Engine Admin
+  API turned on in the project gcloud is pointed at. On a runner that is
+  the deployment's project, so the check failed on every CI deploy that
+  added a domain. Turning that API on in every project would let anyone
+  with App Engine rights there create an App Engine app, and its broadly
+  privileged default service account, only to serve a pre-check. Cloud
+  Run refuses the mapping itself for an unverified domain, so nothing is
+  exposed without the check: an unverified domain fails at the end of the
+  deploy, with Cloud Run's error, after the service is updated. One case
+  costs more: `--replace-domain` to an unverified domain takes the old
+  mapping down before the new one is refused.
 - **A list of repo owners runners may deploy** (the repository variable
   `GAPP_ALLOWED_SOURCES`, checked by the deploy workflow). It guarded a
   workflow that wrote definitions with a token that could not change

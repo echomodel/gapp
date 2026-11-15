@@ -500,7 +500,7 @@ def test_a_secret_with_no_value_stops_the_deploy_before_terraform(sdk, cloud, se
 # Terraform replaces a changed domain mapping by destroying the old one
 # first, so a typo or a removed `domain` would take the live domain down. A
 # deploy refuses those before any build or apply unless told to replace
-# it, and refuses a domain the deploying identity has not verified.
+# it.
 
 
 @pytest.fixture
@@ -523,7 +523,6 @@ def live_domain(cloud, domain):
 
 def test_replacing_a_live_domain_is_refused_before_anything_is_built(sdk, cloud, builds):
     live_domain(cloud, "mcp.example.net")
-    cloud.verified_domains.add("example.com")
     definitions.set_value("domain", "mcp.example.com", deployment="my-app")
     with pytest.raises(RuntimeError, match="replace the live domain mapping") as caught:
         sdk.deploy_definition()
@@ -543,7 +542,6 @@ def test_removing_a_live_domain_is_refused_before_anything_is_built(sdk, cloud, 
 
 def test_replace_domain_allows_the_change_and_the_removal(sdk, cloud, builds):
     live_domain(cloud, "mcp.example.net")
-    cloud.verified_domains.add("example.com")
     definitions.set_value("domain", "mcp.example.com", deployment="my-app")
     sdk.deploy_definition(replace_domain=True)
     assert cloud.last_tfvars["custom_domain"] == "mcp.example.com"
@@ -552,26 +550,15 @@ def test_replace_domain_allows_the_change_and_the_removal(sdk, cloud, builds):
     assert cloud.last_tfvars["custom_domain"] == ""
 
 
-def test_a_domain_the_identity_has_not_verified_is_refused_before_anything_is_built(sdk, cloud, builds):
-    cloud.verified_domains.add("example.net")
-    definitions.set_value("domain", "mcp.example.com", deployment="my-app")
-    with pytest.raises(RuntimeError, match="not verified ownership of mcp.example.com") as caught:
-        sdk.deploy_definition()
-    text = str(caught.value)
-    assert "gcloud domains verify example.com" in text and "gapp-deploy@" in text and "verified owner" in text
-    assert builds["n"] == 0 and cloud.last_tfvars is None
-
-
-def test_a_domain_verified_at_a_parent_is_accepted(sdk, cloud, builds):
-    cloud.verified_domains.add("example.com")
+def test_a_new_domain_is_deployed_without_asking_whether_it_is_verified(sdk, cloud, builds):
+    """Cloud Run refuses a domain the deploying identity has not verified;
+    gapp does not check it first (CONTRIBUTING, "Considered and rejected")."""
     definitions.set_value("domain", "mcp.app.example.com", deployment="my-app")
     sdk.deploy_definition()
     assert cloud.last_tfvars["custom_domain"] == "mcp.app.example.com"
 
 
-def test_a_redeploy_that_keeps_the_domain_needs_no_verification_and_no_flag(sdk, cloud, builds):
-    """The mapping is untouched, so an identity that never verified the
-    domain (a runner's deploy identity, say) can still redeploy."""
+def test_a_redeploy_that_keeps_the_domain_needs_no_flag(sdk, cloud, builds):
     live_domain(cloud, "mcp.example.com")
     definitions.set_value("domain", "mcp.example.com", deployment="my-app")
     sdk.deploy_definition()
@@ -587,14 +574,6 @@ def test_state_that_cannot_be_read_is_never_taken_for_no_live_domain(sdk, cloud,
     assert builds["n"] == 0 and cloud.last_tfvars is None
 
 
-def test_a_domain_counts_as_verified_at_itself_or_a_parent_only():
-    from gapp.admin.sdk.core import _domain_is_verified
-    assert _domain_is_verified("mcp.example.com", ["example.com"])
-    assert _domain_is_verified("mcp.example.com", ["MCP.example.com."])
-    assert _domain_is_verified("a.b.example.com", ["b.example.com"])
-    assert not _domain_is_verified("mcp.example.com", ["ample.com"])      # not a label boundary
-    assert not _domain_is_verified("mcp.example.com", ["mcp.example.com.au"])
-    assert not _domain_is_verified("mcp.example.com", [])
 
 
 # --- project setup and list ---

@@ -110,17 +110,16 @@ class GappSDK:
 
         Terraform replaces a changed `google_cloud_run_domain_mapping` by
         destroying the old one first, so a typo, a placeholder, or an omitted
-        `domain:` silently removes the live mapping. Two guards, both before
-        any build or apply:
+        `domain:` silently removes the live mapping. So before any build or
+        apply: a live mapping exists (recorded in Terraform state) and this
+        deploy maps a different domain or none: refuse unless replace_domain.
 
-        1. A live mapping exists (recorded in Terraform state) and this deploy
-           maps a different domain or none: refuse unless replace_domain.
-        2. This deploy creates or replaces a mapping: the deploying identity
-           must have verified the domain or a parent, or Cloud Run rejects
-           the mapping after the old one is already gone.
+        Whether the deploying identity has verified a new domain is not
+        checked here: Cloud Run refuses the mapping itself when it has not
+        (CONTRIBUTING, "Considered and rejected").
 
         A redeploy that keeps the same domain changes nothing about the
-        mapping, so neither guard applies to it.
+        mapping, so the guard does not apply to it.
         """
         requested = (requested_domain or "").strip().lower()
         # Fail closed: a state that cannot be read is not "no live mapping",
@@ -155,22 +154,6 @@ class GappSDK:
                 f"(replace_domain=True); otherwise set the deployment's domain: "
                 f"gapp set domain {live}"
             )
-
-        if requested and requested != live:
-            verified = self.provider.list_verified_domains()
-            if not _domain_is_verified(requested, verified):
-                parent = requested.split(".", 1)[1] if requested.count(".") >= 2 else requested
-                raise RuntimeError(
-                    f"The deploying identity has not verified ownership of {requested} or a "
-                    f"parent domain, so Cloud Run would refuse the domain mapping. Verify "
-                    f"once, then redeploy:\n"
-                    f"  gcloud domains verify {parent}      # opens Search Console; verify "
-                    f"{parent} or the narrowest parent you control\n"
-                    f"  gcloud domains list-user-verified   # must list it afterwards\n"
-                    f"A domain is verified per identity. For CI deploys, also add the deploy "
-                    f"service account (gapp-deploy@{project_id}.iam.gserviceaccount.com) as a "
-                    f"verified owner of that Search Console property."
-                )
 
     # -- The fleet's commands: a definition in, a deployment out --
 
@@ -471,16 +454,6 @@ class GappSDK:
             rows.append({"deployment": name, "repo": d.get("repo"), "project": d.get("project"),
                          "ref": d.get("ref"), "gapp": d.get("gapp"), "upgrade": versions.UPGRADE_WORDS.get(stands)})
         return {"fleet": where.describe(), "deployments": rows}
-
-
-def _domain_is_verified(domain: str, verified: List[str]) -> bool:
-    """True when `domain` or one of its parents is in the verified list."""
-    d = domain.strip().rstrip(".").lower()
-    for v in verified:
-        v = (v or "").strip().rstrip(".").lower()
-        if v and (d == v or d.endswith("." + v)):
-            return True
-    return False
 
 
 def _domain_status_from_conditions(conditions: list) -> tuple[str, Optional[str]]:

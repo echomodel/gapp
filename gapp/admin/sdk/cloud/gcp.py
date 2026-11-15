@@ -303,27 +303,6 @@ class GCPProvider(CloudProvider):
 
     # -- Custom domains --
 
-    def list_verified_domains(self) -> List[str]:
-        res = self._run_gcloud(
-            ["domains", "list-user-verified", "--format", "json"],
-            capture_output=True, text=True,
-        )
-        if res.returncode != 0:
-            raise CloudAccessError(
-                f"Could not list the domains this identity has verified "
-                f"(gcloud exit {res.returncode}): {(res.stderr or '').strip()}\n"
-                f"{self._identity_hint()}"
-            )
-        domains = []
-        for item in json.loads(res.stdout or "[]"):
-            if isinstance(item, str):
-                domains.append(item)
-            elif isinstance(item, dict):
-                value = item.get("id") or item.get("domain") or item.get("name")
-                if value:
-                    domains.append(str(value))
-        return [d.strip().rstrip(".").lower() for d in domains if d]
-
     def get_domain_mapping(self, project_id: str, region: str, domain: str) -> Optional[Dict]:
         # Domain mappings for fully managed Cloud Run live under the beta track.
         res = self._run_gcloud(
