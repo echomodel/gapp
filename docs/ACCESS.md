@@ -33,7 +33,7 @@ fleet and never holds a Google Cloud credential.
 | `gapp status` | gcloud, Terraform (to read state) | you, read-only | read |
 | `gapp deployments list`, `deployments scan` | gcloud | you, read-only: deploy records (and, for `scan`, a search for gapp's projects) | read |
 | `gapp secrets list\|get\|set` | gcloud | you | read |
-| `gapp ci init`, `ci sources ...`, `ci projects list` | `gh` | nothing | read |
+| `gapp ci init`, `ci projects list` | `gh` | nothing | read |
 | `gapp ci projects connect <project>` | gcloud as an Owner, `gh` as an admin of the fleet repo | you, once per project | not touched |
 | `gapp ci deploy` | `gh` that can start workflows | the deploy runner | read, by you and by the runner |
 | `gapp ci status` | `gh` | nothing | read |

@@ -63,7 +63,7 @@ def test_the_commands_take_the_name_and_upgrade_and_exit_with_the_runners_code(s
 def test_the_runner_commands_are_not_listed_for_people():
     listed = CliRunner().invoke(main, ["ci", "--help"]).output.split("Commands:")[1]
     names = [line.split()[0] for line in listed.splitlines() if line.strip()]
-    assert names == ["deploy", "init", "projects", "sources", "status"]
+    assert names == ["deploy", "init", "projects", "status"]
 
 
 def test_on_a_runner_the_fleet_is_the_file_the_workflow_checked_out(monkeypatch, tmp_path):

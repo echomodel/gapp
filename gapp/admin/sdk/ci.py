@@ -55,10 +55,6 @@ from gapp.admin.sdk.util import run_gcloud, require_gcloud_account
 APP_ID_VAR = "HOSTING_GITHUB_APP_ID"
 APP_KEY_SECRET = "HOSTING_GITHUB_APP_PRIVATE_KEY"
 
-# Comma-separated GitHub owners whose repos a runner may deploy.
-# Managed by `gapp ci sources`.
-ALLOWED_SOURCES_VAR = "GAPP_ALLOWED_SOURCES"
-
 # A project's deploy identity, recorded in the fleet repo as a GitHub
 # Environment named after the project id, holding these two variables.
 # Written by `gapp ci projects connect`, read by every run.
@@ -312,20 +308,13 @@ def _actions_item_present(fleet_repo: str, kind: str, name: str) -> bool | None:
     return False if status == 404 else None
 
 
-def _actions_variable_value(fleet_repo: str, name: str) -> tuple[int, str | None, str]:
-    rc, out, err = _gh_api([f"repos/{fleet_repo}/actions/variables/{name}"])
-    if rc != 0:
-        return rc, None, err
-    return 0, (json.loads(out).get("value") or "").strip(), ""
-
-
 def _variables_report(fleet_repo: str) -> dict:
-    """Presence of the three operator-set values in the fleet repo.
+    """Presence of the two operator-set values in the fleet repo.
 
     `variables` maps each name to True, False or None (not checked). Never
     sets them: the values are the operator's.
     """
-    names = {ALLOWED_SOURCES_VAR: "variables", APP_ID_VAR: "variables", APP_KEY_SECRET: "secrets"}
+    names = {APP_ID_VAR: "variables", APP_KEY_SECRET: "secrets"}
     if not _actions_api_available(fleet_repo):
         return {"variables": {n: None for n in names}, "checked": False, "note": UNCHECKED_VARIABLES_NOTE}
     return {"variables": {n: _actions_item_present(fleet_repo, kind, n) for n, kind in names.items()},
@@ -530,10 +519,7 @@ def init_workflows() -> dict:
         result["lines"].append(f"The workflows in {fleet_repo} are this gapp's already. Nothing changed.")
     report = _variables_report(fleet_repo)
     result["variables"], result["variables_note"] = report["variables"], report["note"]
-    if report["variables"][ALLOWED_SOURCES_VAR] is not True:
-        result["next_step"] = {"action": "ci sources add", "hint": "gapp ci sources add <owner>"}
-    else:
-        result["next_step"] = {"action": "ci projects connect", "hint": "gapp ci projects connect <project>"}
+    result["next_step"] = {"action": "ci projects connect", "hint": "gapp ci projects connect <project>"}
     return result
 
 
@@ -707,108 +693,6 @@ def list_projects() -> dict:
         result["lines"].append(
             f"Couldn't check {', '.join(result['unchecked'])}: the variables of those Environments are not "
             f"readable with this machine's GitHub access.")
-    return result
-
-
-# --- ci sources ---
-
-
-def _sources_list(fleet_repo: str) -> tuple[list[str] | None, dict | None]:
-    """The allowed owners, or (None, outcome) when they cannot be read."""
-    rc, value, err = _actions_variable_value(fleet_repo, ALLOWED_SOURCES_VAR)
-    if rc != 0:
-        status, _ = _gh_failure(err)
-        if status == 404 and _actions_api_available(fleet_repo):
-            return [], None
-        return None, _outcome("check GitHub access", (
-            _couldnt_check(f"{ALLOWED_SOURCES_VAR} in {fleet_repo}",
-                           f"GET repos/{fleet_repo}/actions/variables/{ALLOWED_SOURCES_VAR}", err)
-            + f" `gapp ci sources` needs `gh` signed in with write access to {fleet_repo}."
-        ))
-    return [o.strip() for o in (value or "").split(",") if o.strip()], None
-
-
-def _sources_write(fleet_repo: str, owners: list[str], existed: bool) -> dict | None:
-    endpoint = f"repos/{fleet_repo}/actions/variables"
-    value = ",".join(owners)
-    if not owners and existed:
-        rc, _, err = _gh_api(["-X", "DELETE", f"{endpoint}/{ALLOWED_SOURCES_VAR}"])
-    elif existed:
-        rc, _, err = _gh_api(["-X", "PATCH", f"{endpoint}/{ALLOWED_SOURCES_VAR}"], {"name": ALLOWED_SOURCES_VAR, "value": value})
-    else:
-        rc, _, err = _gh_api(["-X", "POST", endpoint], {"name": ALLOWED_SOURCES_VAR, "value": value})
-    if rc != 0:
-        return _outcome("sign in to gh with write access", (
-            f"{ALLOWED_SOURCES_VAR} in {fleet_repo} could not be written: {_refused(err)}. "
-            f"{_fix_for(err, f'write access to {fleet_repo}')} run the command again, or set the variable from a "
-            f"machine that can:\n"
-            f"  gh variable set {ALLOWED_SOURCES_VAR} --repo {fleet_repo} --body {value or '<owners>'}"
-        ))
-    return None
-
-
-def manage_sources(action: str, owner: str | None = None) -> dict:
-    """List, add to, or remove from the GitHub owners whose repos runners may deploy (`gapp ci sources`).
-
-    The list is the fleet repo's repository variable `GAPP_ALLOWED_SOURCES`
-    (comma-separated owners). A deploy run refuses a deployment whose repo
-    belongs to an owner that is not on it, and a commit to the fleet file
-    cannot change it. Needs `gh` with write access to the fleet repo (read
-    access for `list`).
-    """
-    result = {"ok": True, "action": action, "fleet_repo": None, "owner": owner, "owners": None,
-              "changed": False, "next_step": None}
-    if action not in ("add", "remove", "list"):
-        return {**result, **_refusal("choose an action", "Use `gapp ci sources add <owner>`, `gapp ci sources remove <owner>` or `gapp ci sources list`.")}
-    if action != "list" and not (owner or "").strip():
-        return {**result, **_refusal("pass the owner", f"Name the GitHub owner: gapp ci sources {action} <owner>")}
-    fleet_repo, stop = _fleet_repo(result)
-    if stop:
-        return stop
-
-    owners, outcome = _sources_list(fleet_repo)
-    if outcome:
-        return {**result, **outcome}
-    existed = _actions_item_present(fleet_repo, "variables", ALLOWED_SOURCES_VAR) is True
-    result["owners"] = list(owners)
-    if action == "list":
-        return _with_sources_text(result)
-
-    owner = owner.strip()
-    result["owner"] = owner
-    present = any(o.lower() == owner.lower() for o in owners)
-    if action == "add":
-        if present:
-            return _with_sources_text(result)
-        new_owners = owners + [owner]
-    else:
-        if not present:
-            return _with_sources_text(result)
-        new_owners = [o for o in owners if o.lower() != owner.lower()]
-    refusal = _sources_write(fleet_repo, new_owners, existed)
-    if refusal:
-        return {**result, **refusal}
-    result["owners"] = new_owners
-    result["changed"] = True
-    return _with_sources_text(result)
-
-
-def _with_sources_text(result: dict) -> dict:
-    """The lines `gapp ci sources` prints, and its next step."""
-    owner, action, fleet_repo = result.get("owner"), result["action"], result["fleet_repo"]
-    if action == "list":
-        owners = result.get("owners") or []
-        result["lines"] = [("Runners may deploy repos owned by: " + ", ".join(owners)) if owners
-                           else f"Runners in {fleet_repo} may not deploy any owner's repos yet."]
-        if not owners:
-            result["next_step"] = {"action": "ci sources add", "hint": "gapp ci sources add <owner>"}
-    elif action == "add":
-        result["lines"] = [f"Runners in {fleet_repo} may deploy repos owned by {owner}." if result["changed"]
-                           else f"Runners in {fleet_repo} could already deploy repos owned by {owner}. Nothing changed."]
-        result["next_step"] = {"action": "add", "hint": f"gapp add <name> --repo {owner}/<repo> --project <project>"}
-    else:
-        result["lines"] = [f"Runners in {fleet_repo} do not deploy repos owned by {owner}." if result["changed"]
-                           else f"{owner} was not on the list. Nothing changed."]
     return result
 
 

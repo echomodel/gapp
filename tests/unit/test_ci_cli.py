@@ -63,8 +63,6 @@ def test_a_failure_is_one_sentence_on_stderr_and_exit_1(ci):
     (["status", "--deployment", "my-app", "--live"], lambda: server.gapp_ci_status("my-app", live=True)),
     (["init"], server.gapp_ci_init),
     (["projects", "list"], lambda: server.gapp_ci_projects("list")),
-    (["sources", "list"], lambda: server.gapp_ci_sources("list")),
-    (["sources", "add", "other-org"], lambda: server.gapp_ci_sources("add", "other-org")),
 ])
 def test_json_is_what_the_tool_returns_and_nothing_else(ci, argv, tool):
     code, out, err = _run(*argv, "--json")
@@ -90,12 +88,10 @@ def test_status_and_its_live_form(ci):
     assert "  Healthy  yes" in out
 
 
-def test_init_projects_and_sources_print_their_lines_and_next_step(ci):
+def test_init_and_projects_print_their_lines_and_next_step(ci):
     assert _run("init")[1].splitlines() == ["The workflows in acme/fleet are this gapp's already. Nothing changed.",
                                             "Next: gapp ci projects connect <project>"]
     assert _run("projects", "list")[1].splitlines() == ["Runners in acme/fleet can deploy to:", "  my-proj"]
-    assert _run("sources", "list")[1].splitlines() == ["Runners may deploy repos owned by: me"]
-    assert _run("sources", "remove", "me")[1].splitlines() == ["Runners in acme/fleet do not deploy repos owned by me."]
 
 
 def test_projects_connect_takes_the_project_and_is_refused_without_one(ci):
@@ -113,6 +109,6 @@ def test_no_ci_command_changes_the_fleet(ci):
     from gapp.admin.sdk import entryfile
     before = ci.files[(FLEET, entryfile.FILE_NAME)]
     for argv in (["init"], ["deploy", "-d", "my-app"], ["status", "-d", "my-app", "--live"],
-                 ["sources", "add", "other-org"], ["projects", "list"]):
+                 ["projects", "list"]):
         assert _run(*argv)[0] == 0, argv
     assert ci.files[(FLEET, entryfile.FILE_NAME)] == before

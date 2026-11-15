@@ -175,14 +175,11 @@ def test_a_run_that_fails_reports_gapps_error_line(ci):
 
 
 def test_a_run_the_workflow_stopped_reports_what_the_workflow_said(ci):
-    ci.deploy_outcome = lambda inputs: ("failure", [
-        "Apps owned by me aren't allowed in this fleet, so 'my-app' (me/my-app) was not deployed. "
-        "Allow the owner with: gapp ci sources add me"])
+    said = "runners in this repo are not connected to my-proj, so 'my-app' was not deployed. Run: gapp ci projects connect my-proj"
+    ci.deploy_outcome = lambda inputs: ("failure", [said])
     res = ci_mod.deploy("my-app")
-    assert res["ok"] is False and res["messages"] == [
-        "Apps owned by me aren't allowed in this fleet, so 'my-app' (me/my-app) was not deployed. "
-        "Allow the owner with: gapp ci sources add me"]
-    assert res["next_step"]["hint"].startswith("'my-app' did not deploy: Apps owned by me aren't allowed in this fleet")
+    assert res["ok"] is False and res["messages"] == [said]
+    assert res["next_step"]["hint"].startswith(f"'my-app' did not deploy: {said}")
 
 
 def test_the_line_naming_what_the_run_deploys_is_not_taken_for_a_reason(ci):

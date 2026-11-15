@@ -462,7 +462,6 @@ def ci_group():
     \b
     From a fleet in a repo to a deploy on a runner:
       gapp ci init                         installs the workflows in the fleet repo
-      gapp ci sources add <owner>          allows the owner whose repos runners deploy
       gapp project setup <project>         once per project (gcloud as an Owner)
       gapp ci projects connect <project>   once per project: lets runners sign in to it
       gapp ci deploy --deployment <name>   deploys it on a runner
@@ -529,43 +528,6 @@ def ci_projects_list_cmd(json_out):
     """
     from gapp.admin.sdk import ci
     _ci_end(ci.list_projects(), json_out)
-
-
-@ci_group.group("sources")
-def ci_sources_group():
-    """The GitHub owners whose repos runners may deploy.
-
-    The list is the fleet repo's repository variable GAPP_ALLOWED_SOURCES.
-    A deploy run refuses a deployment whose repo belongs to an owner that
-    is not on it. Needs `gh` with write access to the fleet repo (read
-    access for `list`).
-    """
-
-
-@ci_sources_group.command("add")
-@click.argument("owner")
-@_ci_json
-def ci_sources_add_cmd(owner, json_out):
-    """Let runners deploy repos owned by OWNER."""
-    from gapp.admin.sdk import ci
-    _ci_end(ci.manage_sources("add", owner), json_out)
-
-
-@ci_sources_group.command("remove")
-@click.argument("owner")
-@_ci_json
-def ci_sources_remove_cmd(owner, json_out):
-    """Stop runners deploying repos owned by OWNER."""
-    from gapp.admin.sdk import ci
-    _ci_end(ci.manage_sources("remove", owner), json_out)
-
-
-@ci_sources_group.command("list")
-@_ci_json
-def ci_sources_list_cmd(json_out):
-    """Show whose repos runners may deploy."""
-    from gapp.admin.sdk import ci
-    _ci_end(ci.manage_sources("list"), json_out)
 
 
 @ci_group.command("deploy")

@@ -123,7 +123,7 @@ def gapp_ci_init() -> dict:
     and the other fleet tools.
 
     The order, from a fleet in a repo to a deploy on a runner: gapp_ci_init,
-    gapp_ci_sources("add", owner), gapp_project_setup(project),
+    gapp_project_setup(project),
     gapp_ci_projects("connect", project), gapp_ci_deploy(deployment).
 
     This tool takes no arguments. It writes
@@ -178,31 +178,6 @@ def gapp_ci_projects(action: str, project: str | None = None) -> dict:
         return ci.list_projects()
     return {"ok": False, "refused": True, "next_step": {
         "action": "choose an action", "hint": 'action is "connect" (with a project) or "list".'}}
-
-
-@_tool()
-def gapp_ci_sources(action: str, owner: str | None = None) -> dict:
-    """List, add to, or remove from the GitHub owners whose repos the
-    fleet repo's runners may deploy.
-
-    A deploy run refuses a deployment whose repo belongs to an owner that
-    is not on this list, so add the owner of each app repo once, before its
-    first gapp_ci_deploy. The list is kept as the fleet repo's repository
-    variable GAPP_ALLOWED_SOURCES, which a change to the fleet cannot
-    alter. It needs `gh` with write access to the fleet repo (read access
-    for "list").
-
-    Returns `owners` (the list after the call) and `changed`, with `ok`,
-    `lines` and `next_step` as gapp_ci_init describes. When `gh` cannot
-    read or write the variable from this machine, `next_step.hint` carries
-    GitHub's answer and the `gh variable set` command to run elsewhere.
-
-    Args:
-        action: "add", "remove" or "list".
-        owner: The GitHub user or organization. Required for "add" and "remove".
-    """
-    from gapp.admin.sdk import ci
-    return ci.manage_sources(action, owner)
 
 
 @_tool()

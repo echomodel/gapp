@@ -93,8 +93,7 @@ next):
 1. The fleet is in a GitHub repo: `gapp fleet use <owner>/<repo>
    --create`.
 2. `gapp ci init` installs the workflows there.
-3. `gapp ci sources add <owner>` for the owner of each app repo.
-4. `gapp project setup <project>` then `gapp ci projects connect
+3. `gapp project setup <project>` then `gapp ci projects connect
    <project>`, once per project, as an Owner.
 
 `gapp ci deploy` refuses before starting a run when any of these is

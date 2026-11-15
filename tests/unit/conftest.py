@@ -472,7 +472,6 @@ def ci(monkeypatch, fleet_repo, fake_gh):
     fake_gh.define(fleet_repo, "my-app", "me/my-app", "my-proj")
     fake_gh.connect(fleet_repo, "my-proj")
     fake_gh.private["me/my-app"] = False
-    fake_gh.variables[(fleet_repo, "GAPP_ALLOWED_SOURCES")] = "me"
     return fake_gh
 
 

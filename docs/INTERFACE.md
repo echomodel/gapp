@@ -269,9 +269,6 @@ GitHub repo.
 | `gapp ci projects list` | The projects they can deploy to, from the fleet repo's record | `gh` |
 | `gapp ci deploy [--upgrade]` | The same deploy, on a runner | `gh` |
 | `gapp ci status [--live]` | The last run and what it deployed | `gh` |
-| `gapp ci sources add <owner>` | Lets runners deploy that owner's repos | `gh` |
-| `gapp ci sources remove <owner>` | Stops that | `gh` |
-| `gapp ci sources list` | Whose repos runners may deploy | `gh` |
 
 ### The fleet
 
@@ -312,8 +309,7 @@ deployment is always the `deployment` argument.
 `gapp_set`, `gapp_unset`, `gapp_apis`, `gapp_env_set`, `gapp_env_unset`,
 `gapp_apply`, `gapp_deploy`, `gapp_status`, `gapp_secrets_list`,
 `gapp_secrets_get`, `gapp_deployments_list`, `gapp_deployments_scan`, `gapp_ci_init`, `gapp_ci_projects`,
-`gapp_ci_deploy`, `gapp_ci_status`,
-`gapp_ci_sources`, `gapp_fleet`, `gapp_fleet_use`,
+`gapp_ci_deploy`, `gapp_ci_status`, `gapp_fleet`, `gapp_fleet_use`,
 `gapp_fleet_export`, `gapp_fleet_import`.
 
 No tool takes a secret's value or a path on the server's machine. There is
