@@ -203,8 +203,8 @@ def test_unset_reports_the_default_that_applies_again(my_app):
 
 
 def test_a_secret_with_no_name_takes_the_variables_in_lower_case_with_dashes(my_app):
-    result = definitions.env_set("SIGNING_KEY", secret="", generate=True, deployment="my-app")
-    assert fleet()["my-app"]["settings"]["env"] == {"SIGNING_KEY": {"secret": "signing-key", "generate": True}}
+    result = definitions.env_set("APP_KEY", secret="", generate=True, deployment="my-app")
+    assert fleet()["my-app"]["settings"]["env"] == {"APP_KEY": {"secret": "app-key", "generate": True}}
     assert "next" not in result
 
 
@@ -357,11 +357,11 @@ def test_the_commands_print_before_and_after(my_app):
 
 
 def test_env_set_flags_work_with_and_without_a_value(my_app):
-    assert run("env", "set", "SIGNING_KEY", "--secret", "--generate", "-d", "my-app").exit_code == 0
+    assert run("env", "set", "APP_KEY", "--secret", "--generate", "-d", "my-app").exit_code == 0
     assert run("env", "set", "AUTH_ISSUER", "--secret", "auth-issuer", "-d", "my-app").exit_code == 0
     assert run("env", "set", "APP_USERS_PATH", "--data-path", "-d", "my-app").exit_code == 0
     env = fleet()["my-app"]["settings"]["env"]
-    assert env == {"SIGNING_KEY": {"secret": "signing-key", "generate": True},
+    assert env == {"APP_KEY": {"secret": "app-key", "generate": True},
                    "AUTH_ISSUER": {"secret": "auth-issuer"},
                    "APP_USERS_PATH": {"value": "{{DATA_PATH}}"}}
 
@@ -379,7 +379,7 @@ def test_show_lists_settings_with_where_each_comes_from(my_app):
     output = run("show", "-d", "my-app").output
     assert "    public: true  (definition)\n" in output and "    memory: 512Mi  (default)\n" in output
     shown = json.loads(run("show", "-d", "my-app", "--json").output)
-    assert shown["gapp"] == __version__ and shown["upgrade"] is None and shown["app_json"] == "not read"
+    assert shown["gapp"] == __version__ and shown["upgrade"] is None and "app_json" not in shown
     assert {"key": "public", "value": "true", "from": "definition"} in shown["effective"]
 
 

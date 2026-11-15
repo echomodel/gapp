@@ -30,9 +30,22 @@ Breaking changes:
   never used. A refusal changes nothing and exits 2, and every command
   takes `--json`.
 - **`gapp.yaml` in an app's repo is no longer read**, and `gapp init`,
-  `gapp setup` and `gapp manifest` are gone. gapp reads only a repo's
-  Dockerfile or Procfile. Everything a `gapp.yaml` held is a setting of
-  the definition.
+  `gapp setup` and `gapp manifest` are gone. gapp reads a repo's
+  Dockerfile or Procfile, and the `env` block of its `app.json` if it has
+  one. Everything a `gapp.yaml` held is a setting of the definition.
+- **`app.json`** (Heroku's format, unextended) lets an app list the
+  variables it reads. A deploy reads it from the commit it builds, and
+  nothing else reads it. The definition wins: a `value` there is the
+  default for a variable the definition does not set, and a variable it
+  needs with no default (required, or `generator: "secret"`) refuses
+  the deploy with the command that sets it. A variable the definition
+  sets that `app.json` does not list gets a warning. `gapp deploy
+  --dry-run` shows all of it.
+- **`gapp secrets list`** shows each secret's state in Secret Manager in
+  its own column, with what to do listed under the table. The statuses
+  are `ready`, `missing`, `unattached` and `conflict`; whether a secret
+  is generated is the separate `generate` field (`missing-generate` and
+  `no-project` are gone).
 - **Deploying.** `gapp project setup <project>` prepares a project, once.
   `gapp deploy` builds the definition's ref from a clone of its repo,
   checked out at that ref, and deploys with the definition's settings. It

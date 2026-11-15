@@ -79,6 +79,11 @@ def list_secrets(deployment: str | None = None) -> dict:
         conflict    — secret exists labeled for a different deployment
         orphan      — present in GCP with our label but no longer declared
 
+    `status` is the secret's state in Secret Manager and nothing else.
+    Whether the definition asks for a generated value is the separate
+    `generate` field: a generated secret that is `missing` is made by the
+    next deploy, and a user-provided one that is `missing` stops it.
+
     Each non-ready scenario produces a structured hint with concrete
     commands the operator can run to resolve. Hints are surfaced in the
     top-level `hints` array.
@@ -88,9 +93,7 @@ def list_secrets(deployment: str | None = None) -> dict:
     deployment = fleet_ctx["name"]
     solution_name, project_id, env_entries = fleet_ctx["id"], fleet_ctx["project"], fleet_ctx["env"]
 
-    present_ids = set()
-    if project_id:
-        present_ids = {s["id"] for s in list_secrets_by_label(project_id, solution_name)}
+    present_ids = {s["id"] for s in list_secrets_by_label(project_id, solution_name)}
 
     secrets = []
     hints = []
@@ -104,15 +107,13 @@ def list_secrets(deployment: str | None = None) -> dict:
         declared_ids.add(secret_id)
         generate = secret_cfg.get("generate", False)
 
-        if not project_id:
-            status = "no-project"
-        elif secret_id in present_ids:
+        if secret_id in present_ids:
             status = "ready"
         else:
             classification = _classify_unlabeled(project_id, secret_id)
             kind = classification["kind"]
             if kind == "missing":
-                status = "missing-generate" if generate else "missing"
+                status = "missing"
             elif kind == "unattached":
                 status = "unattached"
                 hints.append(_hint_unattached(project_id, solution_name, secret_id))

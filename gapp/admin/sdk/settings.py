@@ -9,9 +9,9 @@ definition and as the file `gapp apply` takes.
     max_instances: 2
     apis: [drive.googleapis.com]
     env:
-      MAX_USERS: {value: "25"}
-      SIGNING_KEY: {secret: signing-key, generate: true}
-      APP_USERS_PATH: {value: "{{DATA_PATH}}/users"}
+      LOG_LEVEL: {value: info}
+      APP_KEY: {secret: app-key, generate: true}
+      APP_DATA: {value: "{{DATA_PATH}}/users"}
 
 Everything here is checked before anything is written, and a refusal
 names the key and what it takes.
@@ -97,7 +97,7 @@ def env_name(name: str) -> str:
 
 
 def default_secret_name(variable: str) -> str:
-    """`SIGNING_KEY` reads the secret `signing-key` unless another is named."""
+    """`APP_KEY` reads the secret `app-key` unless another is named."""
     return variable.lower().replace("_", "-").strip("-")
 
 

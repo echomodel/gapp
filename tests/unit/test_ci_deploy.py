@@ -68,6 +68,12 @@ def test_upgrade_is_passed_to_the_run_and_its_result_reported(ci):
     assert "Upgraded from gapp 4.0.0 to 4.1.0." in res["lines"]
 
 
+def test_what_the_run_warned_about_is_relayed(ci):
+    warning = "'my-app' sets OLD_SETTING, and this version's app.json does not list it. The app may not read it."
+    ci.deploy_outcome = lambda inputs: ("success", ["result=" + json.dumps({"commit": "abc1234", "warnings": [warning]})])
+    assert ci_mod.deploy("my-app")["lines"][0] == warning
+
+
 def test_no_watch_returns_once_the_run_is_started(ci):
     res = ci_mod.deploy("my-app", watch=False)
     assert res["ok"] is True and res["watched"] is False and res["conclusion"] is None and res["deployed"] is None

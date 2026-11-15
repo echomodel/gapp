@@ -22,7 +22,15 @@ def gapp_deploy(deployment: str | None = None, dry_run: bool = False, rebuild: b
     the project must have had `gapp_project_setup` once.
 
     Call it with `dry_run=True` first: it reports the commit, the project,
-    and `upgrade_pending`. Pass `upgrade=True` exactly when that is true;
+    `upgrade_pending`, and what the app's own `app.json` adds at that
+    commit: `defaults_from_app_json` (variables taken from its defaults),
+    `missing_variables` (variables it needs that the definition does not
+    set; a deploy is refused until each is set with gapp_env_set, and
+    `generated` true means a generated secret suits it) and `warnings`
+    (variables the definition sets that `app.json` does not list, which
+    the app may not read; relay them, they stop nothing). `app.json` is
+    read only by a deploy; the definition always wins over it.
+    Pass `upgrade=True` exactly when `upgrade_pending` is true;
     it is refused otherwise, and a deploy that would apply an upgrade is
     refused without it. `replace_domain=True` allows replacing or removing
     a live custom domain, which stops the old one serving. `rebuild` builds
@@ -58,7 +66,7 @@ def gapp_project_setup(project: str) -> dict:
 @_tool()
 def gapp_secrets_get(name: str, plaintext: bool = False, deployment: str | None = None) -> dict:
     """Whether a deployment's secret is set. `name` is the secret's short
-    name, as `gapp_secrets_list` shows it (for example "signing-key").
+    name, as `gapp_secrets_list` shows it (for example "app-key").
     By default returns a hash prefix and the length, enough to confirm it
     exists without exposing it. `plaintext=True` returns the value itself:
     use it only when the user asks for the value.
@@ -78,12 +86,16 @@ def gapp_secrets_list(deployment: str | None = None) -> dict:
     no value.
 
     Each entry has `name` (the secret's short name), `env_var` (the
-    variable that reads it), `secret_id`, `generate` (gapp makes it on the
-    first deploy) and `status`: "ready", "missing", "missing-generate"
-    (will be made on deploy), "unattached" (exists in Google Cloud without
-    gapp's label) or "conflict" (belongs to another deployment). `orphans`
-    are secrets labelled for this deployment that no variable reads.
-    `hints` give the commands that fix each case.
+    variable that reads it), `secret_id`, `generate` (true when gapp
+    makes its value at the first deploy) and `status`, the secret's state
+    in Secret Manager: "ready" (it has a value), "missing", "unattached"
+    (one exists without gapp's label) or "conflict" (it belongs to another
+    deployment). A "missing" secret with `generate` true needs nothing:
+    the next deploy makes it. A "missing" one with `generate` false stops
+    a deploy until the user sets it. `status` says nothing about the
+    running service: a value set after the last deploy reaches the app at
+    the next one. `orphans` are secrets labelled for this deployment that
+    no variable reads. `hints` give the commands that fix each case.
 
     No tool stores a secret's value. The user stores one themselves, at a
     prompt: `gapp secrets set <name> --deployment <deployment>`.
