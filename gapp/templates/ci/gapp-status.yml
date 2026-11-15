@@ -67,6 +67,18 @@ jobs:
             echo "gapp-status: '$DEPLOYMENT' names gapp '${version:-none}', which is not a gapp version."
             exit 1
           fi
+          # These workflows hand gapp the fleet file and a command (CONTRIBUTING,
+          # "The runner hand-off"); a gapp older than the minimum reads them
+          # differently, so it is refused here, before anything is installed.
+          minimum="__GAPP_RUNNER_MIN__"
+          vkey() {
+            [[ "$1" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)(rc([0-9]+))?$ ]] || return 1
+            printf '%06d%06d%06d%06d' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}" "${BASH_REMATCH[5]:-999999}"
+          }
+          if [[ "$(vkey "$version")" < "$(vkey "$minimum")" ]]; then
+            echo "gapp-status: '$DEPLOYMENT' is defined with gapp $version, and these workflows need $minimum or later, so it was not asked. Upgrade it first: gapp upgrade --deployment $DEPLOYMENT, then gapp ci deploy --deployment $DEPLOYMENT --upgrade"
+            exit 1
+          fi
           {
             echo "project=$(yq "$definition | .project // \"\"" "$FLEET_FILE")"
             echo "gapp_ref=v$version"
