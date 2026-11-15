@@ -1,5 +1,5 @@
 """Defining deployments and changing their settings in a local fleet:
-`add`, `rename`, `show`, `upgrade`, `set`, `unset`, `apis`, `env`, `apply`.
+`add`, `rename`, `remove`, `show`, `upgrade`, `set`, `unset`, `apis`, `env`, `apply`.
 None of them touches the cloud; a refusal changes nothing and exits 2."""
 
 import json
@@ -150,6 +150,55 @@ def test_rename_changes_the_name_and_keeps_the_id(my_app):
 def test_rename_refuses_a_taken_name(my_app):
     definitions.add("other", project="my-project", repo="acme/other")
     assert "already a deployment" in refused(definitions.rename, "my-app", "other")
+
+
+
+# --- remove ---
+
+
+def test_remove_takes_the_definition_out_and_says_what_it_left(my_app):
+    definitions.env_set("API_KEY", secret="api-key", deployment="my-app")
+    definitions.set_value("ref", "v1.2.0", deployment="my-app")
+    result = definitions.remove("my-app")
+    assert fleet() == {}
+    assert result["left"] == {"project": "my-project", "service": "my-app",
+                              "bucket": "gapp-my-app-my-project", "secrets": ["my-app-api-key"]}
+    assert result["restore"] == "gapp add my-app --project my-project --id my-app --repo acme/my-app --ref v1.2.0"
+    assert result["removed"]["settings"]["env"]["API_KEY"] == {"secret": "api-key"}
+
+
+def test_what_remove_took_out_comes_back_from_the_backup(my_app):
+    definitions.set_value("public", "true", deployment="my-app")
+    before = fleet()
+    backup = definitions.remove("my-app")["backup"]
+    assert run("fleet", "import", backup).exit_code == 0
+    assert fleet() == before
+
+
+def test_a_removed_deployment_is_added_again_under_its_id(my_app):
+    definitions.rename("my-app", "prod")
+    restore = definitions.remove("prod")["restore"]
+    assert run(*restore.split()[1:]).exit_code == 0
+    assert fleet()["prod"]["id"] == "my-app"
+
+
+def test_remove_leaves_the_other_deployments(my_app):
+    definitions.add("other", project="my-project", repo="acme/other")
+    definitions.remove("my-app")
+    assert list(fleet()) == ["other"]
+
+
+def test_remove_refuses_a_name_the_fleet_does_not_hold(my_app):
+    assert "nope" in refused(definitions.remove, "nope")
+
+
+def test_remove_says_nothing_was_touched_and_how_to_bring_it_back(my_app):
+    out = run("remove", "my-app").output
+    assert "Nothing in Google Cloud was touched." in out
+    assert "gapp has no command to take them down yet." in out
+    assert "gapp add my-app --project my-project --id my-app --repo acme/my-app" in out
+    assert "gapp fleet import " in out
+    assert "gcloud" not in out and "terraform" not in out
 
 
 # --- set and unset ---

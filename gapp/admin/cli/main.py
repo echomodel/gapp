@@ -769,6 +769,38 @@ def rename_cmd(old, new, json_out):
     _definition_command(json_out, "", lambda d: d.rename, old, new)
 
 
+@main.command("remove")
+@click.argument("name")
+@_JSON
+def remove_cmd(name, json_out):
+    """Take a deployment out of the fleet. Touches no cloud.
+
+    What it had deployed stays in Google Cloud. The output names it, and
+    the command that defines the deployment again.
+    """
+    from gapp.admin.sdk import definitions
+    try:
+        result = definitions.remove(name)
+    except definitions.Refused as e:
+        _refused(e, json_out)
+    if json_out:
+        _json(result)
+        return
+    left = result["left"]
+    click.echo(f"Removed '{name}' from your fleet ({result['fleet']}). Nothing in Google Cloud was touched.")
+    click.echo(f"If it was deployed, these are still in project {left['project']}:")
+    click.echo(f"  the Cloud Run service {left['service']}")
+    click.echo(f"  the bucket gs://{left['bucket']}, with its data")
+    if left["secrets"]:
+        click.echo(f"  the secrets {', '.join(left['secrets'])}")
+    click.echo("gapp has no command to take them down yet.")
+    click.echo(f"To define it again, on the same resources: {result['restore']}")
+    if result["backup"]:
+        click.echo(f"Its settings are in the fleet as it was: gapp fleet import {result['backup']}")
+    else:
+        click.echo("Its settings are in the fleet repo's commit before this one.")
+
+
 @main.command("show")
 @_DEPLOYMENT
 @_JSON

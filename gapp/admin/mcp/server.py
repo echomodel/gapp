@@ -421,6 +421,17 @@ def gapp_rename(old: str, new: str) -> dict:
 
 
 @_tool()
+def gapp_remove(name: str) -> dict:
+    """Take a deployment out of the fleet. It touches no cloud: a service,
+    bucket and secrets it had deployed stay, and gapp has no tool that
+    takes them down. The result names them under `left`, gives
+    the command that defines the deployment again on the same resources
+    under `restore`, and holds the definition it removed under `removed`.
+    Confirm with the user before calling it."""
+    return _definition_tool("remove", name)
+
+
+@_tool()
 def gapp_show(deployment: str | None = None) -> dict:
     """One deployment's definition (repo, project, ref, the gapp version
     that wrote it) and the settings a deploy would use, each marked as

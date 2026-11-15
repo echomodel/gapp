@@ -161,6 +161,34 @@ def _repo(repo: str) -> str:
 
 
 @_guard
+def remove(name: str) -> dict:
+    """Take a deployment out of the fleet. Touches no cloud.
+
+    What it had deployed stays as it is, and the result names it, with the
+    command that defines it again under the same id.
+    """
+    where, deployments = _load()
+    name = lookup.find(deployments, name=name).name
+    definition = deployments.pop(name)
+    backup = fleetstore.write(deployments, where, f"gapp: remove {name}")
+    id_, project = definition.get("id"), definition.get("project")
+    env = (definition.get("settings") or {}).get("env") or {}
+    secrets = sorted({f"{id_}-{spec['secret']}" for spec in env.values()
+                      if isinstance(spec, dict) and spec.get("secret")})
+    restore = f"gapp add {name} --project {project} --id {id_}"
+    if definition.get("repo"):
+        restore += f" --repo {definition['repo']}"
+    if definition.get("ref"):
+        restore += f" --ref {definition['ref']}"
+    return _result(
+        name, [{"key": "deployment", "before": "defined", "after": "removed"}], where,
+        removed=definition,
+        left={"project": project, "service": id_, "bucket": f"gapp-{id_}-{project}".lower(), "secrets": secrets},
+        restore=restore, backup=str(backup) if backup else None,
+    )
+
+
+@_guard
 def rename(old: str, new: str) -> dict:
     """Change a deployment's name. Its id, and so its cloud resources, stay."""
     where, deployments = _load()

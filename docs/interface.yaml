@@ -17,6 +17,7 @@ commands:
     options: [--project, --repo, --ref, --id, --copy-of]
   upgrade: {one: true}
   rename: {args: ["<old>", "<new>"]}
+  remove: {args: ["<name>"]}
   list: {}
   show: {one: true}
 
@@ -70,6 +71,7 @@ mcp_tools:
   - gapp_add
   - gapp_upgrade
   - gapp_rename
+  - gapp_remove
   - gapp_list
   - gapp_show
   - gapp_set
