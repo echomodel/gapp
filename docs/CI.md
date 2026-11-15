@@ -39,6 +39,21 @@ which, and the command that fixes it.
 add`, `gapp set` and the other fleet commands, and a runner reads the
 result.
 
+## From a machine with only GitHub access
+
+Once a project Owner has run `gapp project setup` and `gapp ci projects
+connect` for a project, a machine with only GitHub access (a teammate's
+laptop, a CI job, a cloud agent session) can run a deployment's whole life
+in that project. It needs `gh` and git access to the fleet repo, and no
+Google Cloud login.
+
+| Works with GitHub access only | Needs a Google Cloud login |
+|---|---|
+| `gapp add`, `set`, `env`, `upgrade`, `rename`, `remove` (each a commit to the fleet repo) | `gapp project setup`, `gapp ci projects connect` (once per project, as an Owner) |
+| `gapp list`, `gapp show` | `gapp secrets set` (a value someone supplies; generated secrets need nothing) |
+| `gapp ci deploy`, `gapp ci status --live` | `gapp deployments list`, `gapp deployments scan` |
+| `gapp ci init`, `gapp ci sources` (as an admin of the fleet repo) | `gapp deploy`, `gapp status` (they act from this machine) |
+
 ## What a run does
 
 `gapp ci deploy` starts the fleet repo's deploy workflow with the
