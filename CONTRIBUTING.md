@@ -245,7 +245,9 @@ last deployed it, written only once a deploy has succeeded.
   definition to the installed gapp's version and changes nothing else;
   the next deploy applies it and must be told to (`--upgrade`), and is
   refused that flag when nothing is pending. A deploy never upgrades a
-  deployment as a side effect.
+  deployment as a side effect. The first deploy by a newer gapp can change
+  infrastructure, not just the app, so it happens only when someone asks
+  for it, and never rides along with a routine deploy.
 - **There is no fleet-wide version.** Deployments in one fleet can be on
   different gapp versions, so a new gapp can be tried on one of them.
 - **Only the newer gapp knows how to get to itself.** Upgrade steps
