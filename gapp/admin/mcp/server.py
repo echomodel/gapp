@@ -428,7 +428,8 @@ def gapp_remove(name: str) -> dict:
     takes them down. The result names them under `left`, and holds
     the definition it removed under `removed`. A deployment added with the
     commands under `add_again` uses those resources again, data included;
-    that does not bring its settings back. Confirm with the user before
+    that does not bring its settings back; `see_removed` is the command
+    that shows them. Confirm with the user before
     calling it."""
     return _definition_tool("remove", name)
 

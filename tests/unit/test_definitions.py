@@ -179,6 +179,12 @@ def test_a_removed_deployment_added_again_gets_the_same_id_even_after_a_rename(m
     assert list(fleet()) == ["prod"] and fleet()["prod"]["id"] == "my-app"
 
 
+def test_remove_points_at_the_copy_of_the_fleet_that_still_has_the_settings(my_app):
+    definitions.set_value("public", "true", deployment="my-app")
+    shown = subprocess.run(definitions.remove("my-app")["see_removed"].split(), capture_output=True, text=True).stdout
+    assert "my-app:" in shown and "public: true" in shown
+
+
 def test_remove_leaves_the_other_deployments(my_app):
     definitions.add("other", project="my-project", repo="acme/other")
     definitions.remove("my-app")
@@ -195,6 +201,7 @@ def test_remove_says_what_stays_and_gives_no_teardown_commands(my_app):
     assert "gapp has no command to take them down yet." in out
     assert "  gapp add my-app --project my-project --repo acme/my-app\n" in out
     assert "does not bring back its settings" in out
+    assert f"  cat {fleetstore.location().backup_path}\n" in out
     assert "gcloud" not in out and "terraform" not in out and "--id" not in out
 
 
