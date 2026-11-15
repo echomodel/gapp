@@ -3,6 +3,25 @@
 Notable changes to gapp. Versions are git tags (`vX.Y.Z`); the version
 source is `gapp/__init__.py`.
 
+## Unreleased
+
+Added:
+
+- **`GAPP_FLEET`** names the fleet for one process, whatever the profile
+  says, in any form `gapp fleet use` takes. It replaces `GAPP_FLEET_FILE`,
+  which only runners set: after upgrading, run `gapp ci init` again in
+  the fleet repo so its installed `gapp-status.yml` sets the new name.
+- **`gapp fleet use` takes a fleet file**: a full path ending in `.yaml`
+  or `.yml`. A relative path is refused, in `fleet use` and `GAPP_FLEET`.
+
+Changed:
+
+- **Backups of a fleet kept in a file** go to
+  `~/.local/state/gapp/backups/` (`$XDG_STATE_HOME`), one per change,
+  named by the time and never overwritten, instead of `gapp.yaml.bak`
+  beside the fleet. Each starts with a comment naming the fleet it is a
+  copy of, and is a fleet file `gapp fleet import` takes as it is.
+
 ## 4.0.0rc14 (pre-release of 4.0.0)
 
 One fleet. Every deployment is defined once, in your fleet, and every

@@ -2,13 +2,18 @@
 commits. Plain git, no CI. These tests use a real bare repo as the remote."""
 
 import subprocess
+from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
 
 from gapp.admin.cli.main import main
 from gapp.admin.sdk import definitions, entryfile, fleetrepo, fleetstore
-from gapp.admin.sdk.config import get_fleet_repo
+from gapp.admin.sdk.config import get_active_config
+
+
+def get_fleet_repo():
+    return get_active_config().get("fleet_repo")
 from gapp.admin.sdk.definitions import Refused
 from gapp.admin.sdk.fleet import FleetRefusal
 from gapp.admin.sdk.fleetstore import FleetUnavailable
@@ -70,7 +75,9 @@ def test_moving_to_a_repo_carries_the_fleet_as_one_file_and_nothing_else(remote)
     assert in_remote(remote).startswith("format: 1\ndeployments:\n  my-app:\n")
     assert git(remote, "ls-tree", "--name-only", "-r", "main").splitlines() == ["gapp.yaml"]
     assert log(remote) == ["gapp: the fleet moves here"]
-    assert not local_file.exists() and local_file.with_name("gapp.yaml.bak").exists()
+    assert not local_file.exists() and not local_file.with_name("gapp.yaml.bak").exists()
+    backup = Path(result["backup"])
+    assert backup.parent == fleetstore.backups_dir() and "my-app" in backup.read_text()
 
 
 def test_a_repo_with_no_commit_yet_is_an_empty_fleet(remote):

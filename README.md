@@ -204,6 +204,7 @@ when you leave it out.
 ```bash
 gapp fleet
 gapp fleet use owner/my-fleet --create
+gapp fleet use ~/ops/gapp.yaml
 gapp fleet use local
 ```
 
@@ -211,7 +212,21 @@ By default the fleet is a file on your machine. `gapp fleet use` moves it
 to a git repo, as `gapp.yaml` at its root. Each change is then one
 commit, pushed with the git access your machine has, and every machine
 that uses that repo sees the same fleet. The repo can be on any git host.
-[Why a git repo](docs/FLEET-IN-GIT.md).
+[Why a git repo](docs/FLEET-IN-GIT.md). It can also move the fleet to a
+file you name, by its full path ending in `.yaml` or `.yml`.
+
+The `GAPP_FLEET` environment variable names the fleet for one process,
+whatever the profile says. It takes what `gapp fleet use` takes, and
+suits a machine you don't keep: a container, a cloud session, a runner.
+
+```bash
+GAPP_FLEET=owner/my-fleet gapp list
+GAPP_FLEET=/tmp/try/gapp.yaml gapp add my-app --project my-project
+```
+
+Each change to a fleet kept in a file keeps the copy it replaced, in
+`~/.local/state/gapp/backups/`. A backup is a fleet file `gapp fleet
+import` takes as it is.
 
 `gapp fleet export [<file>]` copies the fleet out, and `gapp fleet import
 <file>` replaces it, keeping the one it replaced.
