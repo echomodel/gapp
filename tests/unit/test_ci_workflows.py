@@ -226,11 +226,11 @@ class _Runner:
 
 @needs_yq
 def test_deploy_reads_the_repo_ref_project_and_gapp_version_from_the_definition(tmp_path):
-    runner = _Runner(tmp_path).fleet({"my-app": {**DEFINITION, "ref": "v1.4.0", "gapp": "4.0.0rc14"}})
+    runner = _Runner(tmp_path).fleet({"my-app": {**DEFINITION, "ref": "v1.4.0", "gapp": "4.0.0rc15"}})
     ok, log = runner.resolve()
     assert ok, log
-    assert runner.outputs() == {"repo": "me/my-app", "project": "my-proj", "ref": "v1.4.0", "gapp_ref": "v4.0.0rc14", "app_id": ""}
-    assert "gapp-deploy: my-app -> me/my-app (v1.4.0) on my-proj, with gapp 4.0.0rc14" in log
+    assert runner.outputs() == {"repo": "me/my-app", "project": "my-proj", "ref": "v1.4.0", "gapp_ref": "v4.0.0rc15", "app_id": ""}
+    assert "gapp-deploy: my-app -> me/my-app (v1.4.0) on my-proj, with gapp 4.0.0rc15" in log
 
 
 @needs_yq
@@ -353,3 +353,71 @@ def test_status_refuses_what_deploy_refuses_about_the_file(tmp_path):
     runner.fleet({"my-app": {**DEFINITION, "gapp": "main"}})
     assert "'my-app' names gapp 'main', which is not a gapp version." in runner.resolve()[1]
     assert "'nope' is not a deployment in this fleet" in runner.resolve(DEPLOYMENT="nope")[1]
+
+
+# -- the runner hand-off: what the workflows give `gapp ci runner` --
+
+# What the workflows hand gapp, per minimum (ci.RUNNER_HANDOFF_CHANGES): the
+# variables gapp reads, the command, and the folder it runs in. A change to
+# the hand-off either keeps all of this (adding to `reads` is fine) or is a
+# new minimum with its own entry here; see CONTRIBUTING, "The runner hand-off".
+HANDOFF = {
+    "4.0.0rc15": {
+        "deploy": {"reads": {"GAPP_FLEET"}, "run": 'gapp ci runner deploy "$DEPLOYMENT" $UPGRADE_FLAG',
+                   "working-directory": "app"},
+        "status": {"reads": {"GAPP_FLEET"}, "run": 'gapp ci runner status "$DEPLOYMENT"',
+                   "working-directory": None},
+    },
+}
+SHELL_ONLY = {"DEPLOYMENT", "UPGRADE_FLAG"}   # build the command line; gapp never reads them
+
+
+def _handoff_step(steps, command):
+    found = [s for s in steps if "gapp ci runner " + command in (s.get("run") or "")]
+    assert len(found) == 1
+    step = found[0]
+    return {"reads": set(step.get("env") or {}) - SHELL_ONLY, "run": step["run"].strip(),
+            "working-directory": step.get("working-directory")}
+
+
+def test_the_hand_off_is_the_one_its_minimum_promises():
+    recorded = HANDOFF.get(ci_mod.RUNNER_MIN_GAPP)
+    assert recorded, (f"The minimum is {ci_mod.RUNNER_MIN_GAPP} but HANDOFF has no entry for it: "
+                      f"record what the workflows hand gapp from that version on.")
+    now = {"deploy": _handoff_step(_reusable()["jobs"]["deploy"]["steps"], "deploy"),
+           "status": _handoff_step(_rendered(ci_mod.STATUS_WORKFLOW)["jobs"]["status"]["steps"], "status")}
+    for command, promised in recorded.items():
+        current = now[command]
+        assert promised["reads"] <= current["reads"], (
+            f"The {command} workflow no longer gives gapp {sorted(promised['reads'] - current['reads'])}, which gapp "
+            f"{ci_mod.RUNNER_MIN_GAPP} reads. Keep it as well, or raise the minimum (ci.RUNNER_HANDOFF_CHANGES).")
+        assert (current["run"], current["working-directory"]) == (promised["run"], promised["working-directory"]), (
+            f"The {command} workflow runs gapp differently from what gapp {ci_mod.RUNNER_MIN_GAPP} expects. "
+            f"Keep the old form, or raise the minimum (ci.RUNNER_HANDOFF_CHANGES).")
+
+
+def _with_gapp(tmp_path, workflow, version):
+    return _Runner(tmp_path, workflow=workflow).fleet({"my-app": {**DEFINITION, "gapp": version}})
+
+
+@needs_yq
+@pytest.mark.parametrize("workflow, prefix, what", [
+    (ci_mod.DEPLOY_WORKFLOW, "gapp-deploy", "nothing was deployed"),
+    (ci_mod.STATUS_WORKFLOW, "gapp-status", "it was not asked"),
+])
+def test_a_definition_on_a_gapp_older_than_the_minimum_is_refused_before_anything_is_installed(
+        tmp_path, workflow, prefix, what):
+    runner = _with_gapp(tmp_path, workflow, "4.0.0rc14")
+    ok, log = runner.resolve()
+    assert not ok and runner.outputs() == {}
+    assert (f"{prefix}: 'my-app' is defined with gapp 4.0.0rc14, and these workflows need "
+            f"{ci_mod.RUNNER_MIN_GAPP} or later, so {what}. Upgrade it first: gapp upgrade --deployment my-app, "
+            f"then gapp ci deploy --deployment my-app --upgrade") in log
+
+
+@needs_yq
+@pytest.mark.parametrize("workflow", [ci_mod.DEPLOY_WORKFLOW, ci_mod.STATUS_WORKFLOW])
+@pytest.mark.parametrize("version", ["4.0.0rc15", "4.0.0", "4.0.10", "4.1.0rc2", "10.0.0"])
+def test_the_minimum_and_anything_later_is_run(tmp_path, workflow, version):
+    ok, log = _with_gapp(tmp_path, workflow, version).resolve()
+    assert ok, log

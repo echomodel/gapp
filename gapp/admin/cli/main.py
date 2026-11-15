@@ -847,7 +847,7 @@ def upgrade_cmd(deployment, json_out):
     """Bring one deployment's definition to this gapp's version.
 
     Changes the definition only. The next deploy applies it, and needs
-    --upgrade.
+    --upgrade when an earlier gapp has deployed it; the output says which.
     """
     from gapp.admin.sdk import definitions
     try:
@@ -860,7 +860,14 @@ def upgrade_cmd(deployment, json_out):
     change = result["changes"][0]
     click.echo(f"{result['deployment']}: gapp {change['before']} -> {change['after']}")
     click.echo("No other changes are needed.")
-    click.echo("The next deploy applies it: add --upgrade to that deploy.")
+    needs = result.get("deploy_needs_upgrade")
+    if needs:
+        click.echo("The next deploy applies it: add --upgrade to that deploy.")
+    elif needs is False:
+        click.echo("No deploy of it is on record, so the next deploy is its first: no --upgrade.")
+    else:
+        click.echo("The next deploy applies it. gapp could not read its deploy record from here: add --upgrade "
+                   "to that deploy if an earlier gapp deployed it, and leave it out if none has.")
 
 
 @main.command("set")

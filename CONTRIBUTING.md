@@ -245,7 +245,9 @@ last deployed it, written only once a deploy has succeeded.
   definition to the installed gapp's version and changes nothing else;
   the next deploy applies it and must be told to (`--upgrade`), and is
   refused that flag when nothing is pending. A deploy never upgrades a
-  deployment as a side effect.
+  deployment as a side effect. The first deploy by a newer gapp can change
+  infrastructure, not just the app, so it happens only when someone asks
+  for it, and never rides along with a routine deploy.
 - **There is no fleet-wide version.** Deployments in one fleet can be on
   different gapp versions, so a new gapp can be tried on one of them.
 - **Only the newer gapp knows how to get to itself.** Upgrade steps
@@ -643,6 +645,35 @@ are in [docs/CI.md](docs/CI.md). The rules to keep:
   of its name. gapp never reports another run's result as its own.
 - **Workflows pass inputs through the environment**, never into a
   script.
+
+### The runner hand-off
+
+A runner deploy involves two gapp versions on purpose: the workflows come
+from the gapp that ran `gapp ci init`, and the gapp they install is the
+one the definition names. What the workflows give that gapp is the
+runner hand-off: the commands `gapp ci runner deploy <name> [--upgrade]`
+and `gapp ci runner status <name>`, the `GAPP_FLEET` variable naming the
+checked-out fleet file, and the app checkout as the working folder for a
+deploy. It is an interface between versions, recorded per minimum in
+`HANDOFF` in `tests/unit/test_ci_workflows.py`.
+
+A release that changes the hand-off decides one of two things, and the
+CHANGELOG says which:
+
+- **Keep the old form too.** Pass the old name as well as the new one;
+  nothing is forced on anyone. Adding something an older gapp ignores
+  (a variable) needs nothing more.
+- **Raise the minimum.** Add the release to `RUNNER_HANDOFF_CHANGES` in
+  `ci.py` and record the new hand-off in `HANDOFF`. Workflows from then on
+  refuse a definition on an older gapp ("upgrade it first"), and `gapp ci
+  deploy` and `gapp ci status --live` refuse a definition the installed
+  workflows are too old or too new for before a run starts ("gapp ci
+  init", or "upgrade it first"). The CHANGELOG lists it under Breaking.
+
+The test fails when the hand-off changes and neither was done. Without
+the check, a runner deploy the workflows cannot run starts anyway and
+fails halfway with an error about something else (a fleet that seems
+empty), instead of being refused with what to do.
 
 ## The MCP server
 

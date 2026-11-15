@@ -259,8 +259,9 @@ gapp deploy --deployment my-app --upgrade
 ```
 
 `gapp upgrade` brings the definition to the installed gapp's version and
-prints what will change. The next deploy applies it and must be given
-`--upgrade`. `gapp list` and `gapp show` say when an upgrade is available.
+prints what will change. The next deploy applies it, and must be given
+`--upgrade` when an earlier gapp has deployed it; `gapp upgrade` says
+which, from the deploy record when it can read it. `gapp list` and `gapp show` say when an upgrade is available.
 
 ## Deploying on GitHub Actions
 
