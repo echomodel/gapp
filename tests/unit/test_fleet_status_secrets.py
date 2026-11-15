@@ -55,7 +55,7 @@ def test_list_takes_the_secrets_from_the_definition_and_names_them_by_the_id(gcp
     assert set(found) == {"api-key", "app-key"}
     assert found["api-key"] == {"name": "api-key", "env_var": "API_KEY", "secret_id": "my-app-api-key",
                                 "generate": False, "status": "ready"}
-    assert found["app-key"]["status"] == "missing-generate"
+    assert (found["app-key"]["status"], found["app-key"]["generate"]) == ("missing", True)
 
 
 def test_a_renamed_deployment_keeps_its_secrets_under_its_id(gcp):
@@ -121,7 +121,34 @@ def test_the_list_command_prints_the_table_and_json(gcp):
     gcp["labelled"] = ["my-app-api-key"]
     out = CliRunner().invoke(main, ["secrets", "list", "-d", "my-app"]).output
     assert "Deployment: my-app\nProject:    my-project\n" in out
-    assert "api-key" in out and "API_KEY" in out and "ready" in out
+    lines = out.splitlines()
+    assert lines[3].split() == ["Secret", "Variable", "Generated", "In", "Secret", "Manager"]
+    assert lines[5].split() == ["api-key", "API_KEY", "no", "set"]
+    assert lines[6].split() == ["app-key", "APP_KEY", "yes", "not", "set"]
+    assert "To do before a deploy" not in out
+    assert out.endswith("  Nothing to do:\n    app-key is generated. The next deploy makes it.\n")
+
+
+def test_the_list_command_says_what_to_set_apart_from_the_secrets_state(gcp):
+    out = CliRunner().invoke(main, ["secrets", "list", "-d", "my-app"]).output
+    assert "  To do before a deploy:\n    api-key has no value. Set it: gapp secrets set api-key --deployment my-app\n" in out
+    row = next(line for line in out.splitlines() if line.strip().startswith("api-key"))
+    assert row.split() == ["api-key", "API_KEY", "no", "not", "set"]          # the state only; no advice in the cell
+
+
+def test_a_secrets_status_is_its_state_in_secret_manager_and_generate_is_separate(gcp):
+    statuses = {s["status"] for s in secrets.list_secrets("my-app")["secrets"]}
+    assert statuses == {"missing"}
+    gcp["unlabelled"]["my-app-api-key"] = {"kind": "unattached"}
+    gcp["unlabelled"]["my-app-app-key"] = {"kind": "conflict", "owner": "other"}
+    found = by_name(secrets.list_secrets("my-app"))
+    assert (found["api-key"]["status"], found["app-key"]["status"]) == ("unattached", "conflict")
+    gcp["labelled"] = ["my-app-api-key", "my-app-app-key"]
+    assert {s["status"] for s in secrets.list_secrets("my-app")["secrets"]} == {"ready"}
+
+
+def test_the_list_command_json_is_the_result(gcp):
+    gcp["labelled"] = ["my-app-api-key"]
     listed = json.loads(CliRunner().invoke(main, ["secrets", "list", "-d", "my-app", "--json"]).output)
     assert listed["deployment"] == "my-app"
 

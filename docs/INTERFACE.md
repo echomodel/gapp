@@ -25,16 +25,27 @@ repo.
 | `Dockerfile` or `Procfile` | One of them, unless the definition has `start` | How to build and start the app |
 | `app.json` | No | The `env` block only: the variables the app reads |
 
-`app.json` is Heroku's published format, unextended. Per variable:
+`app.json` is Heroku's published format, unextended. It is read in one
+place: a deploy, from the commit the deploy builds. Nothing from it is
+kept. **The definition wins, and `app.json` fills in what the definition
+leaves out.** Per variable the definition does not set:
 
-| Attribute | What gapp does |
+| In `app.json` | What the deploy does |
 |---|---|
-| `value` | The default. A value in the definition wins |
-| `required` (true unless set to false) with no value | The deploy is refused until the variable is set on the definition; the refusal names the command |
-| `generator: "secret"` | A random value is made and stored as a secret on the first deploy, unless the definition already sets the variable |
-| `description` | Shown in that refusal and by `gapp show` |
+| A `value` | Uses it as the default |
+| No `value`, and required (true unless set to false) | Refuses until the variable is set on the definition. The refusal gives the description and the command |
+| `generator: "secret"` | The same refusal, suggesting a generated secret: `gapp env set NAME --secret --generate`. gapp makes a secret only when the definition asks for one |
+| No `value`, `"required": false` | Leaves it unset |
 
-Every other key in `app.json` is ignored, never refused.
+A variable the definition sets is used whatever `app.json` says about
+it. When `app.json` has an `env` block, a variable the definition sets
+that the block does not list gets a warning at deploy, because the app
+may not read it; the deploy goes ahead. An app with no `app.json`, or
+one with no `env` block, is never checked.
+
+Every other key in `app.json` is ignored, never refused. No other
+command reads the file: `gapp show` and `gapp secrets list` report the
+definition, and `gapp deploy --dry-run` shows what `app.json` adds.
 
 `gapp.yaml` is not read.
 
@@ -203,7 +214,7 @@ reasons are in [FLEET-IN-GIT.md](FLEET-IN-GIT.md).
 | `gapp upgrade` | Brings one definition to the installed gapp's version. Takes no version. Prints its plan first. Changes the definition only. Refused when there is nothing to upgrade, when the definition is newer than this gapp, or when it is older than this gapp can upgrade from; the refusal names the gapp to install |
 | `gapp rename <old> <new>` | Changes the name only. The id and the cloud resources stay |
 | `gapp list` | Every definition: name, repo, project, ref, gapp version, and "upgrade available" or "upgrade required" where that applies. Says where the fleet lives |
-| `gapp show` | One definition, and the settings a deploy would use, each marked as from the definition, from `app.json`, or a default. Says when the next deploy would apply an upgrade, and from which version to which. With `--json`, `settings` is the settings object as `gapp apply` takes it |
+| `gapp show` | One definition and its settings, each marked as set on the definition or as its default. Says when the next deploy would apply an upgrade, and from which version to which. With `--json`, `settings` is the settings object as `gapp apply` takes it |
 
 ### Settings
 
@@ -224,9 +235,9 @@ Each changes one definition and nothing else.
 
 | Command | Does | Needs |
 |---|---|---|
-| `gapp deploy [--dry-run] [--rebuild] [--replace-domain] [--upgrade]` | Builds the definition's ref from this clone and deploys it. Refused when the clone is not at that ref. Creates the deployment's bucket the first time. `--dry-run` is the full preview: everything the deploy would use and do, with nothing built or changed | gcloud, Terraform, a clone |
+| `gapp deploy [--dry-run] [--rebuild] [--replace-domain] [--upgrade]` | Builds the definition's ref from this clone and deploys it. Refused when the clone is not at that ref. Creates the deployment's bucket the first time. `--dry-run` is the full preview: everything the deploy would use and do, including what the app's `app.json` adds and any variable it needs that is not set, with nothing built or changed | gcloud, Terraform, a clone |
 | `gapp status` | What is live: URL, revision, domain state | gcloud |
-| `gapp secrets list` | The definition's secrets and whether each has a value | gcloud |
+| `gapp secrets list` | The definition's secrets, whether each is generated, and its state in Secret Manager: set, not set, unlabelled, or another deployment's. What to do about each is listed under the table | gcloud |
 | `gapp secrets set <secret-name> [--from-stdin]` | Stores a value, typed at a prompt or piped | gcloud |
 | `gapp secrets get <secret-name> [--plaintext]` | Shows whether it is set; the value only with `--plaintext` | gcloud |
 
@@ -312,7 +323,8 @@ no tool for `gapp secrets set`: a value is typed at its prompt or piped in.
   gapp has little reason to change.
 - **A secret's name** defaults to its variable's, in lower case with
   dashes (`APP_KEY`, `app-key`). `--secret <name>` gives another.
-- **`gapp show` outside a clone** reads `app.json` from the repo, at the
-  definition's ref, when it can. It tries briefly, never prompts and
-  never fails for it: when the repo cannot be read it works from the
-  definition and says `app.json` was not read.
+- **`gapp show` works from the definition alone**, from any folder. What
+  it says does not depend on where it is run or on any commit.
+- **A variable the definition sets is always passed**, whether or not
+  the app still reads it. The warning above covers apps whose `app.json`
+  lists their variables; for others nothing can tell.

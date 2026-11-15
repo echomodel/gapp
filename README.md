@@ -116,7 +116,41 @@ gapp show
 Inside a clone, these act on the clone's deployment. Anywhere else, add
 `--deployment <name>`.
 
-### 5. Set the secrets it reads
+### 5. Let the app say which variables it reads (optional)
+
+An app can list its variables in an `app.json` at the repo's root. It is
+Heroku's format, and gapp reads only its `env` block:
+
+```json
+{
+  "env": {
+    "LOG_LEVEL": { "description": "debug, info or warning", "value": "info" },
+    "API_URL":   { "description": "Address of the upstream API" },
+    "TRACE":     { "description": "Set to 1 to trace requests", "required": false },
+    "APP_KEY":   { "description": "Signs session tokens", "generator": "secret" }
+  }
+}
+```
+
+Your settings always win. A deploy reads `app.json` from the commit it
+builds, and uses it only for variables you have not set:
+
+| In `app.json` | What the deploy does |
+|---|---|
+| `value` | Uses it as the default |
+| No `value` (and not `"required": false`) | Refuses until you set it: `gapp env set API_URL <value>` |
+| `"generator": "secret"` | Refuses until you add it: `gapp env set APP_KEY --secret --generate` |
+| `"required": false`, no `value` | Leaves it unset |
+
+The refusal lists every variable that is missing, each with its command.
+`gapp deploy --dry-run` shows the same ahead of time. If you set a
+variable that the app's `app.json` does not list, the deploy warns that
+the app may not read it, and goes ahead.
+
+Nothing in the file names gapp or Google Cloud, so it works on other
+hosts too. An app without one is deployed from your settings alone.
+
+### 6. Set the secrets it reads
 
 ```bash
 gapp secrets list
@@ -127,7 +161,7 @@ gapp secrets set api-key
 `--from-stdin`. The value goes from your machine to Secret Manager and
 nowhere else. See [Secrets](docs/SECRETS.md).
 
-### 6. Deploy
+### 7. Deploy
 
 ```bash
 gapp deploy --dry-run
@@ -251,6 +285,13 @@ gapp config profile list
 ```
 
 ## Known limits
+
+- A variable you set is always passed, whether or not the app still
+  reads it. gapp can warn only when the app's `app.json` lists its
+  variables.
+- `gapp secrets list` shows a secret's state in Secret Manager, not
+  whether the running service has it: a value set after the last deploy
+  reaches the app at the next one.
 
 - One deployment is one Cloud Run service.
 - A deployment's region is `us-central1`.

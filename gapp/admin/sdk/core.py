@@ -257,7 +257,7 @@ class GappSDK:
         changed. `dry_run` reports what a deploy would do, including
         whether it would apply an upgrade, and refuses nothing about that.
         """
-        from gapp.admin.sdk import definitions, entryfile, settings as settings_mod
+        from gapp.admin.sdk import appjson, definitions, entryfile, settings as settings_mod
         from gapp.admin.sdk.definitions import Refused
         from gapp.admin.sdk.start import start_method_of, missing
 
@@ -267,11 +267,19 @@ class GappSDK:
         definition = deployments[name]
         try:
             entryfile.require_current(definition, name, "deploy it from this machine")
-            manifest = settings_mod.as_manifest(definition["id"], definition.get("settings"))
+            settings_mod.validate(definition.get("settings"))
         except (entryfile.EntryFileRefusal, settings_mod.SettingsRefusal) as e:
             raise Refused(e.message) from e
         root = self._clone_of(definition, name, cwd)
         sha = self._check_at_ref(root, definition, name)
+        # The definition wins; the app's own app.json, at the commit being
+        # built, fills in the variables the definition leaves out.
+        try:
+            declared = appjson.read(root)
+        except appjson.AppJsonRefusal as e:
+            raise Refused(f"'{name}' cannot be deployed: {e.message} Nothing was built or changed.") from e
+        filled = appjson.fill(definition.get("settings"), declared)
+        manifest = settings_mod.as_manifest(definition["id"], filled["settings"])
         procfile = root / "Procfile"
         start = start_method_of(dockerfile=(root / "Dockerfile").is_file(),
                                 procfile=procfile.read_text() if procfile.is_file() else None,
@@ -294,9 +302,14 @@ class GappSDK:
             "ref": definition.get("ref"), "commit": sha[:12], "gapp": definition["gapp"],
             "last_deployed_by": last, "upgrade_pending": standing == "upgrade", "first_deploy": standing == "first",
             "bucket": bucket, "start": start["method"],
+            "app_json": "none" if declared is None else "read",
+            "defaults_from_app_json": filled["defaults"], "missing_variables": filled["missing"],
+            "warnings": appjson.unlisted_lines(name, filled["unlisted"]),
         }
         if dry_run:
             return {**plan, "dry_run": True}
+        if filled["missing"]:
+            raise Refused(appjson.missing_text(name, filled["missing"]))
         if standing == "ahead":
             raise Refused(
                 f"'{name}' was last deployed by gapp {last}, and its definition names gapp {definition['gapp']}. "

@@ -60,17 +60,38 @@ name listed.
 The MCP tools `gapp_secrets_list` and `gapp_secrets_get` do the same. No
 tool takes a secret's value: set one from a terminal.
 
-## Status values
+## What `gapp secrets list` shows
 
-`gapp secrets list` classifies each declared secret into one of:
+One row per secret the definition names:
 
-| Status | Meaning |
+```
+  Secret       Variable     Generated  In Secret Manager
+  --------------------------------------------------------
+  api-token    API_TOKEN    no         not set
+  app-key      APP_KEY      yes        not set
+  db-url       DB_URL       no         set
+
+  To do before a deploy:
+    api-token has no value. Set it: gapp secrets set api-token --deployment my-app
+
+  Nothing to do:
+    app-key is generated. The next deploy makes it.
+```
+
+| Column | Holds |
 |---|---|
-| `ready` | Declared, present in GCP, labeled for this solution. |
-| `missing` | Declared, not present in GCP. Operator must run `gapp secrets set`. |
-| `missing-generate` | Declared with `generate: true`, not yet present. `gapp deploy` will create it. |
-| `unattached` | Declared, a secret with the expected ID exists in GCP, but it has no `gapp-solution` label. |
-| `conflict` | Declared, a secret with the expected ID exists in GCP labeled for a different solution. |
+| Generated | From the definition: whether gapp makes the value |
+| In Secret Manager | The secret's state in Google Cloud, and nothing else |
+
+| In Secret Manager | `status` in `--json` | Meaning |
+|---|---|---|
+| set | `ready` | It has a value, and is labelled for this deployment |
+| not set | `missing` | No such secret. A generated one is made by the next deploy; any other stops a deploy until you set it |
+| unlabelled | `unattached` | A secret with that id exists and has no `gapp-solution` label |
+| another deployment's | `conflict` | A secret with that id exists, labelled for another deployment |
+
+It says nothing about the running service: a value set after the last
+deploy reaches the app at the next deploy.
 
 Plus a separate `orphans` list: secrets in GCP labeled for this solution
 that the definition does not name.

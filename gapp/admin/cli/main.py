@@ -184,8 +184,18 @@ def deploy(sdk: GappSDK, deployment, dry_run, rebuild, replace_domain, upgrade, 
                        f"and needs --upgrade.")
         else:
             click.echo("No upgrade is pending.")
+        if result["defaults_from_app_json"]:
+            click.echo(f"From the app's app.json, as defaults: {', '.join(result['defaults_from_app_json'])}.")
+        for line in result["warnings"]:
+            click.echo(line)
+        if result["missing_variables"]:
+            from gapp.admin.sdk.appjson import missing_text
+            click.echo("A deploy would be refused:")
+            click.echo(missing_text(result["deployment"], result["missing_variables"]).split("\n", 1)[1])
         click.echo("Nothing was built or changed.")
         return
+    for line in result.get("warnings") or []:
+        click.echo(line)
     click.echo(f"{result['deployment']} is deployed to {result['project']}, built from {builds}.")
     if result.get("upgraded_from"):
         click.echo(f"Upgraded from gapp {result['upgraded_from']} to {result['gapp']}.")
@@ -965,14 +975,22 @@ def secrets_list_cmd(deployment, json_out):
     click.echo(f"Deployment: {result['deployment']}")
     click.echo(f"Project:    {result['project_id']}")
     if result["secrets"]:
+        in_cloud = {"ready": "set", "missing": "not set", "unattached": "unlabelled", "conflict": "another deployment's"}
         click.echo()
-        click.echo(f"  {'Secret':<20} {'Variable':<25} {'Status':<18} Generate")
-        click.echo("  " + "-" * 70)
+        click.echo(f"  {'Secret':<20} {'Variable':<25} {'Generated':<10} In Secret Manager")
+        click.echo("  " + "-" * 75)
         for s in result["secrets"]:
-            click.echo(
-                f"  {s['name']:<20} {s['env_var']:<25} "
-                f"{s['status']:<18} {'yes' if s['generate'] else 'no'}"
-            )
+            click.echo(f"  {s['name']:<20} {s['env_var']:<25} {'yes' if s['generate'] else 'no':<10} {in_cloud[s['status']]}")
+        to_do = [s for s in result["secrets"] if s["status"] == "missing" and not s["generate"]]
+        made = [s for s in result["secrets"] if s["status"] == "missing" and s["generate"]]
+        if to_do:
+            click.echo("\n  To do before a deploy:")
+            for s in to_do:
+                click.echo(f"    {s['name']} has no value. Set it: gapp secrets set {s['name']} --deployment {result['deployment']}")
+        if made:
+            click.echo("\n  Nothing to do:")
+            for s in made:
+                click.echo(f"    {s['name']} is generated. The next deploy makes it.")
     else:
         click.echo(f"\n  {result['deployment']} reads no secrets.")
     if result["orphans"]:

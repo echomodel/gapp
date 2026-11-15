@@ -9,7 +9,8 @@ compatibility: Needs the gapp CLI (or its MCP tools). gcloud for project setup, 
 gapp deploys apps that serve HTTP to Cloud Run with Terraform. A
 deployment is defined once, in the user's **fleet**, and every command
 works from that definition. The app's repo stays cloud-agnostic: it
-needs a Procfile or a Dockerfile and nothing that names gapp. gapp
+needs a Procfile or a Dockerfile, optionally an `app.json` listing its
+variables, and nothing that names gapp. gapp
 handles the container build, Secret Manager, a data volume, the domain
 and access.
 
@@ -24,6 +25,8 @@ and access.
 - **Everything comes from the definition.** A deploy, a status and a
   secret all take the project, the id and the settings from it. Nothing
   searches the cloud, and `gapp.yaml` in an app's repo is not read.
+  The app's `app.json` only fills in defaults, at deploy; the definition
+  always wins (`references/settings.md`).
 - **Name the deployment with `deployment`** (`--deployment <name>`), or
   run inside a clone of its repo, where gapp finds it by the clone's
   remote. A folder's name is never used.

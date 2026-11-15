@@ -31,8 +31,8 @@ nothing else: no GitHub, no file to create, no path to type. The CLI
 always says what comes next.
 
 **An app's repo does not know about gapp.** Nothing in a repo names gapp,
-a project or Google Cloud. gapp reads a repo's Dockerfile or Procfile and
-never writes to a repo, so anyone can deploy the same repo to their own
+a project or Google Cloud. gapp reads a repo's Dockerfile or Procfile, and
+the `env` block of its `app.json` if it has one, and never writes to a repo, so anyone can deploy the same repo to their own
 project without changing it.
 
 **Deployments are independent.** Deployments in one project do not know
@@ -62,6 +62,7 @@ GAPP REPO (this repo: how to deploy)
 
 AN APP'S REPO (what gets deployed)
   Dockerfile or Procfile                how it builds and starts
+  app.json (optional)                   the variables it reads, in Heroku's format
 
 THE FLEET (what is defined)
   gapp.yaml                             every definition: name, id, repo, project, ref, gapp version, settings
@@ -151,6 +152,41 @@ rollback and trying a branch are changes to the definition.
 From a clone, the clone must be on that ref: a branch must be the one
 checked out (its unpushed commits are built), and a tag or commit must be
 checked out exactly.
+
+### The app's `app.json`
+
+An app may list the variables it reads in `app.json`, Heroku's published
+format, which gapp does not extend. The rules, and why:
+
+- **The definition wins, and `app.json` fills in what it leaves out.**
+  One rule covers every case: a variable the definition sets is used
+  whatever `app.json` says, so a variable that was required and now has
+  a default, or the reverse, needs no special handling.
+- **It is read by a deploy only, from the commit the deploy builds**
+  (`gapp/admin/sdk/appjson.py`). What a command reports must not change
+  with the folder it is run in or the commit that happens to be checked
+  out. `gapp show` and `gapp secrets list` report the definition; `gapp
+  deploy --dry-run` is the preview that includes `app.json`, because it
+  knows the commit.
+- **Nothing from it is copied into the definition.** A copied default
+  looks the same as a value the operator chose, so when the app's next
+  version changed its default, gapp could not tell whether to follow.
+  Keeping track of where each value came from would put a shadow of
+  `app.json` in the fleet. With no copy there is nothing to go stale and
+  nothing to resync.
+- **`generator: "secret"` is a hint, not an instruction.** A secret is
+  lasting state in Google Cloud, and the definition is the full account
+  of a deployment's secrets, so a secret is made only when the definition
+  asks for one. A variable `app.json` wants generated is treated as any
+  other variable the definition must supply: the deploy refuses, and the
+  refusal suggests `--secret --generate`. A deploy that created a
+  credential because a file in a repo asked for one would also be the
+  more surprising behaviour for a repo someone else wrote.
+- **A variable `app.json` does not list is warned about, never
+  refused,** and only when the file has an `env` block. It catches a
+  misspelt name and a setting the app has dropped. An `app.json` need not
+  list everything an app reads, so it cannot be an error; an app with no
+  `app.json` has said nothing, so nothing is checked.
 
 ### gapp versions
 
@@ -244,6 +280,7 @@ gapp/admin/
     core.py          project setup, deploy, status, list
     secrets.py       Secret Manager
     start.py         how an app starts
+    appjson.py       what an app's app.json says about its variables
     ci.py            gapp ci: GitHub only, except `projects connect`
     ci_runner.py     what a workflow runs on a runner
     config.py        profiles

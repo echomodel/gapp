@@ -260,6 +260,107 @@ def test_the_label_is_written_only_after_the_deploy_succeeds(sdk, cloud, monkeyp
     assert not cloud.label_writes
 
 
+# --- the app's app.json, read from the commit the deploy builds ---
+
+
+def app_json(clone, env):
+    (clone / "app.json").write_text(json.dumps({"env": env}))
+    git(clone, "add", "app.json")
+    commit(clone, "app.json")
+
+
+def test_a_default_from_app_json_is_passed_and_nothing_is_written_to_the_fleet(sdk, cloud, clone):
+    app_json(clone, {"LOG_LEVEL": {"value": "info"}})
+    before = fleetstore.read()
+    result = sdk.deploy_definition()
+    assert cloud.last_tfvars["env"] == {"LOG_LEVEL": "info"}
+    assert result["app_json"] == "read" and result["defaults_from_app_json"] == ["LOG_LEVEL"]
+    assert fleetstore.read() == before
+
+
+def test_the_definitions_value_wins_over_app_jsons_default(sdk, cloud, clone):
+    app_json(clone, {"LOG_LEVEL": {"value": "info"}})
+    definitions.env_set("LOG_LEVEL", "debug", deployment="my-app")
+    assert sdk.deploy_definition()["defaults_from_app_json"] == []
+    assert cloud.last_tfvars["env"] == {"LOG_LEVEL": "debug"}
+
+
+def test_a_variable_app_json_needs_and_the_definition_lacks_refuses_the_deploy_with_the_commands(sdk, cloud, clone):
+    app_json(clone, {"API_URL": {"description": "Upstream API address"}, "APP_KEY": {"generator": "secret"}})
+    message = refused(sdk.deploy_definition)
+    assert "its app.json needs 2 variables the definition does not set" in message
+    assert "gapp env set API_URL <value> --deployment my-app" in message
+    assert "gapp env set APP_KEY --secret --generate --deployment my-app" in message
+    assert nothing_happened(cloud)
+
+
+def test_once_the_definition_supplies_them_the_deploy_goes_ahead(sdk, cloud, clone):
+    app_json(clone, {"API_URL": {}, "APP_KEY": {"generator": "secret"}})
+    definitions.env_set("API_URL", "https://api.example.com", deployment="my-app")
+    definitions.env_set("APP_KEY", secret="", generate=True, deployment="my-app")
+    sdk.deploy_definition()
+    assert cloud.last_tfvars["env"] == {"API_URL": "https://api.example.com"}
+    assert cloud.last_tfvars["secrets"] == {"APP_KEY": "my-app-app-key"}
+
+
+def test_a_generator_in_app_json_never_makes_a_secret_by_itself(sdk, cloud, clone, monkeypatch):
+    monkeypatch.setattr(secrets, "materialize_generated_secrets", lambda *a, **k: pytest.fail("a secret was made"))
+    app_json(clone, {"APP_KEY": {"generator": "secret"}})
+    refused(sdk.deploy_definition)
+
+
+def test_a_dry_run_shows_what_app_json_adds_and_what_is_missing_and_refuses_nothing(sdk, cloud, clone):
+    app_json(clone, {"LOG_LEVEL": {"value": "info"}, "API_URL": {}})
+    definitions.env_set("OLD_SETTING", "x", deployment="my-app")
+    plan = sdk.deploy_definition(dry_run=True)
+    assert plan["defaults_from_app_json"] == ["LOG_LEVEL"]
+    assert plan["missing_variables"] == [{"name": "API_URL", "description": None, "generated": False}]
+    assert plan["warnings"] == [
+        "'my-app' sets OLD_SETTING, and this version's app.json does not list it. The app may not read it."]
+    assert nothing_happened(cloud)
+
+
+def test_a_variable_app_json_does_not_list_is_warned_about_and_still_deployed(sdk, cloud, clone):
+    app_json(clone, {"LOG_LEVEL": {"value": "info"}})
+    definitions.env_set("OLD_SETTING", "x", deployment="my-app")
+    result = sdk.deploy_definition()
+    assert len(result["warnings"]) == 1 and "OLD_SETTING" in result["warnings"][0]
+    assert cloud.last_tfvars["env"] == {"LOG_LEVEL": "info", "OLD_SETTING": "x"}
+
+
+def test_an_app_with_no_app_json_is_never_warned_about(sdk, cloud):
+    definitions.env_set("ANYTHING", "x", deployment="my-app")
+    result = sdk.deploy_definition()
+    assert result["app_json"] == "none" and result["warnings"] == [] and result["missing_variables"] == []
+
+
+def test_an_app_json_that_is_not_committed_is_not_read(sdk, cloud, clone):
+    (clone / "app.json").write_text(json.dumps({"env": {"API_URL": {}}}))
+    assert sdk.deploy_definition()["app_json"] == "none"
+
+
+def test_an_app_json_gapp_cannot_read_refuses_the_deploy(sdk, cloud, clone):
+    (clone / "app.json").write_text("{")
+    git(clone, "add", "app.json")
+    commit(clone, "broken")
+    message = refused(sdk.deploy_definition)
+    assert "app.json is not valid JSON" in message and nothing_happened(cloud)
+
+
+def test_the_commands_print_the_warning_and_the_dry_run_prints_what_is_missing(sdk, cloud, clone, monkeypatch):
+    monkeypatch.setattr("gapp.admin.cli.main.GappSDK", lambda: sdk)
+    app_json(clone, {"LOG_LEVEL": {"value": "info"}, "API_URL": {"description": "Upstream API address"}})
+    definitions.env_set("OLD_SETTING", "x", deployment="my-app")
+    out = CliRunner().invoke(main, ["deploy", "--dry-run"]).output
+    assert "From the app's app.json, as defaults: LOG_LEVEL." in out
+    assert "'my-app' sets OLD_SETTING, and this version's app.json does not list it." in out
+    assert "A deploy would be refused:\n  API_URL (Upstream API address)\n" in out
+    assert out.endswith("Nothing was built or changed.\n")
+    definitions.env_set("API_URL", "u", deployment="my-app")
+    out = CliRunner().invoke(main, ["deploy"]).output
+    assert out.startswith("'my-app' sets OLD_SETTING") and "my-app is deployed to my-project" in out
+
+
 # --- what Terraform is given ---
 
 

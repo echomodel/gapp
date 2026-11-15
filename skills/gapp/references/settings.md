@@ -91,6 +91,35 @@ A setting the file leaves out goes back to its default, variables
 included, so start from what is there: `gapp show --json`, under
 `settings`. With the tools, `gapp_show` then `gapp_apply`.
 
+## The app's `app.json`
+
+An app can list the variables it reads in an `app.json` at the repo's
+root (Heroku's format; gapp reads the `env` block only). The definition
+always wins, and a deploy uses `app.json`, at the commit it builds, only
+for variables the definition does not set:
+
+| In `app.json` | What the deploy does |
+|---|---|
+| `value` | Uses it as the default |
+| No `value`, required | Refuses until it is set: `gapp env set NAME <value>`, or `--secret` when it is a credential |
+| `"generator": "secret"` | Refuses until it is added: `gapp env set NAME --secret --generate` |
+| `"required": false`, no `value` | Leaves it unset |
+
+- Run `gapp deploy --dry-run` first. It lists the defaults `app.json`
+  supplies, every variable that is missing with its command, and any
+  warning.
+- For a required variable with no value, ask the user whether it is a
+  plain setting or a credential. Never decide from its name, and never
+  ask for a credential's value in chat.
+- A warning that the definition sets a variable `app.json` does not
+  list means the app may not read it: a typo, or a setting the app
+  dropped. Tell the user; do not remove it yourself.
+- No other command reads `app.json`. `gapp show` and `gapp secrets
+  list` report the definition only.
+- When you write an `app.json` for a repo the user owns, use generic
+  attributes only (`description`, `value`, `required`, `generator`).
+  Nothing in it names gapp.
+
 Map the app's needs to these primitives from the app's own docs: which
 variables it reads, which are secrets, where it writes data, whether it
 does its own auth. gapp knows nothing about the app's framework.

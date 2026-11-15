@@ -379,7 +379,7 @@ def test_show_lists_settings_with_where_each_comes_from(my_app):
     output = run("show", "-d", "my-app").output
     assert "    public: true  (definition)\n" in output and "    memory: 512Mi  (default)\n" in output
     shown = json.loads(run("show", "-d", "my-app", "--json").output)
-    assert shown["gapp"] == __version__ and shown["upgrade"] is None and shown["app_json"] == "not read"
+    assert shown["gapp"] == __version__ and shown["upgrade"] is None and "app_json" not in shown
     assert {"key": "public", "value": "true", "from": "definition"} in shown["effective"]
 
 

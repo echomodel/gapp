@@ -1103,6 +1103,7 @@ def deploy(deployment: str | None = None, *, upgrade: bool = False, watch: bool 
             f"Its log is at {url}"
         ))}
     done = report.result or {}
+    result["lines"] += [str(line) for line in done.get("warnings") or []]
     built = _builds(done.get("ref", ref)) + (f" at {done['commit']}" if done.get("commit") else "")
     result["lines"].append(f"{name} is deployed to {project}, built from {built}.")
     if done.get("upgraded_from"):

@@ -181,7 +181,9 @@ def show(deployment: str | None = None, *, cwd: Path | None = None) -> dict:
 
     `settings` is the definition's settings object, exactly what `apply`
     takes, so a file can be started from it. `effective` lists every
-    setting a deploy would use, each with where it comes from.
+    setting, each as set on the definition or as its default. The app's
+    own `app.json` is not read here: a deploy reads it, from the commit it
+    builds, and `gapp deploy --dry-run` shows what it adds.
     """
     where, deployments = _load()
     name = which(deployments, deployment, cwd, "gapp show")
@@ -204,7 +206,7 @@ def show(deployment: str | None = None, *, cwd: Path | None = None) -> dict:
         "deployment": name, "id": definition.get("id"), "repo": definition.get("repo"),
         "project": definition.get("project"), "ref": definition.get("ref"), "gapp": definition.get("gapp"),
         "this_gapp": __version__, "upgrade": "available" if stands == "older" else None,
-        "settings": settings_mod.validate(own), "effective": rows, "app_json": "not read", "fleet": where.describe(),
+        "settings": settings_mod.validate(own), "effective": rows, "fleet": where.describe(),
     }
 
 

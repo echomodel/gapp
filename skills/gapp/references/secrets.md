@@ -35,9 +35,16 @@ check first:
 gapp secrets list
 ```
 
-- Generated, any state: fine. The deploy makes it.
-- User-provided, `ready`: fine.
+Each row has `generate` (from the definition) and `status`, the
+secret's state in Secret Manager: `ready`, `missing`, `unattached` or
+`conflict`.
+
+- Generated, `missing`: fine. The deploy makes it.
+- Any, `ready`: fine.
 - User-provided, `missing`: have the user set it, then deploy.
+
+`status` says nothing about the running service. A value set after the
+last deploy reaches the app at the next deploy.
 
 The user sets a value from a terminal. The command prompts with hidden
 input, which keeps the value out of shell history and transcripts:
