@@ -164,16 +164,6 @@ class CloudProvider(ABC):
     # -- Custom domains --
 
     @abstractmethod
-    def list_verified_domains(self) -> List[str]:
-        """Domains whose ownership the current identity has verified.
-
-        Cloud Run only maps a custom domain for an identity that verified
-        the domain or one of its parents. Raises CloudAccessError when the
-        list cannot be read.
-        """
-        pass
-
-    @abstractmethod
     def get_domain_mapping(self, project_id: str, region: str, domain: str) -> Optional[Dict]:
         """Describe the Cloud Run domain mapping for `domain`.
 

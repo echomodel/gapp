@@ -3,6 +3,25 @@
 Notable changes to gapp. Versions are git tags (`vX.Y.Z`); the version
 source is `gapp/__init__.py`.
 
+## 4.0.0rc19 (pre-release of 4.0.0)
+
+Changed:
+
+- **A deploy no longer checks that the deploying identity has verified a
+  new domain.** The check used `gcloud domains list-user-verified`, which
+  needs the App Engine Admin API in the project, so every CI deploy that
+  added a domain failed with "Could not list the domains this identity
+  has verified". Cloud Run still refuses the mapping for an unverified
+  domain, now at the end of the deploy, after the service is updated.
+  Verify the domain first (Search Console; on a runner, add the project's
+  `gapp-deploy` account as an owner). With `--replace-domain`, an
+  unverified new domain means the old one stops serving too.
+
+Fixed:
+
+- **`gapp set` to a setting's default value changes nothing** ("Nothing to
+  change"), instead of printing `512Mi -> 512Mi` and recording the default.
+
 ## 4.0.0rc18 (pre-release of 4.0.0)
 
 Changed:

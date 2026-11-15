@@ -97,18 +97,6 @@ def test_token_failure_raises_with_gcloud_stderr(monkeypatch):
 # -- the two domain reads --
 
 
-def test_verified_domains_are_normalised(provider, monkeypatch):
-    monkeypatch.setattr(provider, "_run_gcloud", lambda args, **kw: _proc(
-        0, json.dumps([{"id": "Example.com."}, {"id": "apps.example.net"}])))
-    assert provider.list_verified_domains() == ["example.com", "apps.example.net"]
-
-
-def test_verified_domains_failure_raises(provider, monkeypatch):
-    monkeypatch.setattr(provider, "_run_gcloud", lambda args, **kw: _proc(1, "", "ERROR: reauth required"))
-    with pytest.raises(CloudAccessError, match="reauth required"):
-        provider.list_verified_domains()
-
-
 def test_missing_domain_mapping_is_none(provider, monkeypatch):
     monkeypatch.setattr(provider, "_run_gcloud", lambda args, **kw: _proc(
         1, "", "ERROR: (gcloud.beta.run.domain-mappings.describe) Domain mapping [mcp.example.com] not found."))

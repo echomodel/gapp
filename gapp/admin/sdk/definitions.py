@@ -362,7 +362,7 @@ def set_value(key: str, value: str, *, deployment: str | None = None, cwd: Path 
         raise Refused(_fixed(key, name))
     new = settings_mod.parse_scalar(key, value)
     current = _settings(definition)
-    if current.get(key) == new:
+    if current.get(key, settings_mod.DEFAULTS.get(key)) == new:
         return _result(name, [], where)
     change = _change(key, current.get(key, settings_mod.DEFAULTS.get(key)), new)
     current[key] = new
