@@ -474,3 +474,16 @@ def ci(monkeypatch, fleet_repo, fake_gh):
     fake_gh.private["me/my-app"] = False
     fake_gh.variables[(fleet_repo, "GAPP_ALLOWED_SOURCES")] = "me"
     return fake_gh
+
+
+@pytest.fixture(autouse=True)
+def no_real_deploy_record(monkeypatch):
+    """`gapp upgrade` reads the deploy record from the project to word its
+    next step. A unit test never reaches a real project: the read fails, as
+    it does on a machine with no Google Cloud login, unless a test says
+    what is on record."""
+    from gapp.admin.sdk import definitions
+
+    def unreachable(project, deployment_id):
+        raise RuntimeError("no real project in a unit test")
+    monkeypatch.setattr(definitions, "last_deployed_by", unreachable)

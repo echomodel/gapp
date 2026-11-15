@@ -168,8 +168,9 @@ gets them by copying to the same bucket path from a logged-in machine:
 
 **A newer gapp.** `gapp list` and `gapp show` say "upgrade available".
 Nothing changes until the user asks: `gapp upgrade --deployment <name>`
-prints what will change and updates the definition, and the next deploy
-must be given `--upgrade`. Do one deployment at a time.
+prints what will change and updates the definition, and says whether the
+next deploy must be given `--upgrade` (yes when an earlier gapp deployed
+it; it says when it could not tell). Do one deployment at a time.
 
 **Several machines.** Keep the fleet in a git repo (`gapp fleet use`);
 each machine then runs `gapp fleet use <owner>/<repo>` once and sees the

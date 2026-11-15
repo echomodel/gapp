@@ -241,8 +241,32 @@ def show(deployment: str | None = None, *, cwd: Path | None = None) -> dict:
 
 
 @_guard
+def last_deployed_by(project: str, deployment_id: str) -> str | None:
+    """The gapp version of the deployment's last successful deploy, from the
+    deploy record in its project, or None when there is no record. Raises
+    when the record cannot be read."""
+    from gapp.admin.sdk import record
+    from gapp.admin.sdk.cloud import get_provider
+    return (record.read_latest(get_provider(), project, deployment_id) or {}).get("gapp")
+
+
+def _next_deploy_needs_upgrade(definition: dict) -> bool | None:
+    """Whether the next deploy of an upgraded definition must be given
+    --upgrade: True when an earlier gapp deployed it, False when nothing
+    is on record, None when the record could not be read here (no gcloud,
+    no login, no access). Never raises: the definition is already
+    upgraded, and this only words what to do next."""
+    try:
+        return last_deployed_by(definition["project"], definition["id"]) is not None
+    except Exception:
+        return None
+
+
 def upgrade(deployment: str | None = None, *, cwd: Path | None = None) -> dict:
-    """Bring one definition to this gapp's version. Changes the definition only."""
+    """Bring one definition to this gapp's version. Changes the definition
+    only; then reads the deploy record, if it can, to say whether the next
+    deploy needs --upgrade (`deploy_needs_upgrade`: true, false, or null
+    when it could not be read)."""
     where, deployments = _load()
     name = which(deployments, deployment, cwd, "gapp upgrade")
     definition = deployments[name]
@@ -264,7 +288,8 @@ def upgrade(deployment: str | None = None, *, cwd: Path | None = None) -> dict:
     definition["gapp"] = __version__
     _save(where, deployments, f"gapp: upgrade {name} to gapp {__version__}")
     return _result(name, [{"key": "gapp", "before": recorded, "after": __version__}], where,
-                   plan={"definition": [], "next_deploy": [], "by_hand": []})
+                   plan={"definition": [], "next_deploy": [], "by_hand": []},
+                   deploy_needs_upgrade=_next_deploy_needs_upgrade(definition))
 
 
 # --- settings ---

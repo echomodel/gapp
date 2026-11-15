@@ -17,6 +17,13 @@ Added:
   4.0.0rc14 is refused until `gapp upgrade`. Run `gapp ci init` after
   upgrading to install workflows that check.
 
+Fixed:
+
+- **`gapp upgrade` said "add --upgrade to that deploy" for a deployment
+  no gapp had recorded a deploy of**, and that deploy was then refused
+  for `--upgrade`. It now reads the deploy record when it can and says
+  whether the next deploy needs `--upgrade`, or that it could not tell.
+
 ## 4.0.0rc15 (pre-release of 4.0.0)
 
 Added:

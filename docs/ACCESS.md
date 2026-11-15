@@ -23,7 +23,8 @@ fleet and never holds a Google Cloud credential.
 
 | Command | Your machine needs | Google Cloud touched by | The fleet |
 |---|---|---|---|
-| `gapp add`, `rename`, `set`, `unset`, `apis`, `env`, `apply`, `upgrade` | git, for a fleet in a repo | nothing | changed |
+| `gapp add`, `rename`, `set`, `unset`, `apis`, `env`, `apply` | git, for a fleet in a repo | nothing | changed |
+| `gapp upgrade` | git, for a fleet in a repo; gcloud optional | you, read-only: the deploy record, when it can be read, to say whether the next deploy needs `--upgrade` | changed |
 | `gapp list`, `show`, `fleet`, `fleet export` | git, for a fleet in a repo | nothing | read |
 | `gapp fleet use`, `fleet import` | git; `gh` for `--create` | nothing | moved or replaced |
 | `gapp config ...` | nothing | nothing | not touched |
