@@ -272,6 +272,110 @@ def list_cmd(sdk: GappSDK, json_out):
                    f"builds {r['ref'] or 'the default branch'}  gapp {r['gapp']}{note}")
 
 
+@main.group("deployments")
+def deployments_group():
+    """What is deployed: the running services, read from Google Cloud.
+
+    Each reads the deploy record gapp keeps in a project, so it needs a
+    Google Cloud login that can read the projects. Nothing is changed.
+    """
+
+
+def _deployments_end(fn, json_out, say):
+    from gapp.admin.sdk.cloud import get_provider
+    from gapp.admin.sdk.cloud.base import CloudAccessError
+    from gapp.admin.sdk.definitions import Refused
+    try:
+        result = fn(get_provider())
+    except Refused as e:
+        _refused(e, json_out)
+    except CloudAccessError as e:
+        click.echo(f"  Error: {e}", err=True)
+        raise SystemExit(1)
+    if json_out:
+        _json(result)
+        return
+    for line in say(result):
+        click.echo(line)
+
+
+@deployments_group.command("list")
+@click.option("--name", default=None, metavar="PATTERN", help="Only deployments whose name matches (* and ? allowed).")
+@click.option("--repo", default=None, metavar="OWNER/REPO", help="Only deployments of this repo.")
+@click.option("--project", default=None, metavar="PROJECT", help="Only deployments in this project.")
+@click.option("--below", default=None, metavar="VERSION",
+              help="Only deployments whose definition or last deploy is on an older gapp than VERSION.")
+@click.option("--limit", type=int, default=None, metavar="N", help="Read at most N deployments, in name order.")
+@click.option("--json", "json_out", is_flag=True, help="Machine-readable output.")
+def deployments_list_cmd(name, repo, project, below, limit, json_out):
+    """Every deployment in the fleet, with the gapp of its last deploy.
+
+    \b
+    gapp deployments list
+    gapp deployments list --below 4.1.0          what a gapp that works from 4.1.0 on would leave behind
+    gapp deployments list --project my-project --limit 20
+    The filters narrow the fleet before anything is read; each deployment
+    left costs one small read of its deploy record. Ordered by name.
+    """
+    from gapp.admin.sdk import deployments
+
+    def say(r):
+        rows = r["deployments"]
+        lines = [f"Your fleet is kept in {r['fleet']}. This is gapp {r['this_gapp']}; "
+                 f"it works as it is with {r['compatible_from']} or later."]
+        if not rows:
+            return lines + ["No deployment matches." if r["read"] else "The fleet holds no deployment that matches."]
+        width = max(len(row["deployment"]) for row in rows)
+        for row in rows:
+            deployed = row["deployed"] or ("unknown" if row["problem"] else "not deployed")
+            lines.append(f"  {row['deployment']:<{width}}  {row['project']}  definition {row['definition']}  "
+                         f"deployed {deployed}  {row['stands']}")
+            if row["problem"]:
+                lines.append(f"  {'':<{width}}  {row['problem']}")
+        if r["limited"]:
+            lines.append(f"Read the first {r['read']} by name (--limit). Narrow the list or raise --limit for more.")
+        return lines
+    _deployments_end(lambda provider: deployments.list_deployments(
+        provider, name=name, repo=repo, project=project, below=below, limit=limit), json_out, say)
+
+
+@deployments_group.command("scan")
+@click.option("--project", default=None, metavar="PROJECT",
+              help="Scan only this project. Left out: every project set up for gapp that your login can see.")
+@click.option("--json", "json_out", is_flag=True, help="Machine-readable output.")
+def deployments_scan_cmd(project, json_out):
+    """Find what gapp has deployed, and what of it the fleet does not hold.
+
+    Looks in the projects set up for gapp (`gapp project setup`), found
+    with one search Google Cloud filters on its side, so it reads only those
+    projects however many your login can see. For each deployment the
+    fleet does not hold, prints the commands that add it back.
+    """
+    from gapp.admin.sdk import deployments
+
+    def say(r):
+        lines = []
+        if not r["projects"]:
+            return ["No project you can see is set up for gapp."]
+        for p in r["projects"]:
+            if p["problem"]:
+                lines.append(f"{p['project']}: could not be read. {p['problem']}")
+                continue
+            if not p["deployments"]:
+                lines.append(f"{p['project']}: nothing deployed by gapp.")
+                continue
+            lines.append(f"{p['project']}:")
+            for d in p["deployments"]:
+                if d["in_fleet"]:
+                    lines.append(f"  {d['id']}  gapp {d['deployed']}  in your fleet as {d['in_fleet']}")
+                else:
+                    lines.append(f"  {d['id']}  gapp {d['deployed']}  not in your fleet. Add it back with:")
+                    lines += [f"      {c}" for c in d["add_again"]]
+        lines.append(f"{r['found']} found, {r['not_in_fleet']} not in your fleet ({r['fleet']}).")
+        return lines
+    _deployments_end(lambda provider: deployments.scan(provider, project=project), json_out, say)
+
+
 @main.group("project")
 def project_group():
     """Google Cloud projects that host deployments."""

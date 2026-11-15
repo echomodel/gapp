@@ -76,6 +76,14 @@ class CloudProvider(ABC):
         """Replace or update labels on a GCP project."""
         pass
 
+    @abstractmethod
+    def search_projects_by_label(self, key: str, value: str) -> List[str]:
+        """Ids of the active projects this identity can see that carry the
+        label key=value. Google Cloud filters on its side, so the cost follows the
+        number of matching projects, not every project the identity can
+        see. A failure raises CloudAccessError."""
+        pass
+
 
     # -- Deployment labels on buckets and services --
 
@@ -91,6 +99,13 @@ class CloudProvider(ABC):
     def read_object(self, bucket_name: str, path: str) -> Optional[str]:
         """The text of an object, or None when the object or its bucket
         does not exist. Any other failure raises CloudAccessError."""
+        pass
+
+    @abstractmethod
+    def list_object_paths(self, bucket_name: str, pattern: str) -> List[str]:
+        """The paths of the objects matching a wildcard pattern (such as
+        `deployments/*/deployed.yaml`), empty when the bucket or no such
+        object exists. Any other failure raises CloudAccessError."""
         pass
 
     @abstractmethod

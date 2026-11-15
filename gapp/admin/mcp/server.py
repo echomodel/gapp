@@ -297,6 +297,49 @@ def gapp_status(deployment: str | None = None) -> dict:
         return {"refused": True, "message": e.message}
 
 
+def _deployments_tool(fn, **kwargs) -> dict:
+    from gapp.admin.sdk import deployments
+    from gapp.admin.sdk.cloud import get_provider
+    from gapp.admin.sdk.cloud.base import CloudAccessError
+    from gapp.admin.sdk.definitions import Refused
+    try:
+        return getattr(deployments, fn)(get_provider(), **kwargs)
+    except Refused as e:
+        return {"refused": True, "message": e.message}
+    except CloudAccessError as e:
+        return {"refused": True, "message": str(e)}
+
+
+@_tool()
+def gapp_deployments_list(name: str | None = None, repo: str | None = None, project: str | None = None,
+                          below: str | None = None, limit: int | None = None) -> dict:
+    """Every deployment in the fleet with the gapp version of its
+    definition (`definition`) and of its last deploy (`deployed`, null when
+    never deployed), and where it stands against this gapp (`stands`:
+    current, upgrade available, upgrade pending, upgrade required, too old
+    for this gapp, install a newer gapp). Needs a Google Cloud login that
+    can read the projects; a record that cannot be read is reported in
+    `problem` on its row. `name` (a wildcard pattern), `repo` and `project`
+    narrow the fleet before anything is read; `below` keeps deployments
+    whose definition or last deploy is older than that version; `limit`
+    caps how many records are read, in name order.
+    """
+    return _deployments_tool("list_deployments", name=name, repo=repo, project=project, below=below, limit=limit)
+
+
+@_tool()
+def gapp_deployments_scan(project: str | None = None) -> dict:
+    """Every deployment gapp has a deploy record for, in `project` or in
+    every project set up for gapp that this login can see, and whether the
+    fleet holds it (`in_fleet`). One it does not hold comes with
+    `add_again`, the commands that define it again; ask the user before
+    running them. Use it to rebuild a lost fleet or find what `gapp remove`
+    left. Needs a Google Cloud login; refused when more projects are found
+    than a scan reads at once, with how to narrow it.
+    """
+    return _deployments_tool("scan", project=project)
+
+
 @_tool()
 def gapp_list() -> dict:
     """Every deployment in the fleet: its name, repo, project, the ref it

@@ -16,6 +16,8 @@ command that fixes it.
 | Where the fleet lives | `gapp fleet` | `gapp_fleet()` | a file, or a git repo; how many deployments; `set_by` when `GAPP_FLEET` chose it |
 | Move the fleet | `gapp fleet use <owner>/<repo> [--create]`, `gapp fleet use /full/path/gapp.yaml`, `gapp fleet use local` | `gapp_fleet_use(target, create=)` | any git host; refused when both places hold deployments, and while `GAPP_FLEET` is set |
 | Copy it out or in | `gapp fleet export [<file>]`, `gapp fleet import <file>` | `gapp_fleet_export()`, `gapp_fleet_import(fleet)` | the tools take and return the document, not a path. Import replaces the whole fleet: get the user's yes |
+| What is deployed, fleet-wide | `gapp deployments list [--name/--repo/--project/--below/--limit]` | `gapp_deployments_list(...)` | each deployment's definition and deployed gapp versions and where it stands; needs a Google Cloud login. `--below <version>` shows what a newer gapp would leave behind |
+| Find what the fleet lost | `gapp deployments scan [--project]` | `gapp_deployments_scan(project=)` | every deployment in gapp's projects, and `gapp add` commands for those the fleet lacks; ask before running them |
 | Every definition | `gapp list` | `gapp_list()` | name, repo, project, ref, gapp version, "upgrade available", "upgrade required" or "too old for this gapp" |
 | One definition | `gapp show` | `gapp_show(deployment=)` | `effective`: every setting a deploy would use and where it comes from; `settings`: the object `apply` takes |
 | Define a deployment | `gapp add [<name>] --project <p> [--repo <r>] [--ref <r>]` | `gapp_add(name=, project=, repo=, ref=)` | in a clone, name and repo come from its remote |

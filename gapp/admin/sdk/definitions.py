@@ -173,19 +173,28 @@ def remove(name: str) -> dict:
     env = (definition.get("settings") or {}).get("env") or {}
     secrets = sorted({f"{id_}-{spec['secret']}" for spec in env.values()
                       if isinstance(spec, dict) and spec.get("secret")})
-    again = f"gapp add {id_} --project {project}"
-    if definition.get("repo"):
-        again += f" --repo {definition['repo']}"
-    if definition.get("ref"):
-        again += f" --ref {definition['ref']}"
     return _result(
         name, [{"key": "deployment", "before": "defined", "after": "removed"}], where,
         removed=definition,
         left={"project": project, "service": id_, "bucket": f"gapp-{id_}-{project}".lower(), "secrets": secrets,
               "state": f"gs://{record.bucket(project)}/{record.folder(id_)}/"},
-        add_again=[again] + ([f"gapp rename {id_} {name}"] if name != id_ else []),
+        add_again=add_again(definition, name),
         see_removed=see,
     )
+
+
+def add_again(definition: dict, name: str) -> list[str]:
+    """The commands that define a deployment on `definition`'s resources
+    again: `gapp add` under its id (gapp picks the id from the name, and a
+    free name is its own id), then `gapp rename` back when its name was
+    different. Settings are not part of it."""
+    id_ = definition.get("id")
+    again = f"gapp add {id_} --project {definition.get('project')}"
+    if definition.get("repo"):
+        again += f" --repo {definition['repo']}"
+    if definition.get("ref"):
+        again += f" --ref {definition['ref']}"
+    return [again] + ([f"gapp rename {id_} {name}"] if name and name != id_ else [])
 
 
 @_guard
