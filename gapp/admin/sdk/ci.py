@@ -506,8 +506,31 @@ def init_workflows() -> dict:
         result["lines"].append(f"The workflows in {fleet_repo} are this gapp's already. Nothing changed.")
     report = _variables_report(fleet_repo)
     result["variables"], result["variables_note"] = report["variables"], report["note"]
-    result["next_step"] = {"action": "ci projects connect", "hint": "gapp ci projects connect <project>"}
+    result["next_step"] = _after_init(fleet_repo)
     return result
+
+
+def _after_init(fleet_repo: str) -> dict:
+    """What to run after `gapp ci init`: connect a project the fleet's
+    deployments use that GitHub confirms is not connected; deploy when
+    every one of them is; otherwise connect, as for a new fleet."""
+    from gapp.admin.sdk import fleetstore
+    connect = {"action": "ci projects connect", "hint": "gapp ci projects connect <project>"}
+    try:
+        deployments = fleetstore.read()
+    except fleetstore.FleetUnavailable:
+        return connect
+    projects = sorted({d.get("project") for d in deployments.values() if d.get("project")})
+    if not projects:
+        return connect
+    reads = {project: _environment(fleet_repo, project) for project in projects}
+    for project, read in reads.items():
+        if read.absent:
+            return {"action": "ci projects connect", "hint": f"gapp ci projects connect {project}"}
+    if all(read.present for read in reads.values()):
+        name = sorted(deployments)[0]
+        return {"action": "ci deploy", "hint": f"gapp ci deploy --deployment {name}"}
+    return connect
 
 
 # --- ci projects: which projects the fleet repo's runners can deploy to ---
@@ -826,27 +849,38 @@ def _run_url(fleet_repo: str, run_id: str | None) -> str | None:
 
 
 
+RUNS_PAGE = 100
+RUNS_SEARCHED = 1000     # the most deploy runs read for one deployment's last deploy
+
+
 def _last_deploy(fleet_repo: str, name: str) -> dict:
     """The newest run of the deploy workflow for a deployment, found by its
-    run name, "Deploy <name> <request id>". `checked` is False, with a
-    note, when the runs cannot be read."""
+    run name, "Deploy <name> <request id>", newest first through the fleet
+    repo's deploy runs, up to RUNS_SEARCHED of them. `checked` is False,
+    with a note, when the runs cannot be read; `searched_all` is False when
+    the deployment's run was not among the runs read and older ones exist."""
     request = f"GET repos/{fleet_repo}/actions/workflows/{DEPLOY_WORKFLOW}/runs"
-    rc, out, err = _gh_api([f"repos/{fleet_repo}/actions/workflows/{DEPLOY_WORKFLOW}/runs?per_page=50"])
-    if rc != 0:
-        return {"checked": False, "run": None, "note": _couldnt_check(f"the deploy runs of {fleet_repo}", request, err)}
-    try:
-        runs = json.loads(out).get("workflow_runs") or []
-    except (json.JSONDecodeError, AttributeError):
-        runs = []
     pattern = re.compile(rf"^Deploy {re.escape(name)}(?: \S+)?\s*$")
-    for run in runs:
-        if pattern.match(run.get("display_title") or run.get("name") or ""):
-            return {"checked": True, "note": None, "run": {
-                "id": str(run.get("id")), "status": run.get("status"), "conclusion": run.get("conclusion"),
-                "created_at": run.get("created_at"),
-                "url": run.get("html_url") or _run_url(fleet_repo, run.get("id")),
-            }}
-    return {"checked": True, "run": None, "note": None}
+    for page in range(1, RUNS_SEARCHED // RUNS_PAGE + 1):
+        rc, out, err = _gh_api([f"repos/{fleet_repo}/actions/workflows/{DEPLOY_WORKFLOW}/runs"
+                                f"?per_page={RUNS_PAGE}&page={page}"])
+        if rc != 0:
+            return {"checked": False, "run": None, "searched_all": False,
+                    "note": _couldnt_check(f"the deploy runs of {fleet_repo}", request, err)}
+        try:
+            runs = json.loads(out).get("workflow_runs") or []
+        except (json.JSONDecodeError, AttributeError):
+            runs = []
+        for run in runs:
+            if pattern.match(run.get("display_title") or run.get("name") or ""):
+                return {"checked": True, "note": None, "searched_all": True, "run": {
+                    "id": str(run.get("id")), "status": run.get("status"), "conclusion": run.get("conclusion"),
+                    "created_at": run.get("created_at"),
+                    "url": run.get("html_url") or _run_url(fleet_repo, run.get("id")),
+                }}
+        if len(runs) < RUNS_PAGE:
+            return {"checked": True, "run": None, "note": None, "searched_all": True}
+    return {"checked": True, "run": None, "note": None, "searched_all": False}
 
 
 @dataclass
@@ -1082,6 +1116,9 @@ def status(deployment: str | None = None, *, live: bool = False, cwd: Path | Non
             run = last["run"]
             result["lines"].append(
                 f"Last deploy run: {run['conclusion'] or run['status'] or 'unknown'}, {run['created_at']}: {run['url']}")
+            result["next_step"] = {"action": "ci status --live", "hint": f"gapp ci status --deployment {name} --live"}
+        elif last["searched_all"] is False:
+            result["lines"].append(f"No deploy run among the newest {RUNS_SEARCHED} deploy runs of {fleet_repo}.")
             result["next_step"] = {"action": "ci status --live", "hint": f"gapp ci status --deployment {name} --live"}
         else:
             result["lines"].append("No deploy run yet.")

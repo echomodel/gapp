@@ -56,6 +56,10 @@ def gapp_project_setup(project: str) -> dict:
     the record of each deploy), and marks the project. Running it again
     adds only what is missing. Needs gcloud signed in as an
     Owner of the project. Sets up nothing about CI.
+
+    Returns `was_set_up` (the project was already marked), `added` (what
+    this call turned on or made) and `checked` (false when gapp could not
+    list what the project already had, and turned everything on again).
     """
     from gapp.admin.sdk.core import GappSDK
     from gapp.admin.sdk.definitions import Refused
@@ -231,8 +235,10 @@ def gapp_ci_status(deployment: str | None = None, live: bool = False) -> dict:
     deploys it) from the definition, and `last_deploy.run`, the newest run
     of the deploy workflow for it, with its `status`, `conclusion`,
     `created_at` and `url`. `last_deploy.run` is null when it has never
-    been deployed on a runner, and `last_deploy.checked` is false, with a
-    `note`, when the runs could not be read.
+    been deployed on a runner; `last_deploy.searched_all` is false when it
+    was not among the newest 1000 deploy runs and older ones exist; and
+    `last_deploy.checked` is false, with a `note`, when the runs could not
+    be read.
 
     With `live` true it starts the fleet repo's status workflow and waits:
     a runner signs in to the project as a deploy does and reports what is
@@ -308,7 +314,8 @@ def gapp_deployments_scan(project: str | None = None) -> dict:
     """Every deployment gapp has a deploy record for, in `project` or in
     every project set up for gapp that this login can see, and whether the
     fleet holds it (`in_fleet`). One it does not hold comes with
-    `add_again`, the commands that define it again; ask the user before
+    `add_again`, the commands that define it again with the settings it was
+    last deployed with; ask the user before
     running them. Use it to rebuild a lost fleet or find what `gapp remove`
     left. Needs a Google Cloud login; refused when more projects are found
     than a scan reads at once, with how to narrow it.
@@ -449,9 +456,9 @@ def gapp_remove(name: str) -> dict:
     bucket and secrets it had deployed stay, and gapp has no tool that
     takes them down. The result names them under `left`, and holds
     the definition it removed under `removed`. A deployment added with the
-    commands under `add_again` uses those resources again, data included;
-    that does not bring its settings back; `see_removed` is the command
-    that shows them. Confirm with the user before
+    commands under `add_again` uses those resources again, data included,
+    with its settings; `see_removed` is the command that shows what was
+    removed. Confirm with the user before
     calling it."""
     return _definition_tool("remove", name)
 

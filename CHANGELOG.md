@@ -32,6 +32,28 @@ Removed:
 
 Fixed:
 
+- **`gapp deployments scan` and `gapp remove` give add-back commands that
+  restore the settings too.** "Add it back with" used to define only the
+  name, repo and project, so deploying afterwards dropped the app's
+  variables, secret references, domain and sizing. The commands now
+  include one `gapp set`, `gapp apis add` or `gapp env set` per setting,
+  from the definition the deployment was last deployed with (scan) or the
+  one removed (remove). `add_again` in the MCP results carries them too.
+- **`gapp ci status` finds a deployment's last deploy run among the fleet
+  repo's newest 1000 deploy runs**, not only the newest 50, so a rarely
+  deployed deployment in a busy fleet is no longer reported as never
+  deployed. Past that it says so instead of "No deploy run yet", and
+  `last_deploy.searched_all` is false.
+- **`gapp project setup` on a project already set up says what it added**
+  ("Added what was missing: …" or "Nothing was missing."), instead of
+  "anything missing was added". The result carries `added` and `checked`.
+- **The columns of `gapp list`, `gapp deployments list` and `gapp
+  deployments scan` line up**, whatever the length of a project or name.
+- **"Next:" hints:** `gapp config profile use` and `gapp fleet use` now
+  name one; `gapp add` on a fleet in a GitHub repo names `gapp ci deploy`
+  as well as a deploy from a clone; `gapp ci init` names `gapp ci deploy`
+  when every project the fleet uses is connected, and the project to
+  connect when GitHub confirms one is not.
 - **`gapp ci deploy` and `gapp ci status --live` never ran from a machine
   that can't read GitHub Environments**, such as a cloud agent session with
   GitHub access only, or a token without that permission. Both stopped with

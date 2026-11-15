@@ -128,6 +128,14 @@ def test_the_list_command_prints_a_row_per_deployment_and_json(fleet):
     assert [r["deployment"] for r in data["deployments"]] == ["alpha", "beta", "gamma"]
 
 
+def test_the_list_lines_up_its_columns_whatever_the_lengths():
+    from gapp.admin.cli.main import _columns
+    lines = _columns([["a", "long-project-id", "definition 4.0.0", "x"],
+                      ["longer-name", "p", "definition 4.0.0rc17", "y"]])
+    assert lines == ["  a            long-project-id  definition 4.0.0      x",
+                     "  longer-name  p                definition 4.0.0rc17  y"]
+
+
 # --- scan ---
 
 

@@ -75,6 +75,7 @@ def test_moving_to_a_repo_carries_the_fleet_as_one_file_and_nothing_else(remote)
     assert in_remote(remote).startswith("format: 1\ndeployments:\n  my-app:\n")
     assert git(remote, "ls-tree", "--name-only", "-r", "main").splitlines() == ["gapp.yaml"]
     assert log(remote) == ["gapp: the fleet moves here"]
+    assert "Next: gapp list" in CliRunner().invoke(main, ["fleet", "use", remote]).output
     assert not local_file.exists() and not local_file.with_name("gapp.yaml.bak").exists()
     backup = Path(result["backup"])
     assert backup.parent == fleetstore.backups_dir() and "my-app" in backup.read_text()
@@ -264,7 +265,7 @@ def test_the_fleet_commands_say_where_it_is_kept(remote):
     assert f"Your fleet is now kept in {remote} (gapp.yaml).\nIt holds 1 deployment, carried across.\n" in out
     assert CliRunner().invoke(main, ["fleet"]).output.startswith(f"Your fleet is kept in {remote} (gapp.yaml).\n")
     assert CliRunner().invoke(main, ["list"]).output.startswith(f"Your fleet is kept in {remote} (gapp.yaml).\n")
-    assert CliRunner().invoke(main, ["fleet", "use", remote]).output == f"Your fleet is already kept in {remote} (gapp.yaml).\n"
+    assert CliRunner().invoke(main, ["fleet", "use", remote]).output == f"Your fleet is already kept in {remote} (gapp.yaml).\nNext: gapp list\n"
 
 
 def test_a_repo_is_written_the_way_a_definition_writes_one():

@@ -155,9 +155,8 @@ def remove(name: str) -> dict:
     """Take a deployment out of the fleet. Touches no cloud.
 
     What it had deployed stays as it is. The result names it, and the
-    commands that define a deployment on those resources again; they do
-    not bring its settings back. `see_removed` is the command that shows
-    what was removed, settings included.
+    commands that define a deployment on those resources again, settings
+    included. `see_removed` is the command that shows what was removed.
     """
     from gapp.admin.sdk import record
     where, deployments = _load()
@@ -187,14 +186,40 @@ def add_again(definition: dict, name: str) -> list[str]:
     """The commands that define a deployment on `definition`'s resources
     again: `gapp add` under its id (gapp picks the id from the name, and a
     free name is its own id), then `gapp rename` back when its name was
-    different. Settings are not part of it."""
+    different, then one command per setting, so a deploy afterwards runs
+    it as it ran before."""
+    import shlex
     id_ = definition.get("id")
     again = f"gapp add {id_} --project {definition.get('project')}"
     if definition.get("repo"):
         again += f" --repo {definition['repo']}"
     if definition.get("ref"):
         again += f" --ref {definition['ref']}"
-    return [again] + ([f"gapp rename {id_} {name}"] if name and name != id_ else [])
+    final = name or id_
+    commands = [again] + ([f"gapp rename {id_} {name}"] if name and name != id_ else [])
+    on = f" --deployment {final}"
+    settings = definition.get("settings") or {}
+    for key in settings_mod.SCALARS:
+        if key in settings and settings[key] is not None:
+            value = settings[key]
+            text = ("true" if value else "false") if isinstance(value, bool) else str(value)
+            commands.append(f"gapp set {key} {shlex.quote(text)}{on}")
+    for api in settings.get("apis") or []:
+        commands.append(f"gapp apis add {api}{on}")
+    for variable, entry in sorted((settings.get("env") or {}).items()):
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("secret"):
+            generate = " --generate" if entry.get("generate") else ""
+            commands.append(f"gapp env set {variable} --secret {entry['secret']}{generate}{on}")
+            continue
+        value = str(entry.get("value", ""))
+        if value == settings_mod.DATA_PATH or value.startswith(settings_mod.DATA_PATH + "/"):
+            sub = value[len(settings_mod.DATA_PATH):].strip("/")
+            commands.append(f"gapp env set {variable} --data-path{' ' + shlex.quote(sub) if sub else ''}{on}")
+        else:
+            commands.append(f"gapp env set {variable} {shlex.quote(value)}{on}")
+    return commands
 
 
 @_guard
