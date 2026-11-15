@@ -485,12 +485,17 @@ def _handoff_stop(fleet_repo: str, name: str, version: str | None) -> dict | Non
 
 
 def _project_stop(fleet_repo: str, project: str) -> dict | None:
-    """The outcome when the fleet repo's runners are not connected to a project, or that could not be checked."""
+    """The refusal when GitHub says the fleet repo's runners are not connected to a project.
+
+    Only a confirmed absence stops a run here. When the Environment cannot
+    be read (a token or a proxy that does not allow that API, as in an agent
+    session with GitHub access only), the run is started: the runner itself
+    refuses, before signing in or changing anything, when the project's
+    deploy identity is missing, with the same `gapp ci projects connect`.
+    """
     env = _environment(fleet_repo, project)
     if env.absent:
         return _refusal("ci projects connect", PROJECT_NOT_CONNECTED_MESSAGE.format(fleet_repo=fleet_repo, project=project))
-    if env.unchecked:
-        return _outcome("check GitHub access", env.note)
     return None
 
 
