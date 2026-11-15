@@ -45,15 +45,6 @@ a workstation, so any authorized machine or runner can deploy and pick
 up the same state. No app's service account is granted anything on that
 bucket.
 
-**A command never claims more than it does.** Output that reads as "this
-is everything" must be everything. Where gapp cannot do the whole job
-(taking a deployment's resources down, restoring removed settings) it
-says so and stops, and prints no partial recipe.
-
-**The operator never needs an id or a path.** A deployment's id and
-where the fleet is stored are gapp's business. No command takes either
-as input.
-
 **Each added capability is opt-in.** A fleet in a git repo, CI and
 profiles are each something an operator turns on. Someone who uses none
 of them never meets their words.
@@ -281,27 +272,6 @@ deployments/<id>/history/       one file per deploy, failed ones included
 - **It says what a later `gapp add` means.** The id comes from the name,
   so a deployment of the same name on the same project uses the
   resources that were left, data included. The output says so.
-
-## Properties kept on purpose
-
-Each of these is deliberate. A change that would break one needs a
-reason recorded here, not a quiet exception.
-
-| Property | Why | What would break it |
-|---|---|---|
-| A fresh machine can run `gapp add` with nothing set up | Cognitive load. The first command must not be configuration | A required config file, profile step or path |
-| Words appear only with need | Someone with one fleet and one login never meets "profile", "fleet repo" or "CI" | Output or help that names an optional capability to someone who has not turned it on |
-| No command takes an id or a storage path | They are gapp's business | A flag such as `--id`, or an instruction to open the fleet file |
-| The fleet is the only record commands read | Two authorities drift | Reading a definition from the deploy record, a label, or the app's repo |
-| Nothing in an app's repo names gapp, a project or Google Cloud | Anyone can deploy the same repo to their own project | A gapp-specific file or key in the repo; an extension to `app.json` |
-| The definition wins over the app's `app.json` | The operator, not the app, decides what a deployment gets | Importing or saving `app.json` values into the definition |
-| A refusal changes nothing and exits 2 | Scripts and agents branch on it | A refusal after a write, or a failure reported as a refusal |
-| Output never claims more than was done | A partial recipe reads as complete | Teardown or recovery steps that cover only some resources |
-| A command that changes the fleet touches no cloud, and the reverse | Each can run where the other's access is missing | A cloud lookup inside `gapp add`, `set` or `remove` |
-| An app cannot reach Terraform state or the deploy record | An app must not be able to change what its next deploy does | Granting an app's service account anything on the project's gapp bucket, or moving state back to the data bucket |
-| Every variable the Terraform module needs has no default | A dropped one fails at plan instead of deploying without it | An optional or empty-default variable for something structural |
-| The CLI matches `docs/interface.yaml` exactly | The interface is a contract | A command, flag or tool added in code only (`tests/unit/test_interface.py`) |
-| No product's names in this repo | gapp is not tied to any app or framework | See "Avoiding Product Coupling" |
 
 ## Static Terraform and generated tfvars
 
