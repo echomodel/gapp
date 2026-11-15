@@ -13,7 +13,6 @@ The workflows run in that repo and read its `gapp.yaml`.
 ```bash
 gapp fleet use owner/my-fleet --create
 gapp ci init
-gapp ci sources add owner
 gapp project setup my-project
 gapp ci projects connect my-project
 gapp ci deploy --deployment my-app
@@ -23,8 +22,7 @@ gapp ci status --deployment my-app --live
 | Step | Does | How often | Needs |
 |---|---|---|---|
 | `gapp fleet use` | Keeps the fleet in the repo | Once | git access to it |
-| `gapp ci init` | Installs the deploy and status workflows in the fleet repo | Once, and again after installing another gapp | `gh` as an admin of the fleet repo |
-| `gapp ci sources add <owner>` | Lets runners deploy that owner's repos | Once per owner | `gh` with write access |
+| `gapp ci init` | Installs the deploy and status workflows in the fleet repo | Once, and again after installing another gapp | git push access to the fleet repo that can change workflows (for a token, the `workflow` scope); `gh` |
 | `gapp project setup <project>` | Prepares the project for deployments | Once per project | gcloud as an Owner |
 | `gapp ci projects connect <project>` | Lets the fleet repo's runners sign in to the project | Once per project | gcloud as an Owner; `gh` as an admin |
 | `gapp ci deploy` | Deploys on a runner | Each deploy | `gh` |
@@ -52,7 +50,7 @@ Google Cloud login.
 | `gapp add`, `set`, `env`, `upgrade`, `rename`, `remove` (each a commit to the fleet repo) | `gapp project setup`, `gapp ci projects connect` (once per project, as an Owner) |
 | `gapp list`, `gapp show` | `gapp secrets set` (a value someone supplies; generated secrets need nothing) |
 | `gapp ci deploy`, `gapp ci status --live` | `gapp deployments list`, `gapp deployments scan` |
-| `gapp ci init`, `gapp ci sources` (as an admin of the fleet repo) | `gapp deploy`, `gapp status` (they act from this machine) |
+| `gapp ci init` | `gapp deploy`, `gapp status` (they act from this machine) |
 
 ## What a run does
 
@@ -60,8 +58,7 @@ Google Cloud login.
 deployment's name and nothing else. The run:
 
 1. Reads the deployment's definition from `gapp.yaml` in the fleet repo.
-2. Refuses a repo whose owner is not an allowed source, and a project
-   the runners are not connected to.
+2. Refuses a project the runners are not connected to.
 3. Checks out the definition's ref of the app's repo (its default branch
    when it names none).
 4. Installs the gapp version the definition names.
@@ -154,18 +151,16 @@ Who can do what follows from GitHub and Google Cloud permissions:
 | To | You need |
 |---|---|
 | Start a deploy | Write access to the fleet repo |
-| Change what a deployment is | To be able to commit to the fleet repo's `gapp.yaml` |
-| Change whose repos may be deployed | Admin access: the allowed sources are a repository variable, which a commit cannot change |
+| Change what a deployment is, including the repo it builds | To be able to commit to the fleet repo's `gapp.yaml` |
 | Connect a project | To be an Owner of the project and an admin of the fleet repo |
 
 What that means in practice:
 
-- **Anyone who can write to the fleet repo can deploy** any repo of an
-  allowed owner, at any ref, to any connected project. Treat write
-  access to the fleet repo as deploy access.
-- **The allowed sources are the limit a commit cannot move.** A changed
-  definition cannot point a deploy at code from an owner you have not
-  named.
+- **Anyone who can write to the fleet repo can deploy** any repo they
+  can name, at any ref, to any connected project. Google Cloud trusts
+  every run from the fleet repo, on any branch, so a changed workflow
+  deploys as well as gapp's. Treat write access to the fleet repo as
+  deploy access to every connected project.
 - **Inputs never reach a shell unquoted.** The workflows pass the
   deployment's name through the environment and read the file with it as
   data, never as part of a command.

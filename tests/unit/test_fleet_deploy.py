@@ -605,7 +605,28 @@ def test_project_setup_turns_on_the_apis_grants_the_build_and_marks_the_project(
     result = GappSDK(provider=cloud).project_setup(PROJECT)
     assert result["was_set_up"] is False and cloud.project_labels[PROJECT] == {"gapp": "hosted"}
     assert (PROJECT, "run.googleapis.com") in cloud.apis_enabled and cloud.iam_bindings
-    assert GappSDK(provider=cloud).project_setup(PROJECT)["was_set_up"] is True
+    again = GappSDK(provider=cloud).project_setup(PROJECT)
+    assert again["was_set_up"] is True and again["added"] == [] and again["checked"] is True
+
+
+def test_project_setup_again_says_what_it_added(clone):
+    cloud = DummyCloudProvider()
+    GappSDK(provider=cloud).project_setup(PROJECT)
+    cloud.apis_enabled.discard((PROJECT, "run.googleapis.com"))
+    del cloud.buckets[PROJECT_BUCKET]
+    again = GappSDK(provider=cloud).project_setup(PROJECT)
+    assert again["added"] == ["run.googleapis.com", f"the bucket {PROJECT_BUCKET}"]
+    assert (PROJECT, "run.googleapis.com") in cloud.apis_enabled
+
+
+def test_project_setup_that_cannot_list_the_apis_turns_them_all_on(clone, monkeypatch):
+    cloud = DummyCloudProvider()
+    GappSDK(provider=cloud).project_setup(PROJECT)
+    monkeypatch.setattr(cloud, "enabled_apis", lambda project: None)
+    cloud.apis_enabled.clear()
+    again = GappSDK(provider=cloud).project_setup(PROJECT)
+    assert again["checked"] is False and again["added"] == []
+    assert (PROJECT, "run.googleapis.com") in cloud.apis_enabled
 
 
 def test_project_setup_makes_the_projects_bucket_once(clone):

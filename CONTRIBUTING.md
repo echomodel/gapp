@@ -61,17 +61,26 @@ What that keeps true:
 A convenience that looks something up in the cloud during `gapp add`, or
 calls a host's API to help a push along, breaks it.
 
-**After one-time setup, GitHub access is enough.** Once a project Owner
-has set up a project (`gapp project setup`) and connected it to the fleet
-repo (`gapp ci projects connect`), a machine with only GitHub access,
-such as a cloud agent session, can run a deployment's whole life: `add`,
-`set`, `env`, `upgrade`, `rename`, `remove`, `gapp ci deploy` and `gapp ci
-status --live`. Those two Owner steps are the only ones that need a
-Google Cloud login. Today's exceptions are listed under Accepted limits:
-setting a secret's value, and `gapp deployments list` and `scan`, which
-read Google Cloud directly (`gapp list` and `gapp ci status --live` serve
-a GitHub-only machine instead). A change that makes a GitHub-only machine
-need a Google Cloud login for anything else breaks this goal.
+**After one-time setup, a cloud agent session is enough.** gapp is
+built to be run from a cloud agent session: a machine with no
+Google Cloud login, whose GitHub access is git (clone and push, workflow
+files included), starting workflow runs, and reads. GitHub's API writes, Actions variables
+and Environments may be refused there. Every routine command works in
+such a session: `add`, `set`, `env`, `upgrade`, `rename`, `remove`, `gapp
+ci init`, `gapp ci deploy` and `gapp ci status --live`. Only two steps
+need more, and they are rare: `gapp project setup` and `gapp ci projects
+connect`, once per project, run by a project Owner on a machine kept for
+that. An agent never acts on Google Cloud itself; a runner does, as the
+project's deploy identity. Today's exceptions are listed under Accepted
+limits: setting a secret's value, and `gapp deployments list` and `scan`,
+which read Google Cloud directly (`gapp list` and `gapp ci status --live`
+serve a session instead). A change that makes a routine command need a
+Google Cloud login, or a GitHub API write, breaks this goal.
+The same goes for GitHub access itself: a machine may reach only some of
+GitHub's API (an agent's proxy, a narrowly scoped token). A check made
+before starting a run, which the runner makes again anyway, stops the
+command only when GitHub confirms the problem, never when the check
+cannot be made.
 
 **Each added capability is opt-in.** A fleet in a git repo, CI and
 profiles are each something an operator turns on. Someone who uses none
@@ -749,12 +758,19 @@ are in [docs/CI.md](docs/CI.md). The rules to keep:
 - **A runner runs the same deploy.** The workflow checks out the fleet
   and the app, installs the gapp the definition names, and runs `gapp ci
   runner deploy <name>`. No deploy logic lives in a workflow.
-- **`gapp ci` uses GitHub's REST API only**, through `gh api`.
+- **`gapp ci` reads GitHub and starts runs through `gh api`, and writes
+  to the fleet repo only with git.** Every change gapp makes to the fleet
+  repo, the fleet file or the workflows, is one commit through
+  `fleetrepo.write_files`, which reads the fleet's `format` first and
+  writes nothing to a repo in a format it does not read. Git reaches a
+  repo where GitHub's API writes are refused (an agent session's proxy),
+  and the repo's own rules (hooks, branch protection) apply to every
+  change. Should something need to write through the API instead (a
+  hosted service with no clone), that is a second way of doing what
+  `write_files` does, not a second path beside it.
 - **Only `gapp ci projects connect` touches Google Cloud**, because it
   creates the trust a runner needs to sign in at all. Preparing a project
   for deployments is `gapp project setup`; the two do not overlap.
-- **The allowed sources are a repository variable**, so a commit to the
-  fleet file cannot widen whose code a runner deploys.
 - **A run is tied to the request that started it** by an id at the end
   of its name. gapp never reports another run's result as its own.
 - **Workflows pass inputs through the environment**, never into a
@@ -951,6 +967,16 @@ For development, use an editable install: `pipx install -e .`
   has lost updates and stale reads, with or without git.
 - **The fleet in GitHub variables.** No history, last write wins, small
   size limits.
+- **A list of repo owners runners may deploy** (the repository variable
+  `GAPP_ALLOWED_SOURCES`, checked by the deploy workflow). It guarded a
+  workflow that wrote definitions with a token that could not change
+  workflows. Without that workflow, whoever can change a definition can
+  also push a changed deploy workflow to a branch and run it, because
+  Google Cloud trusts any run from the fleet repo. The list stopped no
+  one, and it added a setup step that a machine with narrow GitHub access
+  cannot do. Should a writer appear that can commit definitions and start
+  runs but not change workflows (a hosted service, say), the list can
+  return as a limit checked only when it is set, which breaks nothing.
 - **Changing the fleet through workflow runs.** It ties the fleet to one
   CI system and makes every change wait for a runner.
 - **A `--ref` on deploy.** See "What a deploy builds".

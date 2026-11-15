@@ -81,3 +81,47 @@ def test_enable_api_other_failure_raises(provider):
     # can act on it.
     assert "NOT_FOUND" in str(exc_info.value)
     assert "Project does not exist" in str(exc_info.value)
+
+
+def _done(stdout="", returncode=0):
+    return subprocess.CompletedProcess(args=[], returncode=returncode, stdout=stdout, stderr="")
+
+
+def test_enabled_apis_reads_the_projects_list_and_says_none_when_it_cannot(provider):
+    with patch.object(provider, "_run_gcloud", return_value=_done("run.googleapis.com\nstorage.googleapis.com\n")):
+        assert provider.enabled_apis("p") == {"run.googleapis.com", "storage.googleapis.com"}
+    with patch.object(provider, "_run_gcloud", return_value=_done(returncode=1)):
+        assert provider.enabled_apis("p") is None
+
+
+def test_build_permissions_grant_only_the_roles_the_build_lacks(provider):
+    member = "serviceAccount:123-compute" + "@" + "developer.gserviceaccount.com"
+    policy = '{"bindings": [{"role": "roles/storage.objectViewer", "members": ["%s"]}]}' % member
+    calls = []
+
+    def gcloud(args, **kwargs):
+        calls.append(args)
+        if args[:2] == ["projects", "describe"]:
+            return _done("123\n")
+        if args[:2] == ["projects", "get-iam-policy"]:
+            return _done(policy)
+        return _done()
+    with patch.object(provider, "_run_gcloud", side_effect=gcloud):
+        assert provider.ensure_build_permissions("p") == ["roles/artifactregistry.writer"]
+    grants = [a for a in calls if a[:2] == ["projects", "add-iam-policy-binding"]]
+    assert [a[a.index("--role") + 1] for a in grants] == ["roles/artifactregistry.writer"]
+
+
+def test_build_permissions_grant_every_role_when_the_policy_cannot_be_read(provider):
+    calls = []
+
+    def gcloud(args, **kwargs):
+        calls.append(args)
+        if args[:2] == ["projects", "describe"]:
+            return _done("123\n")
+        if args[:2] == ["projects", "get-iam-policy"]:
+            return _done(returncode=1)
+        return _done()
+    with patch.object(provider, "_run_gcloud", side_effect=gcloud):
+        assert provider.ensure_build_permissions("p") is None
+    assert len([a for a in calls if a[:2] == ["projects", "add-iam-policy-binding"]]) == 2

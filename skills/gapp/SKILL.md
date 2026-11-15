@@ -116,7 +116,7 @@ upgrade is pending, and changes nothing. Use it before a first deploy.
 |---|---|---|
 | Command | `gapp deploy` | `gapp ci deploy` |
 | Needs here | gcloud, terraform, a clone on the definition's ref | `gh` only |
-| One-time setup | `gapp project setup <project>` | that, plus the fleet in a GitHub repo, `gapp ci init`, `gapp ci sources add <owner>`, `gapp ci projects connect <project>` |
+| One-time setup | `gapp project setup <project>` | that, plus the fleet in a GitHub repo, `gapp ci init`, `gapp ci projects connect <project>` |
 
 Both run the same deploy from the same definition. Recommend runners
 to anyone who wants to deploy from more than one machine or from an

@@ -3,6 +3,65 @@
 Notable changes to gapp. Versions are git tags (`vX.Y.Z`); the version
 source is `gapp/__init__.py`.
 
+## 4.0.0rc18 (pre-release of 4.0.0)
+
+Changed:
+
+- **`gapp ci init` writes the workflows with git**, as one commit, the way
+  fleet changes are made, instead of through GitHub's file API (one commit
+  per file). It now works where those API writes are refused, such as a
+  cloud agent session. It needs git push access to the fleet repo that can
+  change workflows (for a token, the `workflow` scope) rather than `gh` as
+  an admin, follows the repo's hooks and branch rules, and refuses a fleet
+  repo whose `gapp.yaml` is in a format it does not read, writing nothing.
+- A fleet change whose push the repo refuses (a hook or a branch rule)
+  now reports git's reason, instead of saying the fleet changed while the
+  command ran.
+
+Removed:
+
+- **`gapp ci sources add|remove|list` and the `gapp_ci_sources` MCP tool**,
+  with the deploy workflow's check of the repository variable
+  `GAPP_ALLOWED_SOURCES`. A runner now deploys whatever repo a definition
+  names. The list stopped no one: whoever can change a definition can
+  also push a changed workflow and run it. `gapp ci init` now names
+  `gapp ci projects connect` as the next step. A fleet repo keeps
+  checking the list until `gapp ci init` installs the new workflows; after
+  that the variable is unused, and can be deleted with
+  `gh variable delete GAPP_ALLOWED_SOURCES --repo <fleet-repo>`.
+
+Fixed:
+
+- **`gapp deployments scan` and `gapp remove` give add-back commands that
+  restore the settings too.** "Add it back with" used to define only the
+  name, repo and project, so deploying afterwards dropped the app's
+  variables, secret references, domain and sizing. The commands now
+  include one `gapp set`, `gapp apis add` or `gapp env set` per setting,
+  from the definition the deployment was last deployed with (scan) or the
+  one removed (remove). `add_again` in the MCP results carries them too.
+- **`gapp ci status` finds a deployment's last deploy run among the fleet
+  repo's newest 1000 deploy runs**, not only the newest 50, so a rarely
+  deployed deployment in a busy fleet is no longer reported as never
+  deployed. Past that it says so instead of "No deploy run yet", and
+  `last_deploy.searched_all` is false.
+- **`gapp project setup` on a project already set up says what it added**
+  ("Added what was missing: …" or "Nothing was missing."), instead of
+  "anything missing was added". The result carries `added` and `checked`.
+- **The columns of `gapp list`, `gapp deployments list` and `gapp
+  deployments scan` line up**, whatever the length of a project or name.
+- **"Next:" hints:** `gapp config profile use` and `gapp fleet use` now
+  name one; `gapp add` on a fleet in a GitHub repo names `gapp ci deploy`
+  as well as a deploy from a clone; `gapp ci init` names `gapp ci deploy`
+  when every project the fleet uses is connected, and the project to
+  connect when GitHub confirms one is not.
+- **`gapp ci deploy` and `gapp ci status --live` never ran from a machine
+  that can't read GitHub Environments**, such as a cloud agent session with
+  GitHub access only, or a token without that permission. Both stopped with
+  "Couldn't check the Environment …" before starting a run. Now only a
+  project GitHub confirms is not connected is refused up front; when the
+  Environment can't be read, the run starts, and the runner itself refuses,
+  before signing in, if the project's deploy identity is missing.
+
 ## 4.0.0rc17 (pre-release of 4.0.0)
 
 Changed:

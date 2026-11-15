@@ -4,6 +4,8 @@ fleet lives is `gapp fleet use`'s to say."""
 
 import shutil
 
+import gapp
+
 import pytest
 
 from gapp.admin.sdk import ci as ci_mod
@@ -36,10 +38,8 @@ def test_init_installs_the_two_workflows_and_nothing_else(bare):
     assert "uses: example-org/gapp/.github/workflows/deploy.yml@v4.0.0" in deploy and "__GAPP" not in deploy
 
 
-def test_init_names_allowing_an_owner_next_then_connecting_a_project(bare):
-    assert ci_mod.init_workflows()["next_step"] == {"action": "ci sources add", "hint": "gapp ci sources add <owner>"}
-    bare.variables[(FLEET, "GAPP_ALLOWED_SOURCES")] = "me"
-    assert ci_mod.init_workflows()["next_step"]["hint"] == "gapp ci projects connect <project>"
+def test_init_names_connecting_a_project_next(bare):
+    assert ci_mod.init_workflows()["next_step"] == {"action": "ci projects connect", "hint": "gapp ci projects connect <project>"}
 
 
 def test_init_again_writes_nothing_when_the_workflows_are_this_gapps(bare):
@@ -83,13 +83,31 @@ def test_init_without_gh_is_refused(bare, monkeypatch):
     assert res["refused"] is True and res["next_step"]["action"] == "install gh"
 
 
-def test_a_refused_write_is_a_failure_in_githubs_words(bare):
-    bare.api_writes = False
+def test_the_workflows_are_one_commit_made_with_git_not_the_api(bare):
+    bare.api_writes = False                 # an agent session: GitHub API writes refused, git push allowed
+    res = ci_mod.init_workflows()
+    assert res["ok"] is True and res["files"] == {path: "created" for path in PATHS}
+    assert bare.commits == [(FLEET, f"gapp: install the workflows of gapp {gapp.__version__}", PATHS)]
+    assert not [cmd for cmd, _ in bare.calls if "PUT" in cmd]
+
+
+def test_a_refused_push_is_a_failure_in_gits_words(bare):
+    bare.git_push_refusal = "Your fleet is kept in acme/fleet, and sending the change failed: protected branch hook declined"
     res = ci_mod.init_workflows()
     assert res["ok"] is False and res["refused"] is False and res["next_step"]["action"] == "install the workflows"
     hint = res["next_step"]["hint"]
-    assert "GitHub returned 403: request blocked: GitHub API writes are not allowed from this session" in hint
+    assert "sending the change failed: protected branch hook declined" in hint
+    assert "git push access to acme/fleet that can change workflow files" in hint
     assert hint.endswith("Then run it again: gapp ci init")
+    assert bare.puts == []
+
+
+def test_a_fleet_in_a_format_this_gapp_does_not_read_is_refused_and_nothing_is_written(bare):
+    bare.files[(FLEET, entryfile.FILE_NAME)] = "format: 2\ndeployments: {}\n"
+    res = ci_mod.init_workflows()
+    assert res["ok"] is False and res["refused"] is True
+    assert "is in format 2" in res["next_step"]["hint"] and "Install a newer gapp" in res["next_step"]["hint"]
+    assert bare.puts == [] and bare.commits == []
 
 
 def test_variables_this_machine_cannot_read_are_reported_as_not_checked(bare):

@@ -191,7 +191,7 @@ STUB_GH = textwrap.dedent('''
 ''').lstrip()
 
 DEFINITION = {"id": "my-app", "repo": "me/my-app", "project": "my-proj", "gapp": "4.0.0", "settings": {}}
-DEPLOY_ENV = {"DEPLOYMENT": "my-app", "APP_ID": "", "ALLOWED_SOURCES": "me", "GH_TOKEN": "x"}
+DEPLOY_ENV = {"DEPLOYMENT": "my-app", "APP_ID": "", "GH_TOKEN": "x"}
 
 
 class _Runner:
@@ -304,19 +304,12 @@ def test_only_a_gapp_version_is_installed(tmp_path, version):
 
 
 @needs_yq
-def test_an_owner_that_is_not_allowed_is_refused_whatever_the_fleet_file_says(tmp_path):
-    runner = _Runner(tmp_path).fleet({"my-app": DEFINITION}, allowed_sources="me")
-    ok, log = runner.resolve(ALLOWED_SOURCES="other-org")
-    assert not ok and runner.outputs() == {}
-    assert ("Apps owned by me aren't allowed in this fleet, so 'my-app' (me/my-app) was not deployed. "
-            "Allow the owner with: gapp ci sources add me") in log
-
-
-@needs_yq
-def test_allowed_owners_are_matched_whole_and_without_regard_to_case(tmp_path):
-    runner = _Runner(tmp_path, repos={"Me/my-app": False}).fleet({"my-app": {**DEFINITION, "repo": "Me/my-app"}})
-    assert not runner.resolve(ALLOWED_SOURCES="me-too, some")[0]
-    assert runner.resolve(ALLOWED_SOURCES="other-org, ME ")[0]
+def test_a_repo_of_any_owner_is_deployed(tmp_path):
+    runner = _Runner(tmp_path, repos={"other-org/app": False}).fleet({"my-app": {**DEFINITION, "repo": "other-org/app"}})
+    ok, log = runner.resolve()
+    assert ok, log
+    assert runner.outputs()["repo"] == "other-org/app"
+    assert "ALLOWED_SOURCES" not in ci_mod._render_template(ci_mod.DEPLOY_WORKFLOW, GAPP_REPO, GAPP_REF)
 
 
 @needs_yq

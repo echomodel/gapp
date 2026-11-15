@@ -3,6 +3,7 @@
 None of them touches the cloud; a refusal changes nothing and exits 2."""
 
 import json
+import shlex
 import subprocess
 
 import pytest
@@ -169,7 +170,8 @@ def test_remove_takes_the_definition_out_and_says_what_it_left(my_app):
     assert result["left"] == {"project": "my-project", "service": "my-app",
                               "bucket": "gapp-my-app-my-project", "secrets": ["my-app-api-key"],
                               "state": "gs://gapp-my-project/deployments/my-app/"}
-    assert result["add_again"] == ["gapp add my-app --project my-project --repo acme/my-app --ref v1.2.0"]
+    assert result["add_again"] == ["gapp add my-app --project my-project --repo acme/my-app --ref v1.2.0",
+                                   "gapp env set API_KEY --secret api-key --deployment my-app"]
     assert result["removed"]["settings"]["env"]["API_KEY"] == {"secret": "api-key"}
 
 
@@ -178,6 +180,24 @@ def test_a_removed_deployment_added_again_gets_the_same_id_even_after_a_rename(m
     for command in definitions.remove("prod")["add_again"]:
         assert run(*command.split()[1:]).exit_code == 0
     assert list(fleet()) == ["prod"] and fleet()["prod"]["id"] == "my-app"
+
+
+def test_adding_a_removed_deployment_back_brings_back_every_setting(my_app):
+    for key, value in (("public", "true"), ("domain", "app.example.com"), ("memory", "1Gi"), ("cpu", "2"),
+                       ("max_instances", "3"), ("start", "my-app serve --port $PORT")):
+        definitions.set_value(key, value, deployment="my-app")
+    definitions.apis_add("drive.googleapis.com", deployment="my-app")
+    definitions.env_set("LOG_LEVEL", "it's info", deployment="my-app")
+    definitions.env_set("APP_KEY", secret="app-key", generate=True, deployment="my-app")
+    definitions.env_set("API_KEY", secret="", deployment="my-app")
+    definitions.env_set("APP_DATA", data_path="users", deployment="my-app")
+    definitions.env_set("ROOT", data_path="", deployment="my-app")
+    definitions.rename("my-app", "prod")
+    before = fleet()["prod"]["settings"]
+    for command in definitions.remove("prod")["add_again"]:
+        result = run(*shlex.split(command)[1:])
+        assert result.exit_code == 0, (command, result.output)
+    assert fleet()["prod"]["settings"] == before and fleet()["prod"]["id"] == "my-app"
 
 
 def test_remove_points_at_the_copy_of_the_fleet_that_still_has_the_settings(my_app):
@@ -201,7 +221,7 @@ def test_remove_says_what_stays_and_gives_no_teardown_commands(my_app):
     assert "Nothing in Google Cloud was touched." in out
     assert "gapp has no command to take them down yet." in out
     assert "  gapp add my-app --project my-project --repo acme/my-app\n" in out
-    assert "does not bring back its settings" in out
+    assert "with its settings:" in out
     assert f"  cat {fleetstore.latest_backup(fleetstore.location())}\n" in out
     assert "gcloud" not in out and "terraform" not in out and "--id" not in out
 

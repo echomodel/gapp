@@ -181,7 +181,7 @@ def test_the_commands_print_one_line_each():
     assert run("account", LOGIN).output == f"gapp runs gcloud as {LOGIN} in profile 'default'.\n"
     assert run("profile", "add", "work").output == "Made profile 'work'.\nNext: gapp config profile use work\n"
     assert run("profile", "list").output == "* default\n  work\n"
-    assert run("profile", "use", "work").output == "Profile 'work' is active.\n"
+    assert run("profile", "use", "work").output == "Profile 'work' is active.\nNext: gapp list\n"
     assert run("profile", "rename", "default", "home").output == "Profile 'default' is now 'home'.\n"
     assert run("profile", "remove", "home").output == "Removed profile 'home'.\n"
 

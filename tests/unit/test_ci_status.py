@@ -17,7 +17,7 @@ def test_status_gives_the_definition_and_says_when_nothing_has_run(ci):
     res = ci_mod.status("my-app")
     assert res["ok"] is True and res["dispatched"] is False and ci.dispatched == [] and ci.puts == []
     assert (res["repo"], res["project"], res["ref"], res["gapp"]) == ("me/my-app", "my-proj", None, __version__)
-    assert res["last_deploy"] == {"checked": True, "run": None, "note": None}
+    assert res["last_deploy"] == {"checked": True, "run": None, "note": None, "searched_all": True}
     assert res["lines"] == [f"my-app: the default branch of me/my-app, on my-proj, with gapp {__version__}.", "No deploy run yet."]
     assert res["next_step"] == {"action": "ci deploy", "hint": "gapp ci deploy --deployment my-app"}
 
@@ -32,6 +32,25 @@ def test_status_shows_the_newest_deploy_run_of_that_deployment_only(ci):
                                          "created_at": "2026-01-02T00:00:00Z",
                                          "url": "https://github.com/acme/fleet/actions/runs/91"}
     assert res["lines"][1] == "Last deploy run: success, 2026-01-02T00:00:00Z: https://github.com/acme/fleet/actions/runs/91"
+    assert res["next_step"]["hint"] == "gapp ci status --deployment my-app --live"
+
+
+def test_a_deploy_older_than_a_page_of_other_runs_is_still_found(ci):
+    ci.add_run(10, FLEET, "gapp-deploy.yml", "Deploy my-app aaa", "success", created_at="2026-01-01T00:00:00Z")
+    for i in range(11, 11 + 250):
+        ci.add_run(i, FLEET, "gapp-deploy.yml", f"Deploy other-{i} x", "success")
+    res = ci_mod.status("my-app")
+    assert res["last_deploy"]["run"]["id"] == "10" and res["last_deploy"]["searched_all"] is True
+
+
+def test_the_search_for_a_deploy_stops_at_a_bound_and_says_so(ci, monkeypatch):
+    monkeypatch.setattr(ci_mod, "RUNS_SEARCHED", 200)
+    ci.add_run(10, FLEET, "gapp-deploy.yml", "Deploy my-app aaa", "success")
+    for i in range(11, 11 + 250):
+        ci.add_run(i, FLEET, "gapp-deploy.yml", f"Deploy other-{i} x", "success")
+    res = ci_mod.status("my-app")
+    assert res["last_deploy"] == {"checked": True, "run": None, "note": None, "searched_all": False}
+    assert res["lines"][1] == "No deploy run among the newest 200 deploy runs of acme/fleet."
     assert res["next_step"]["hint"] == "gapp ci status --deployment my-app --live"
 
 

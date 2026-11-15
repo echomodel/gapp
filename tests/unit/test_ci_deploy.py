@@ -1,10 +1,13 @@
 """`gapp ci deploy` starts the fleet repo's deploy workflow with a
 deployment's name and nothing else, waits for that run, and reports what
 the run said. What a run would refuse for want of setup is refused here
-first, before any run is started."""
+first, before any run is started, when GitHub confirms it; what cannot
+be checked is left to the run."""
 
 import datetime
 import json
+
+import pytest
 
 
 from gapp import __version__
@@ -137,12 +140,15 @@ def test_missing_workflows_are_refused_with_init(ci):
                     "Install the workflows: gapp ci init")
 
 
-def test_a_fleet_repo_this_login_cannot_read_is_could_not_check_not_missing(ci):
+@pytest.mark.parametrize("command", ["deploy", "status"])
+def test_an_environment_this_login_cannot_read_still_starts_the_run(ci, command):
+    """A token or proxy that may not read Environments (an agent session with
+    GitHub access only) still deploys: the runner checks the project's deploy
+    identity itself. Only a confirmed absence is refused before a run."""
     ci.fail_with["environments/my-proj"] = "gh: HTTP 403: request blocked"
-    res = ci_mod.deploy("my-app")
-    assert res["ok"] is False and res["refused"] is False and res["next_step"]["action"] == "check GitHub access"
-    assert res["next_step"]["hint"].startswith("Couldn't check the Environment 'my-proj' of acme/fleet: GitHub returned 403")
-    assert ci.dispatched == []
+    res = ci_mod.deploy("my-app") if command == "deploy" else ci_mod.status("my-app", live=True)
+    assert res["dispatched"] is True and len(ci.dispatched) == 1
+    assert "Couldn't check" not in " ".join(res.get("lines") or [])
 
 
 # -- what the run said --
@@ -169,14 +175,11 @@ def test_a_run_that_fails_reports_gapps_error_line(ci):
 
 
 def test_a_run_the_workflow_stopped_reports_what_the_workflow_said(ci):
-    ci.deploy_outcome = lambda inputs: ("failure", [
-        "Apps owned by me aren't allowed in this fleet, so 'my-app' (me/my-app) was not deployed. "
-        "Allow the owner with: gapp ci sources add me"])
+    said = "runners in this repo are not connected to my-proj, so 'my-app' was not deployed. Run: gapp ci projects connect my-proj"
+    ci.deploy_outcome = lambda inputs: ("failure", [said])
     res = ci_mod.deploy("my-app")
-    assert res["ok"] is False and res["messages"] == [
-        "Apps owned by me aren't allowed in this fleet, so 'my-app' (me/my-app) was not deployed. "
-        "Allow the owner with: gapp ci sources add me"]
-    assert res["next_step"]["hint"].startswith("'my-app' did not deploy: Apps owned by me aren't allowed in this fleet")
+    assert res["ok"] is False and res["messages"] == [said]
+    assert res["next_step"]["hint"].startswith(f"'my-app' did not deploy: {said}")
 
 
 def test_the_line_naming_what_the_run_deploys_is_not_taken_for_a_reason(ci):

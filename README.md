@@ -272,7 +272,6 @@ repo.
 ```bash
 gapp fleet use owner/my-fleet --create
 gapp ci init
-gapp ci sources add owner
 gapp ci projects connect my-project
 gapp ci deploy --deployment my-app
 gapp ci status --deployment my-app --live
@@ -280,8 +279,7 @@ gapp ci status --deployment my-app --live
 
 | Command | Does | Needs |
 |---|---|---|
-| `gapp ci init` | Installs two workflows in the fleet repo | `gh` as an admin of it |
-| `gapp ci sources add <owner>` | Lets runners deploy that owner's repos | `gh` |
+| `gapp ci init` | Installs two workflows in the fleet repo, as one commit | git push access to the fleet repo that can change workflows; `gh` |
 | `gapp ci projects connect <project>` | Lets the fleet repo's runners sign in to the project. Once per project, after `gapp project setup` | gcloud as an Owner; `gh` as an admin |
 | `gapp ci projects list` | The projects runners can deploy to | `gh` |
 | `gapp ci deploy [--upgrade] [--no-watch]` | Deploys on a runner and reports what the run said | `gh` |

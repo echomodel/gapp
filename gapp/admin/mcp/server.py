@@ -56,6 +56,10 @@ def gapp_project_setup(project: str) -> dict:
     the record of each deploy), and marks the project. Running it again
     adds only what is missing. Needs gcloud signed in as an
     Owner of the project. Sets up nothing about CI.
+
+    Returns `was_set_up` (the project was already marked), `added` (what
+    this call turned on or made) and `checked` (false when gapp could not
+    list what the project already had, and turned everything on again).
     """
     from gapp.admin.sdk.core import GappSDK
     from gapp.admin.sdk.definitions import Refused
@@ -123,13 +127,14 @@ def gapp_ci_init() -> dict:
     and the other fleet tools.
 
     The order, from a fleet in a repo to a deploy on a runner: gapp_ci_init,
-    gapp_ci_sources("add", owner), gapp_project_setup(project),
+    gapp_project_setup(project),
     gapp_ci_projects("connect", project), gapp_ci_deploy(deployment).
 
     This tool takes no arguments. It writes
     .github/workflows/gapp-deploy.yml and gapp-status.yml in the fleet repo
     and nothing else; calling it again brings the two files up to the
-    installed gapp's. It needs `gh` signed in as an admin of the fleet repo.
+    installed gapp's, as one git commit. It needs git push access to the
+    fleet repo that can change workflows (for a token, the `workflow` scope).
 
     Every gapp_ci_* tool returns `ok`. When it is true, `lines` is what to
     tell the user and `next_step.hint` is the next command, when there is
@@ -178,31 +183,6 @@ def gapp_ci_projects(action: str, project: str | None = None) -> dict:
         return ci.list_projects()
     return {"ok": False, "refused": True, "next_step": {
         "action": "choose an action", "hint": 'action is "connect" (with a project) or "list".'}}
-
-
-@_tool()
-def gapp_ci_sources(action: str, owner: str | None = None) -> dict:
-    """List, add to, or remove from the GitHub owners whose repos the
-    fleet repo's runners may deploy.
-
-    A deploy run refuses a deployment whose repo belongs to an owner that
-    is not on this list, so add the owner of each app repo once, before its
-    first gapp_ci_deploy. The list is kept as the fleet repo's repository
-    variable GAPP_ALLOWED_SOURCES, which a change to the fleet cannot
-    alter. It needs `gh` with write access to the fleet repo (read access
-    for "list").
-
-    Returns `owners` (the list after the call) and `changed`, with `ok`,
-    `lines` and `next_step` as gapp_ci_init describes. When `gh` cannot
-    read or write the variable from this machine, `next_step.hint` carries
-    GitHub's answer and the `gh variable set` command to run elsewhere.
-
-    Args:
-        action: "add", "remove" or "list".
-        owner: The GitHub user or organization. Required for "add" and "remove".
-    """
-    from gapp.admin.sdk import ci
-    return ci.manage_sources(action, owner)
 
 
 @_tool()
@@ -255,8 +235,10 @@ def gapp_ci_status(deployment: str | None = None, live: bool = False) -> dict:
     deploys it) from the definition, and `last_deploy.run`, the newest run
     of the deploy workflow for it, with its `status`, `conclusion`,
     `created_at` and `url`. `last_deploy.run` is null when it has never
-    been deployed on a runner, and `last_deploy.checked` is false, with a
-    `note`, when the runs could not be read.
+    been deployed on a runner; `last_deploy.searched_all` is false when it
+    was not among the newest 1000 deploy runs and older ones exist; and
+    `last_deploy.checked` is false, with a `note`, when the runs could not
+    be read.
 
     With `live` true it starts the fleet repo's status workflow and waits:
     a runner signs in to the project as a deploy does and reports what is
@@ -332,7 +314,8 @@ def gapp_deployments_scan(project: str | None = None) -> dict:
     """Every deployment gapp has a deploy record for, in `project` or in
     every project set up for gapp that this login can see, and whether the
     fleet holds it (`in_fleet`). One it does not hold comes with
-    `add_again`, the commands that define it again; ask the user before
+    `add_again`, the commands that define it again with the settings it was
+    last deployed with; ask the user before
     running them. Use it to rebuild a lost fleet or find what `gapp remove`
     left. Needs a Google Cloud login; refused when more projects are found
     than a scan reads at once, with how to narrow it.
@@ -473,9 +456,9 @@ def gapp_remove(name: str) -> dict:
     bucket and secrets it had deployed stay, and gapp has no tool that
     takes them down. The result names them under `left`, and holds
     the definition it removed under `removed`. A deployment added with the
-    commands under `add_again` uses those resources again, data included;
-    that does not bring its settings back; `see_removed` is the command
-    that shows them. Confirm with the user before
+    commands under `add_again` uses those resources again, data included,
+    with its settings; `see_removed` is the command that shows what was
+    removed. Confirm with the user before
     calling it."""
     return _definition_tool("remove", name)
 

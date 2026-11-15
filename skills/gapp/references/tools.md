@@ -46,7 +46,6 @@ command that fixes it.
 | Operation | CLI | MCP tool | Notes |
 |---|---|---|---|
 | Install the workflows | `gapp ci init` | `gapp_ci_init()` | in the fleet repo; again after installing another gapp |
-| Whose repos runners deploy | `gapp ci sources add\|remove\|list [<owner>]` | `gapp_ci_sources(action, owner=)` | |
 | Connect a project | `gapp ci projects connect <project>` | `gapp_ci_projects("connect", project)` | once per project; gcloud as an Owner and `gh` as an admin of the fleet repo; after `gapp project setup` |
 | Connected projects | `gapp ci projects list` | `gapp_ci_projects("list")` | |
 | Deploy on a runner | `gapp ci deploy [--upgrade] [--no-watch]` | `gapp_ci_deploy(deployment=, upgrade=, watch=)` | waits for the run and reports what it said |

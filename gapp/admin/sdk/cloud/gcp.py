@@ -132,18 +132,39 @@ class GCPProvider(CloudProvider):
     def create_bucket(self, project_id: str, bucket_name: str) -> None:
         self._run_gcloud(["storage", "buckets", "create", f"gs://{bucket_name}", "--project", project_id, "--location", "us", "--uniform-bucket-level-access"], capture_output=True, check=True)
 
-    def ensure_build_permissions(self, project_id: str) -> None:
+    def enabled_apis(self, project_id: str) -> Optional[set]:
+        result = self._run_gcloud(["services", "list", "--enabled", "--project", project_id,
+                                   "--format", "value(config.name)"], capture_output=True, text=True)
+        if result.returncode != 0:
+            return None
+        return {line.strip() for line in result.stdout.splitlines() if line.strip()}
+
+    def ensure_build_permissions(self, project_id: str) -> Optional[List[str]]:
         resp = self._run_gcloud(["projects", "describe", project_id, "--format", "get(projectNumber)"], capture_output=True, text=True, check=True)
         project_number = resp.stdout.strip()
         build_domain = "developer.gserviceaccount.com"
         build_sa = f"{project_number}-compute@{build_domain}"
-        for role in ["roles/storage.objectViewer", "roles/artifactregistry.writer"]:
+        member = f"serviceAccount:{build_sa}"
+        roles = ["roles/storage.objectViewer", "roles/artifactregistry.writer"]
+        had = None
+        policy = self._run_gcloud(["projects", "get-iam-policy", project_id, "--format", "json"],
+                                  capture_output=True, text=True)
+        if policy.returncode == 0:
+            try:
+                had = {b.get("role") for b in json.loads(policy.stdout).get("bindings") or []
+                       if member in (b.get("members") or []) and not b.get("condition")}
+            except (json.JSONDecodeError, AttributeError):
+                had = None
+        for role in roles:
+            if had is not None and role in had:
+                continue
             self._run_gcloud([
                 "projects", "add-iam-policy-binding", project_id,
                 "--member", f"serviceAccount:{build_sa}",
                 "--role", role,
                 "--condition=None"
             ], capture_output=True)
+        return None if had is None else [role for role in roles if role not in had]
 
     def _identity_hint(self, project_id: Optional[str] = None) -> str:
         return f"  {self.identity_hint(project_id)}"
