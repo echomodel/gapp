@@ -554,7 +554,10 @@ way:
   (`ci_identity_hint`): signing in does not apply there.
 - **Unit tests never run the real gcloud.** They stand in for it
   (`_run_gcloud`, `_gcloud_installed`, or a provider whose login is
-  already known).
+  already known). `tests/unit/conftest.py` puts a stand-in gcloud first
+  on the PATH that fails the test naming the call, so a stub that does
+  not reach far enough is caught instead of quietly asking whatever
+  account the machine running the tests is signed in to.
 
 ## External Framework Awareness
 
