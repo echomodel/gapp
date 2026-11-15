@@ -14,6 +14,18 @@ resource "google_service_account" "service" {
   display_name = "${var.service_name} service account"
 }
 
+# The deployment's data bucket. It holds the app's data and nothing else:
+# Terraform state and the record of each deploy live in the project's own
+# gapp bucket, which the service account below is granted nothing on.
+# A bucket that holds objects is never deleted (force_destroy is off).
+resource "google_storage_bucket" "data" {
+  project                     = var.project_id
+  name                        = var.data_bucket
+  location                    = "US"
+  uniform_bucket_level_access = true
+  labels                      = var.labels
+}
+
 # Cloud Run v2 service
 resource "google_cloud_run_v2_service" "service" {
   project             = var.project_id
@@ -33,7 +45,7 @@ resource "google_cloud_run_v2_service" "service" {
     volumes {
       name = "solution-data"
       gcs {
-        bucket        = var.data_bucket
+        bucket        = google_storage_bucket.data.name
         read_only     = false
         mount_options = ["only-dir=data"]
       }
@@ -97,7 +109,7 @@ resource "google_secret_manager_secret_iam_member" "declared_secret" {
 # Grant service account access to the data bucket (always present —
 # `data_bucket` is a required variable; see variables.tf)
 resource "google_storage_bucket_iam_member" "data_bucket" {
-  bucket = var.data_bucket
+  bucket = google_storage_bucket.data.name
   role   = "roles/storage.objectUser"
   member = "serviceAccount:${google_service_account.service.email}"
 }

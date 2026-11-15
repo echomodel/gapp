@@ -1,74 +1,52 @@
-"""Core SDK implementation for gapp.
+"""Deploying a deployment of the fleet, and reading what is live.
 
-The label model:
+What gapp writes in a project:
 
-  Project label (written only by an Owner: `gapp setup` on a workstation,
-  or `gapp ci project setup`):
-    gapp=hosted                    the project hosts gapp deployments
+  By `gapp project setup` (an Owner):
+    the project label gapp=hosted  the project is set up for gapp deployments
+    the bucket gapp-<project>      Terraform state and the record of each
+                                   deploy, out of every app's reach (see
+                                   record.py)
 
-  Deployment labels (written by every setup and deploy, in both modes, on
-  the deployment's own resources: its bucket, by gapp, and its Cloud Run
-  services, by Terraform):
-    gapp-deployment=<id>
-    gapp-version=<contract major>
+  By Terraform, at each deploy, for one deployment:
+    its Cloud Run service, service account and data bucket, the last two
+    labelled gapp-deployment=<id> and gapp-version=<the gapp that deployed>
 
-No per-deployment project labels. A deployment is found by its project
-(--project, or the fleet entry in CI) or by searching the projects marked
-gapp=hosted for its bucket. The version guard reads gapp-version from the
-deployment's services. There are no environments: a deployment (its own
-name, project and config) is the unit.
+  By gapp, once a deploy has succeeded:
+    the record of it in the project's bucket, which is what says which
+    gapp last deployed a deployment
+
+A deployment's project, id and settings come from its definition in the
+fleet. Nothing is searched for.
 
 See CONTRIBUTING.md for the full model.
 """
 
 import os
 import shutil
-import tempfile
-import time
-import json
-import threading
-from concurrent.futures import ThreadPoolExecutor
 import subprocess
+import tempfile
 from pathlib import Path
-from typing import Optional, List, Dict
+from typing import List, Optional
 
-from gapp import __version__
 from gapp.admin.sdk.cloud import get_provider
 from gapp.admin.sdk.cloud.base import CloudProvider, CloudAccessError, ci_identity_hint, on_ci_runner
-from gapp.admin.sdk.config import load_config, save_config, get_active_config
-from gapp.admin.sdk.manifest import (
-    get_solution_name, load_manifest, save_manifest, get_required_apis,
-    get_domain, get_name, get_paths,
-    get_service_config, resolve_env_vars, get_public, get_env_vars
-)
-from gapp.admin.sdk.models import StatusResult, DeploymentInfo, NextStep, ServiceStatus, DomainStatus
+from gapp.admin.sdk.manifest import get_domain, get_service_config, get_public
+from gapp.admin.sdk.models import DomainStatus
 
-CURRENT_MAJOR = int(__version__.split(".")[0])
-
-# The project label that marks a project as hosting gapp deployments. Only an
-# Owner writes it (`gapp setup`, `gapp ci project setup`); a CI run never does.
+# The project label that marks a project as set up for gapp deployments.
+# Only an Owner writes it (`gapp project setup`); a CI run never does.
 HOSTED_LABEL = "gapp"
 HOSTED_VALUE = "hosted"
 
-# Labels every setup and deploy writes on the deployment's own resources
-# (its bucket and its Cloud Run services).
+# Labels on a deployment's own resources: its bucket and its Cloud Run service.
 DEPLOYMENT_LABEL = "gapp-deployment"
 VERSION_LABEL = "gapp-version"
-
-# How many projects the search for a deployment asks at once.
-SEARCH_WORKERS = 8
-
-class AmbiguousDeployment(RuntimeError):
-    """A deployment name found on more than one hosted project."""
-
 
 # Region every gapp service, image, and domain mapping lives in.
 REGION = "us-central1"
 
-
-# The APIs every deployment needs. `gapp setup` enables them from the
-# operator's machine, and `gapp ci project setup` enables them for a
-# project used only through CI, where no one runs `gapp setup` as an Owner.
+# The APIs every deployment needs, turned on by `gapp project setup`.
 # cloudresourcemanager backs the project reads the next steps make
 # (project number, labels), so it must be on before them.
 FOUNDATION_APIS = (
@@ -79,563 +57,32 @@ FOUNDATION_APIS = (
 
 
 class GappSDK:
-    """The central management unit for gapp solutions."""
+    """Deploys the fleet's deployments and reads what is live, through a cloud provider."""
 
     def __init__(self, provider: Optional[CloudProvider] = None):
         self.provider = provider or get_provider()
 
-    # -- Configuration & Identity --
-
-    def get_active_profile(self) -> str:
-        return load_config().get("active", "default")
-
-    def set_active_profile(self, name: str) -> None:
-        config = load_config()
-        name = name.strip().lower()
-        config["active"] = name
-        if name not in config["profiles"]:
-            config["profiles"][name] = {"discovery": "on"}
-        save_config(config)
-
-    def get_account(self) -> str | None:
-        return get_active_config().get("account")
-
-    def set_account(self, account: str | None) -> None:
-        config = load_config()
-        active = config["active"]
-        profile = config["profiles"][active]
-        profile["account"] = account.strip().lower() if account else None
-        save_config(config)
-
-    def is_discovery_on(self) -> bool:
-        return get_active_config().get("discovery", "on") == "on"
-
-    def set_discovery(self, state: str) -> None:
-        state = state.strip().lower()
-        if state not in ("on", "off"):
-            raise ValueError("Discovery must be 'on' or 'off'.")
-        config = load_config()
-        active = config["active"]
-        config["profiles"][active]["discovery"] = state
-        save_config(config)
-
-    # -- Naming Logic --
-
-    def get_bucket_name(self, solution_name: str, project_id: str) -> str:
-        """Bucket name is environment-blind.
-
-        The project is the resource boundary: a deployment id is unique per
-        project, and teams that must not share deployments use separate
-        projects (IAM) or separate fleets.
-        """
-        return f"gapp-{solution_name}-{project_id}".lower()
-
-    def deployment_labels(self, deployment: str) -> Dict[str, str]:
-        """The labels every setup and deploy writes on a deployment's bucket and services."""
-        return {DEPLOYMENT_LABEL: deployment.lower(), VERSION_LABEL: str(CURRENT_MAJOR)}
-
-    def _hosted_projects(self, limit: Optional[int] = None) -> List[Dict]:
-        """Projects marked gapp=hosted, with their labels."""
-        return self.provider.list_projects(filter_query=f"labels.{HOSTED_LABEL}={HOSTED_VALUE}", limit=limit)
-
-    def _deployments_on(self, project_id: str) -> Dict[str, Dict[str, str]]:
-        """The labels of every deployment bucket on a project, by bucket name."""
-        return {name: labels for name, labels in self.provider.list_bucket_labels(project_id).items()
-                if labels.get(DEPLOYMENT_LABEL)}
-
-    def _search_hosted(self, projects: List[Dict], match, stop_at: Optional[int] = None) -> List[Dict]:
-        """Ask each hosted project for its deployment buckets, in parallel.
-
-        `match(project, bucket_labels)` returns a result dict or None. With
-        stop_at, returns as soon as that many matches are in.
-        """
-        if not projects:
-            return []
-        lock = threading.Lock()
-        results: List[Dict] = []
-
-        def ask(project):
-            with lock:
-                if stop_at and len(results) >= stop_at:
-                    return            # enough found: the remaining projects are not asked
-            found = [hit for labels in self._deployments_on(project["projectId"]).values()
-                     if (hit := match(project, labels)) is not None]
-            with lock:
-                results.extend(found)
-
-        with ThreadPoolExecutor(max_workers=min(SEARCH_WORKERS, len(projects))) as pool:
-            for future in [pool.submit(ask, p) for p in projects]:
-                future.result()
-        return results[:stop_at] if stop_at else results
-
-    def _start_problem(self, name: str, repo_path: Optional[Path], consequence: str,
-                       strict: bool = True) -> Optional[str]:
-        """The one no-start-method message for the first service without one, or None.
-
-        Each service starts from its own folder's Dockerfile or Procfile: the
-        repo root, or each `paths:` folder of a multi-service repo.
-        """
-        if not repo_path:
-            return None
-        from gapp.admin.sdk.start import start_method, missing
-        paths = get_paths(load_manifest(repo_path, strict=strict))
-        for p in (paths or ["."]):
-            start = start_method(repo_path / p)
-            if not start["method"]:
-                return missing(name, start, service=None if p == "." else p, consequence=consequence)
-        return None
-
-    def _service_names(self, deployment: str, repo_path: Optional[Path], strict: bool = True) -> List[str]:
-        """The Cloud Run service names a deployment's manifest produces."""
-        if not repo_path:
-            return [deployment]
-        manifest = load_manifest(repo_path, strict=strict)
-        if paths := get_paths(manifest):
-            names = []
-            for p in paths:
-                sub_m = load_manifest(repo_path / p, strict=strict) if (repo_path / p).is_dir() else {}
-                names.append(get_name(sub_m) or f"{deployment}-{p.replace('/', '-')}")
-            return names
-        return [deployment]
-
-    def _check_version(self, project_id: str, deployment: str, service_names: List[str]) -> None:
-        """Refuse when a newer gapp deployed this deployment (its services' gapp-version)."""
-        for svc in service_names:
-            labels = self.provider.get_service_labels(project_id, REGION, svc) or {}
-            try:
-                n = int(labels.get(VERSION_LABEL, ""))
-            except ValueError:
-                continue
-            if n > CURRENT_MAJOR:
-                raise RuntimeError(
-                    f"Deployment '{deployment}' on project '{project_id}' was deployed by gapp {n}.x "
-                    f"(service label {VERSION_LABEL}={n}); this gapp is v{__version__}. "
-                    f"Upgrade gapp to deploy it."
-                )
-
-    # -- Solution & project resolution --
-
-    def resolve_solution(self, name: str | None = None, strict: bool = True) -> dict | None:
-        """Resolve a solution context.
-
-        With an explicit name, returns a no-repo context immediately —
-        no filesystem access, no manifest validation. This is the path
-        used by status/list when called with --solution.
-
-        Without a name, falls back to git-root + gapp.yaml discovery.
-        strict controls whether the manifest is schema-validated; pass
-        strict=False from read-only commands so a stale gapp.yaml does
-        not block cloud reads.
-
-        NOTE: project_id in the returned dict is ALWAYS None. This method
-        intentionally returns shape only — it does not perform GCP-side
-        project discovery. Callers that need the resolved GCP project must
-        chain `resolve_project_for_solution(...)` (see `status()`) or use
-        the `resolve_solution_with_project(...)` helper which does both
-        in one call. See issue #39 for the trap this contract created
-        when callers assumed `project_id` would be populated.
-        """
-        if name:
-            return {"name": name, "project_id": None, "repo_path": None}
-        git_root = self._get_git_root()
-        if git_root and (git_root / "gapp.yaml").is_file():
-            manifest = load_manifest(git_root, strict=strict)
-            solution_name = get_solution_name(manifest, git_root)
-            return {"name": solution_name, "project_id": None, "repo_path": str(git_root)}
-        return None
-
-    def resolve_solution_with_project(
-        self,
-        name: str | None = None,
-        project: Optional[str] = None,
-        strict: bool = True,
-    ) -> dict | None:
-        """Resolve a solution AND best-effort attach its GCP project_id.
-
-        Returns the same dict as `resolve_solution(name, strict=strict)`
-        with `project_id` populated when discoverable, or left as None
-        when no project currently hosts the solution. Callers that
-        require a project must check `project_id` and raise their own
-        error; this method never raises for "no project found" so that
-        list-style callers can degrade gracefully. A name on more than one
-        project (AmbiguousDeployment) is raised: guessing would be wrong.
-
-        This is the canonical pattern for SDK consumers that need both
-        the local manifest context and the deployed GCP project. See
-        issue #39 — `resolve_solution` alone always returns
-        project_id=None, which trapped every caller in `secrets.py`.
-        """
-        ctx = self.resolve_solution(name, strict=strict)
-        if not ctx:
-            return None
-        try:
-            res = self.resolve_project_for_solution(ctx["name"], project=project)
-            ctx["project_id"] = res["project_id"]
-        except (CloudAccessError, AmbiguousDeployment):
-            # An expired login or a wrong account is not "no project";
-            # let the caller report the real error.
-            raise
-        except RuntimeError:
-            ctx["project_id"] = None
-        return ctx
-
-    def discover_projects_for_solution(self, solution_name: str, stop_at: Optional[int] = None) -> List[Dict]:
-        """Find the projects hosting a deployment.
-
-        Searches the projects marked gapp=hosted for the deployment's bucket
-        (labeled gapp-deployment=<id>), asking the projects in parallel; with
-        stop_at, stops once that many are found.
-
-        Returns a list of dicts: {projectId, labels} (the project's labels).
-        """
-        deployment = solution_name.lower()
-
-        def match(project, labels):
-            if labels.get(DEPLOYMENT_LABEL) != deployment:
-                return None
-            return {"projectId": project["projectId"], "labels": project.get("labels") or {}}
-
-        found = self._search_hosted(self._hosted_projects(), match, stop_at=stop_at)
-        return sorted(found, key=lambda c: c["projectId"])
-
-    def resolve_project_for_solution(
-        self,
-        solution_name: str,
-        project: Optional[str] = None,
-        allow_zero: bool = False,
-    ) -> Dict:
-        """Single-source resolver.
-
-        Returns a dict with: project_id, labels (the project's, or None when
-        the project was given and not read), status.
-
-        An explicit project is taken as given: no search and no read of its
-        labels (CI always passes one). Whether the deployment is set up there
-        is the caller's check (its bucket). Without a project, the hosted
-        projects are searched, stopping at the second match: a name on more
-        than one project raises AmbiguousDeployment.
-
-        Raises RuntimeError on any unresolvable case.
-        """
-        if project:
-            return {"project_id": project, "labels": None, "status": "resolved"}
-
-        # Discovery path: search the hosted projects.
-        if not self.is_discovery_on():
-            raise RuntimeError(
-                "Discovery is OFF for this profile. Pass --project explicitly "
-                "or run `gapp config discovery on`."
-            )
-
-        candidates = self.discover_projects_for_solution(solution_name, stop_at=2)
-        if not candidates:
-            if allow_zero:
-                raise RuntimeError(
-                    f"Solution '{solution_name}' is not deployed anywhere. "
-                    f"Pass --project to install for the first time."
-                )
-            raise RuntimeError(
-                f"No deployment '{solution_name}' found in any project marked {HOSTED_LABEL}={HOSTED_VALUE}. "
-                f"Pass --project, or run `gapp setup --project <project-id>` first."
-            )
-        if len(candidates) > 1:
-            raise AmbiguousDeployment(
-                f"'{solution_name}' exists on more than one project. Pass --project to choose one; "
-                f"`gapp list` shows where each is."
-            )
-        c = candidates[0]
-        return {"project_id": c["projectId"], "labels": c["labels"], "status": "resolved"}
-
-    # -- Fleet listing --
-
-    def list_apps(self, project_limit: int = 50) -> dict:
-        """List deployments on the projects marked gapp=hosted.
-
-        Args:
-            project_limit: Max hosted projects to scan in one call.
-
-        Returns one entry per (project x deployment), from the deployment
-        buckets' labels (gapp-deployment, gapp-version), asked of the hosted
-        projects in parallel.
-        """
-        projects_data = self._hosted_projects(limit=project_limit)
-
-        def match(project, labels):
-            try:
-                major = int(labels.get(VERSION_LABEL, ""))
-            except ValueError:
-                major = None
-            return {
-                "name": labels[DEPLOYMENT_LABEL],
-                "project": project["projectId"],
-                "contract_major": major,
-                "is_legacy": False,
-            }
-
-        apps = self._search_hosted(projects_data, match)
-
-        result = {
-            "apps": sorted(apps, key=lambda x: (x["name"], x["project"])),
-            "metadata": {
-                "projects": {"count": len(projects_data), "limit": project_limit},
-                "apps": {"count": len(apps)},
-                "contract_major": CURRENT_MAJOR,
-            },
-            "messages": [],
-            "warnings": [],
-        }
-        if len(projects_data) >= project_limit:
-            result["warnings"].append(
-                f"Project list limit reached ({project_limit}). "
-                f"Use --project-limit to increase."
-            )
-        return result
-
-    # -- Setup / deploy --
-
-    def setup(
-        self,
-        project_id: Optional[str] = None,
-    ) -> dict:
-        """Provision GCP foundation for a solution on a project.
-
-        Labels the deployment's bucket (gapp-deployment, gapp-version) and marks the project gapp=hosted when it
-        is not yet. A CI run never writes project labels: there the mark is
-        left to `gapp ci project setup`, which runs as an Owner.
-        """
-        ctx = self.resolve_solution()
-        if not ctx:
-            raise RuntimeError("Not inside an app's folder. Run this in the app's repo, or run gapp init there first.")
-        solution_name = ctx["name"]
-
-        # Resolve target project. allow_zero=True for first-time setup with --project.
-        try:
-            res = self.resolve_project_for_solution(
-                solution_name, project=project_id, allow_zero=True
-            )
-        except RuntimeError:
-            # Fall back: discovery returned 0 with no --project — must specify.
-            if not project_id:
-                raise
-            raise
-
-        target_project = res["project_id"]
-        labels = res["labels"]
-
-        repo_path = Path(ctx["repo_path"]) if ctx.get("repo_path") else None
-        bucket_name = self.get_bucket_name(solution_name, target_project)
-
-        # Version gating on the deployment's services.
-        self._check_version(target_project, solution_name, self._service_names(solution_name, repo_path))
-
-        manifest = load_manifest(repo_path) if repo_path else {}
-
-        apis_enabled = []
-        for api in list(FOUNDATION_APIS) + get_required_apis(manifest):
-            self.provider.enable_api(target_project, api)
-            apis_enabled.append(api)
-
-        bucket_status = "exists" if self.provider.bucket_exists(target_project, bucket_name) else "created"
-        if bucket_status == "created":
-            self.provider.create_bucket(target_project, bucket_name)
-
-        self.provider.ensure_build_permissions(target_project)
-
-        self.provider.set_bucket_labels(target_project, bucket_name, self.deployment_labels(solution_name))
-
-        # The project mark, once per project, by an Owner only. A CI run never
-        # writes it, and does not read the project's labels either.
-        if on_ci_runner():
-            label_status = "skipped"
-        elif (labels := labels if labels is not None else self.provider.get_project_labels(target_project)) \
-                .get(HOSTED_LABEL) == HOSTED_VALUE:
-            label_status = "exists"
-        else:
-            self.provider.set_project_labels(target_project, {**labels, HOSTED_LABEL: HOSTED_VALUE})
-            label_status = "added"
-
-        return {
-            "name": solution_name,
-            "project_id": target_project,
-            "bucket": bucket_name,
-            "bucket_status": bucket_status,
-            "label_status": label_status,
-            "apis": apis_enabled,
-            "start_problem": self._start_problem(solution_name, repo_path, ", so it can't be deployed yet"),
-        }
-
-    def deploy(
-        self,
-        ref: Optional[str] = None,
-        dry_run: bool = False,
-        project_id: Optional[str] = None,
-        rebuild: bool = False,
-        replace_domain: bool = False,
-    ) -> dict:
-        """Build the image and apply Terraform for one solution.
-
-        replace_domain: a deploy that would replace or remove a live custom
-        domain mapping is refused unless this is True, because Terraform
-        destroys the old mapping before creating the new one.
-        """
-        ctx = self.resolve_solution()
-        if not ctx:
-            raise RuntimeError("Not inside an app's folder. Run this in the app's repo, or run gapp init there first.")
-        solution_name = ctx["name"]
-        repo_path = Path(ctx["repo_path"]) if ctx.get("repo_path") else None
-
-        # How the app starts is checked first: nothing is looked up, built
-        # or applied for an app that cannot start.
-        problem = self._start_problem(solution_name, repo_path, ", so nothing was built or deployed")
-        if problem and not dry_run:
-            raise RuntimeError(problem)
-
-        # Try to resolve a project. For dry-run we tolerate "no project yet."
-        target_project = None
-        try:
-            res = self.resolve_project_for_solution(
-                solution_name, project=project_id, allow_zero=False
-            )
-            target_project = res["project_id"]
-        except AmbiguousDeployment:
-            raise
-        except RuntimeError:
-            if not dry_run:
-                raise
-
-        preview = {
-            "name": solution_name,
-            "project_id": target_project,
-            "labels": ", ".join(f"{k}={v}" for k, v in self.deployment_labels(solution_name).items()),
-            "bucket": self.get_bucket_name(solution_name, target_project) if target_project else None,
-            "repo_path": str(repo_path) if repo_path else None,
-            "status": "ready" if target_project and repo_path else "pending_setup",
-            "start_problem": problem,
-            "services": [],
-        }
-        if repo_path:
-            manifest = load_manifest(repo_path)
-            if paths := get_paths(manifest):
-                for p in paths:
-                    sub_m = load_manifest(repo_path / p) if (repo_path / p).is_dir() else {}
-                    preview["services"].append({
-                        "name": get_name(sub_m) or f"{solution_name}-{p.replace('/', '-')}",
-                        "path": p,
-                    })
-            else:
-                preview["services"].append({"name": solution_name, "path": "."})
-
-        if dry_run:
-            return {**preview, "dry_run": True}
-        if not target_project:
-            raise RuntimeError(f"No GCP project resolved for '{solution_name}'.")
-
-        bucket_name = self.get_bucket_name(solution_name, target_project)
-        if not self.provider.bucket_exists(target_project, bucket_name):
-            raise RuntimeError(f"Foundation missing. Run 'gapp setup'.")
-        self._check_version(target_project, solution_name, [s["name"] for s in preview["services"]])
-        self.provider.set_bucket_labels(target_project, bucket_name, self.deployment_labels(solution_name))
-
-        build_ref = ref or "HEAD"
-        if paths := get_paths(load_manifest(repo_path)):
-            return {"services": [
-                self._deploy_single_service(
-                    s["name"], target_project, repo_path, load_manifest(repo_path / s["path"]),
-                    service_path=s["path"], parent_solution=solution_name,
-                    ref=build_ref, rebuild=rebuild, replace_domain=replace_domain,
-                )
-                for s in preview["services"]
-            ]}
-        return self._deploy_single_service(
-            solution_name, target_project, repo_path, load_manifest(repo_path),
-            ref=build_ref, rebuild=rebuild, replace_domain=replace_domain,
-        )
-
-    def status(self, name: str | None = None, project: Optional[str] = None) -> StatusResult:
-        # Lenient: status is read-only and must work even if the local
-        # gapp.yaml predates the current schema or is missing fields the
-        # build pipeline would require. It reports the direct system only
-        # (GCP labels and Terraform state) and never raises for a missing
-        # or unusable Google Cloud identity: that is an outcome with the
-        # login command, not a crash, and not "not deployed".
-        local = self.resolve_solution(name, strict=False)
-        if not local:
-            return StatusResult(
-                initialized=False,
-                deployment=DeploymentInfo(project=None, pending=True),
-                next_step=NextStep(action="init", hint=(
-                    "No gapp.yaml here (or not inside a git repository). Run `gapp init` in the "
-                    "app's repo, or run `gapp status <name>` to check a deployment."
-                )),
-            )
-        warnings = _manifest_warnings(local.get("repo_path"))
-        try:
-            ctx = self.resolve_solution_with_project(name, project=project, strict=False)
-        except CloudAccessError:
-            return StatusResult(
-                initialized=True,
-                name=local["name"],
-                repo_path=local.get("repo_path"),
-                deployment=DeploymentInfo(project=None, pending=True),
-                next_step=NextStep(action="sign in", hint=self._identity_hint(project)),
-                warnings=warnings,
-            )
-        solution_name = ctx["name"]
-        repo_path = ctx.get("repo_path")
-        project_id = ctx.get("project_id")
-
-        result = StatusResult(
-            initialized=True,
-            name=solution_name,
-            repo_path=repo_path,
-            deployment=DeploymentInfo(project=project_id, pending=True),
-            warnings=warnings,
-        )
-        problem = self._start_problem(solution_name, Path(repo_path) if repo_path else None,
-                                      ", so it can't be deployed", strict=False)
-        if not project_id:
-            result.next_step = (NextStep(action="add a start method", hint=problem) if problem else NextStep(
-                action="setup",
-                hint=f"No GCP project attached for '{solution_name}'.",
-            ))
-            return result
-
-        services_to_check = []
-        if repo_path:
-            manifest = load_manifest(Path(repo_path), strict=False)
-            if paths := get_paths(manifest):
-                for p in paths:
-                    sub_m = load_manifest(Path(repo_path) / p, strict=False) if (Path(repo_path) / p).is_dir() else {}
-                    services_to_check.append({
-                        "name": get_name(sub_m) or f"{solution_name}-{p.replace('/', '-')}",
-                        "is_workspace": True,
-                    })
-            else:
-                services_to_check.append({"name": solution_name, "is_workspace": False})
-        else:
-            services_to_check.append({"name": solution_name, "is_workspace": False})
-
-        for svc in services_to_check:
-            bucket_name = self.get_bucket_name(solution_name, project_id)
-            state_prefix = f"terraform/state/{svc['name']}" if svc["is_workspace"] else "terraform/state"
-            outputs = self.provider.get_infrastructure_outputs(
-                _get_staging_dir(svc["name"]), bucket_name, state_prefix,
-            )
-            if outputs and (url := outputs.get("service_url")):
-                result.deployment.services.append(
-                    ServiceStatus(name=svc["name"], url=url, healthy=self.provider.check_http_health(url))
-                )
-                result.deployment.pending = False
-            # The mapping Terraform last applied is the live one; report its state.
-            if outputs and result.domain is None and (live := (outputs.get("custom_domain") or "").strip()):
-                result.domain = self._domain_status(project_id, live)
-        if problem:
-            result.next_step = NextStep(action="add a start method", hint=problem)
-        return result
+    def get_bucket_name(self, deployment_id: str, project_id: str) -> str:
+        """The deployment's data bucket. A deployment id is unique within its project."""
+        return f"gapp-{deployment_id}-{project_id}".lower()
+
+    def _project_bucket(self, project: str) -> Optional[str]:
+        """The project's gapp bucket, or None when the project has none."""
+        from gapp.admin.sdk import record
+        name = record.bucket(project)
+        return name if name in self.provider.list_bucket_labels(project) else None
+
+    def _write_record(self, project_bucket: str, deployment_id: str, entry: dict, at, latest: bool) -> None:
+        from gapp.admin.sdk import record
+        text = record.dump(entry)
+        self.provider.write_object(project_bucket, record.history_path(deployment_id, at, entry["commit"]), text)
+        if latest:
+            self.provider.write_object(project_bucket, record.latest_path(deployment_id), text)
 
     def _identity_hint(self, project_id: Optional[str] = None) -> str:
         """What to do when no Google Cloud identity this machine holds works."""
-        account = self.get_account()
+        from gapp.admin.sdk.util import configured_account
+        account = configured_account()
         if on_ci_runner():
             return ci_identity_hint(account, project_id)
         who = f" for the configured account {account}" if account else ""
@@ -708,15 +155,15 @@ class GappSDK:
                     f"{live} is mapped now and this deploy would map {requested} instead. "
                     f"Terraform destroys the old mapping before creating the new one, so "
                     f"{live} would stop serving. If the change is intended, re-run with "
-                    f"--replace-domain (replace_domain=True); otherwise fix `domain:` in "
-                    f"gapp.yaml or the fleet entry's domain (`gapp ci setup <name> ... --domain`)."
+                    f"--replace-domain (replace_domain=True); otherwise set the deployment's "
+                    f"domain back: gapp set domain {live}"
                 )
             raise RuntimeError(
                 f"Refusing to remove the live domain mapping {live} of '{service_name}': "
-                f"this deploy sets no domain (none in gapp.yaml and none passed by CI). "
+                f"this deploy sets no domain. "
                 f"If removing it is intended, re-run with --replace-domain "
-                f"(replace_domain=True); otherwise set `domain: {live}` in gapp.yaml or "
-                f"pass it through the fleet entry's domain (`gapp ci setup <name> ... --domain`)."
+                f"(replace_domain=True); otherwise set the deployment's domain: "
+                f"gapp set domain {live}"
             )
 
         if requested and requested != live:
@@ -735,70 +182,299 @@ class GappSDK:
                     f"verified owner of that Search Console property."
                 )
 
-    def _deploy_single_service(self, name, project_id, repo_path, manifest,
-                               service_path=".", parent_solution=None,
-                               ref="HEAD", rebuild=False, replace_domain=False):
-        bucket_name = self.get_bucket_name(parent_solution or name, project_id)
-        state_prefix = f"terraform/state/{name}" if parent_solution else "terraform/state"
-        self._check_domain_safety(
-            name, project_id, get_domain(manifest), bucket_name, state_prefix, replace_domain,
-        )
-        from gapp.admin.sdk.start import start_method
-        start = start_method(repo_path / service_path)
-        if not start["method"]:
-            raise RuntimeError(self._start_problem(parent_solution or name, repo_path,
-                                                   ", so nothing was built or deployed"))
-        sha = self._resolve_ref(repo_path, ref)
-        self.provider.ensure_artifact_registry(project_id, REGION)
-        image = f"{REGION}-docker.pkg.dev/{project_id}/gapp/{name}:{sha}"
-        if rebuild or not self.provider.image_exists(project_id, REGION, name, sha):
-            build_dir = _prepare_build_dir(repo_path, image, start, ref=ref)
-            try:
-                self.provider.submit_build_sync(project_id, Path(build_dir), image)
-            finally:
-                shutil.rmtree(build_dir, ignore_errors=True)
-        # Secret materialization runs unconditionally before tfvars are built.
-        # Skipping it on "already deployed" runs would leave the secrets tfvar
-        # empty for legacy state that still owns per-secret module resources,
-        # and terraform would destroy those resources as drift.
-        from gapp.admin.sdk.secrets import (
-            validate_declared_secrets,
-            materialize_generated_secrets,
-        )
-        validate_declared_secrets(project_id, parent_solution or name, manifest)
-        materialize_generated_secrets(project_id, parent_solution or name, manifest)
+    # -- The fleet's commands: a definition in, a deployment out --
 
-        tfvars = _build_tfvars(
-            name, project_id, image, get_service_config(manifest),
-            Path(repo_path) / service_path,
-            get_public(manifest), get_domain(manifest),
-            bucket_name,
-            solution_name=parent_solution or name,
-            labels=self.deployment_labels(parent_solution or name),
-        )
-        outputs = self.provider.apply_infrastructure(
-            staging_dir=_get_staging_dir(name), bucket_name=bucket_name,
-            state_prefix=state_prefix, auto_approve=True, tfvars=tfvars,
-        )
-        return {
-            "name": name, "project_id": project_id, "image": image,
-            "terraform_status": "applied", "service_url": outputs.get("service_url"),
-        }
+    def project_setup(self, project_id: str) -> dict:
+        """Make a project ready for gapp deployments. Once per project; running it again only adds what is missing.
 
-    def _get_git_root(self) -> Optional[Path]:
+        Turns on the APIs every deployment needs, gives Cloud Build its
+        permissions, makes the project's gapp bucket, and marks the
+        project. Nothing about CI.
+        """
+        from gapp.admin.sdk import fleet, record
+        from gapp.admin.sdk.definitions import Refused
         try:
-            res = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True)
-            if res.returncode == 0:
-                return Path(res.stdout.strip())
-        except Exception:
-            pass
-        return None
+            project_id = fleet.validate_project(project_id)
+        except fleet.FleetRefusal as e:
+            raise Refused(e.message) from e
+        for api in FOUNDATION_APIS:
+            self.provider.enable_api(project_id, api)
+        self.provider.ensure_build_permissions(project_id)
+        bucket = record.bucket(project_id)
+        if bucket not in self.provider.list_bucket_labels(project_id):
+            try:
+                self.provider.create_bucket(project_id, bucket)
+            except Exception as e:
+                raise Refused(
+                    f"The bucket {bucket} could not be made in {project_id}. gapp keeps each deployment's "
+                    f"Terraform state and deploy record there. If the name is taken by a bucket outside "
+                    f"this project, gapp cannot use this project. ({e})"
+                ) from e
+        labels = dict(self.provider.get_project_labels(project_id) or {})
+        marked = labels.get(HOSTED_LABEL) == HOSTED_VALUE
+        if not marked:
+            self.provider.set_project_labels(project_id, {**labels, HOSTED_LABEL: HOSTED_VALUE})
+        return {"project": project_id, "apis": list(FOUNDATION_APIS), "bucket": bucket, "was_set_up": marked}
 
-    def _resolve_ref(self, path, ref):
-        return subprocess.run(
-            ["git", "rev-parse", "--short=12", ref],
-            capture_output=True, text=True, cwd=path, check=True,
-        ).stdout.strip()
+    def _clone_of(self, definition: dict, name: str, cwd: Path) -> Path:
+        """The clone a deploy builds from: the folder's git root, whose remote must be the definition's repo."""
+        from gapp.admin.sdk import lookup
+        from gapp.admin.sdk.definitions import Refused
+        res = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, cwd=cwd)
+        repo = definition.get("repo")
+        if res.returncode != 0:
+            raise Refused(f"`gapp deploy` builds from a clone. Run it in a clone of {repo or 'the app'}.")
+        root = Path(res.stdout.strip())
+        if repo:
+            remotes = lookup.clone_remotes(root)
+            if not any(r.repo.lower() == repo.lower() for r in remotes.values()):
+                here = ", ".join(sorted({r.repo for r in remotes.values()})) or "a repo with no remote"
+                raise Refused(f"'{name}' runs {repo}, and this clone is {here}. Run it in a clone of {repo}.")
+        return root
+
+    def _check_at_ref(self, root: Path, definition: dict, name: str) -> str:
+        """Refuse unless the clone is on what the definition builds. Returns the commit.
+
+        A branch (or, with no ref, the repo's default branch): the clone
+        must have that branch checked out, and its own commits on it are
+        built, pushed or not. A tag or a commit: the clone must be at
+        exactly that commit.
+        """
+        from gapp.admin.sdk.definitions import Refused
+
+        def git(*args):
+            r = subprocess.run(["git", *args], capture_output=True, text=True, cwd=root)
+            return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
+
+        def commit(rev):
+            return git("rev-parse", "--verify", "-q", f"{rev}^{{commit}}")
+
+        head = commit("HEAD")
+        if not head:
+            raise Refused("This clone has no commit yet, so there is nothing to build.")
+        on_branch = git("symbolic-ref", "--short", "-q", "HEAD")
+        ref = definition.get("ref")
+        change = f"or change what it builds: gapp set ref <ref> --deployment {name}"
+        if ref:
+            is_branch = bool(git("show-ref", "--verify", f"refs/heads/{ref}")
+                             or git("show-ref", "--verify", f"refs/remotes/origin/{ref}"))
+            branch = ref if is_branch else None
+        else:
+            default = git("symbolic-ref", "--short", "-q", "refs/remotes/origin/HEAD")
+            branch = default.split("/", 1)[1] if default and "/" in default else None
+            if branch is None:
+                return head                       # the default branch is not known here; build what is checked out
+        if branch:
+            if on_branch != branch:
+                here = f"on '{on_branch}'" if on_branch else f"at {head[:12]}, on no branch"
+                what = f"'{branch}'" + ("" if ref else ", the repo's default branch")
+                raise Refused(f"'{name}' builds {what}, and this clone is {here}. Check out {branch}, {change}")
+            return head
+        wanted = commit(ref)
+        if not wanted:
+            raise Refused(f"'{name}' builds '{ref}', which this clone does not have. Fetch it, then check it out.")
+        if wanted != head:
+            raise Refused(f"'{name}' builds '{ref}' ({wanted[:12]}), and this clone is at {head[:12]}. "
+                          f"Check that out, {change}")
+        return head
+
+    def deploy_definition(self, deployment: Optional[str] = None, *, cwd: Optional[Path] = None,
+                          dry_run: bool = False, rebuild: bool = False, replace_domain: bool = False,
+                          upgrade: bool = False) -> dict:
+        """Build a deployment's ref from this clone and deploy it, from its definition in the fleet.
+
+        A refusal (`definitions.Refused`) means nothing was built or
+        changed. `dry_run` reports what a deploy would do, including
+        whether it would apply an upgrade, and refuses nothing about that.
+        """
+        from gapp import __version__
+        from gapp.admin.sdk import appjson, definitions, entryfile, record, settings as settings_mod
+        from gapp.admin.sdk.definitions import Refused
+        from gapp.admin.sdk.start import start_method_of, missing
+        from gapp.admin.sdk.util import configured_account
+
+        cwd = Path(cwd or Path.cwd())
+        _, deployments = definitions._load()
+        name = definitions.which(deployments, deployment, cwd, "gapp deploy")
+        definition = deployments[name]
+        try:
+            entryfile.require_current(definition, name, "deploy it from this machine")
+            settings_mod.validate(definition.get("settings"))
+        except (entryfile.EntryFileRefusal, settings_mod.SettingsRefusal) as e:
+            raise Refused(e.message) from e
+        root = self._clone_of(definition, name, cwd)
+        sha = self._check_at_ref(root, definition, name)
+        # The definition wins; the app's own app.json, at the commit being
+        # built, fills in the variables the definition leaves out.
+        try:
+            declared = appjson.read(root)
+        except appjson.AppJsonRefusal as e:
+            raise Refused(f"'{name}' cannot be deployed: {e.message} Nothing was built or changed.") from e
+        filled = appjson.fill(definition.get("settings"), declared)
+        manifest = settings_mod.as_manifest(definition["id"], filled["settings"])
+        procfile = root / "Procfile"
+        start = start_method_of(dockerfile=(root / "Dockerfile").is_file(),
+                                procfile=procfile.read_text() if procfile.is_file() else None,
+                                start=manifest.get("start"))
+        if not start["method"]:
+            raise Refused(missing(name, start, consequence=", so nothing was built or deployed"))
+
+        deployment_id, project = definition["id"], definition["project"]
+        bucket = self.get_bucket_name(deployment_id, project)
+        buckets = self.provider.list_bucket_labels(project)
+        project_bucket = record.bucket(project) if record.bucket(project) in buckets else None
+        before = record.read_latest(self.provider, project, deployment_id) if project_bucket else None
+        last = (before or {}).get("gapp")
+        if last is None:
+            standing = "first"
+        else:
+            theirs, mine = entryfile.version_key(last), entryfile.version_key(definition["gapp"])
+            standing = "same" if theirs == mine else ("upgrade" if theirs < mine else "ahead")
+        plan = {
+            "deployment": name, "id": deployment_id, "project": project, "repo": definition.get("repo"),
+            "ref": definition.get("ref"), "commit": sha[:12], "gapp": definition["gapp"],
+            "last_deployed_by": last, "upgrade_pending": standing == "upgrade", "first_deploy": standing == "first",
+            "bucket": bucket, "start": start["method"],
+            "app_json": "none" if declared is None else "read",
+            "defaults_from_app_json": filled["defaults"], "missing_variables": filled["missing"],
+            "warnings": appjson.unlisted_lines(name, filled["unlisted"]),
+        }
+        if dry_run:
+            return {**plan, "dry_run": True}
+        if filled["missing"]:
+            raise Refused(appjson.missing_text(name, filled["missing"]))
+        if standing == "ahead":
+            raise Refused(
+                f"'{name}' was last deployed by gapp {last}, and its definition names gapp {definition['gapp']}. "
+                f"A deployment does not go back. Nothing was changed."
+            )
+        if standing == "upgrade" and not upgrade:
+            raise Refused(
+                f"'{name}' was last deployed by gapp {last}, and its definition is on gapp {definition['gapp']}. "
+                f"This deploy would apply that upgrade. To go ahead: gapp deploy --deployment {name} --upgrade"
+            )
+        if upgrade and standing != "upgrade":
+            raise Refused(f"No upgrade is pending for '{name}'. Deploy it without --upgrade.")
+        if (self.provider.get_project_labels(project) or {}).get(HOSTED_LABEL) != HOSTED_VALUE or not project_bucket:
+            raise Refused(f"{project} is not set up for gapp yet. Once per project: gapp project setup {project}")
+
+        for api in (manifest.get("prerequisites") or {}).get("apis", []):
+            self.provider.enable_api(project, api)
+        labels = {DEPLOYMENT_LABEL: deployment_id.lower(), VERSION_LABEL: settings_mod.version_label(definition["gapp"])}
+
+        state_prefix = record.state_prefix(deployment_id)
+        self._check_domain_safety(deployment_id, project, get_domain(manifest), project_bucket, state_prefix,
+                                  replace_domain)
+        short = sha[:12]
+        image = f"{REGION}-docker.pkg.dev/{project}/gapp/{deployment_id}:{short}"
+        upgraded_from = last if standing == "upgrade" else None
+
+        def written_down(at, error=None):
+            return record.build(name=name, definition=definition, commit=sha, image=image, at=at,
+                                by=getattr(self.provider, "account", None) or configured_account(),
+                                installed=__version__, upgraded_from=upgraded_from, error=error)
+
+        try:
+            self.provider.ensure_artifact_registry(project, REGION)
+            if rebuild or not self.provider.image_exists(project, REGION, deployment_id, short):
+                build_dir = _prepare_build_dir(root, image, start, ref="HEAD")
+                try:
+                    self.provider.submit_build_sync(project, Path(build_dir), image)
+                finally:
+                    shutil.rmtree(build_dir, ignore_errors=True)
+            from gapp.admin.sdk.secrets import validate_declared_secrets, materialize_generated_secrets
+            validate_declared_secrets(project, deployment_id, manifest)
+            materialize_generated_secrets(project, deployment_id, manifest)
+            tfvars = _build_tfvars(
+                deployment_id, project, image, get_service_config(manifest), root,
+                get_public(manifest), get_domain(manifest), bucket,
+                solution_name=deployment_id, labels=labels, manifest=manifest,
+                adopt_data_bucket=bucket in buckets,
+            )
+            outputs = self.provider.apply_infrastructure(
+                staging_dir=_get_staging_dir(deployment_id), bucket_name=project_bucket,
+                state_prefix=state_prefix, auto_approve=True, tfvars=tfvars,
+            )
+        except Exception as e:
+            at = record.now()
+            failed = written_down(at, error=str(e).strip()[:2000] or type(e).__name__)
+            try:                                                  # the failure itself is what gets reported
+                self._write_record(project_bucket, deployment_id, failed, at, latest=False)
+            except Exception:
+                pass
+            raise
+        try:
+            at = record.now()
+            self._write_record(project_bucket, deployment_id, written_down(at), at, latest=True)
+        except CloudAccessError as e:
+            raise CloudAccessError(
+                f"'{name}' is deployed, but the record of this deploy could not be written to "
+                f"gs://{project_bucket}, so gapp still takes the deploy before it as the last one. "
+                f"Deploy again once that is fixed. ({e})"
+            ) from e
+        return {**plan, "image": image, "service_url": outputs.get("service_url"), "upgraded_from": upgraded_from}
+
+    def status_definition(self, deployment: Optional[str] = None, *, cwd: Optional[Path] = None) -> dict:
+        """What is live for a deployment of the fleet: its URL and health, the
+        domain's state, which gapp last deployed it, and the next step."""
+        from gapp.admin.sdk import definitions, entryfile, record
+
+        @definitions._guard
+        def find():
+            _, deployments = definitions._load()
+            name = definitions.which(deployments, deployment, cwd, "gapp status")
+            definition = deployments[name]
+            if entryfile.standing(definition, name) == "newer":
+                entryfile.require_current(definition, name, "read its status")
+            return name, definition
+
+        name, definition = find()
+        deployment_id, project = definition["id"], definition["project"]
+        result = {"deployment": name, "project": project, "deployed": False, "url": None, "healthy": None,
+                  "domain": None, "gapp": definition.get("gapp"), "last_deployed_by": None,
+                  "upgrade_pending": False, "next_step": None}
+        try:
+            project_bucket = self._project_bucket(project)
+            before = record.read_latest(self.provider, project, deployment_id) if project_bucket else None
+        except CloudAccessError:
+            result["next_step"] = self._identity_hint(project)
+            return result
+        last = (before or {}).get("gapp")
+        result["last_deployed_by"] = last
+        outputs = self.provider.get_infrastructure_outputs(
+            _get_staging_dir(deployment_id), project_bucket, record.state_prefix(deployment_id)) if project_bucket else None
+        if outputs and (url := outputs.get("service_url")):
+            result.update(deployed=True, url=url, healthy=self.provider.check_http_health(url))
+        if outputs and (live := (outputs.get("custom_domain") or "").strip()):
+            result["domain"] = self._domain_status(project, live).model_dump()
+        if last and definition.get("gapp"):
+            result["upgrade_pending"] = entryfile.version_key(last) < entryfile.version_key(definition["gapp"])
+        if not result["deployed"]:
+            result["next_step"] = f"It is not deployed yet. From a clone of its repo: gapp deploy --deployment {name}"
+        elif result["upgrade_pending"]:
+            result["next_step"] = (f"It was last deployed by gapp {last}, and its definition is on gapp "
+                                   f"{definition['gapp']}. Apply that: gapp deploy --deployment {name} --upgrade")
+        return result
+
+    def list_definitions(self) -> dict:
+        """Every definition in the fleet, with how its version stands against this gapp."""
+        from gapp.admin.sdk import definitions, entryfile, fleetstore
+        where = fleetstore.location()
+        try:
+            deployments = fleetstore.read(where)
+        except fleetstore.FleetUnavailable as e:
+            raise definitions.Refused(str(e)) from e
+        rows = []
+        for name in sorted(deployments):
+            d = deployments[name]
+            try:
+                stands = entryfile.standing(d, name)
+            except entryfile.EntryFileRefusal:
+                stands = "unknown"
+            rows.append({"deployment": name, "repo": d.get("repo"), "project": d.get("project"),
+                         "ref": d.get("ref"), "gapp": d.get("gapp"),
+                         "upgrade": {"older": "available", "newer": "install a newer gapp"}.get(stands)})
+        return {"fleet": where.describe(), "deployments": rows}
 
 
 def _domain_is_verified(domain: str, verified: List[str]) -> bool:
@@ -865,7 +541,7 @@ def _prepare_build_dir(path, image, start, ref="HEAD"):
 
 
 def _build_tfvars(name, pid, img, cfg, repo_path, public, domain,
-                  bucket_name, solution_name=None, labels=None):
+                  bucket_name, solution_name=None, labels=None, manifest=None, adopt_data_bucket=False):
     # Every key returned here corresponds to a structurally-required tfvar in
     # modules/cloud-run-service/variables.tf. None of them have defaults, so
     # dropping a key fails terraform plan instead of silently mis-deploying.
@@ -873,9 +549,8 @@ def _build_tfvars(name, pid, img, cfg, repo_path, public, domain,
     # module's old `default = ""` + conditional opt-out turned that into a
     # silent volume strip. Don't reintroduce optional-empty tfvars for things
     # the module structurally needs.
-    from gapp.admin.sdk.manifest import resolve_env_vars, get_env_vars, load_manifest
+    from gapp.admin.sdk.manifest import resolve_env_vars, get_env_vars
     env = {}
-    manifest = load_manifest(repo_path)
     env_vars = get_env_vars(manifest)
     sol = solution_name or name
     secrets_map = {}
@@ -893,24 +568,9 @@ def _build_tfvars(name, pid, img, cfg, repo_path, public, domain,
         "secrets": secrets_map,
         "public": bool(public), "custom_domain": custom_domain,
         "data_bucket": bucket_name,
+        "adopt_data_bucket": bool(adopt_data_bucket),
         "labels": dict(labels or {}),
     }
-
-
-def _manifest_warnings(repo_path) -> List[str]:
-    """Status reads gapp.yaml leniently, but never silently: the gapp.yaml
-    validator's unknown fields come back as one warning line."""
-    if not repo_path:
-        return []
-    from gapp.admin.sdk.schema import ManifestValidationError
-    try:
-        load_manifest(Path(repo_path), strict=True)
-    except ManifestValidationError as e:
-        unknown = [i["path"] for i in e.issues if i["type"] == "extra_forbidden"]
-        if unknown:
-            return [f"gapp.yaml has unknown field(s) {', '.join(unknown)} (check for typos); "
-                    f"`gapp setup` and `gapp deploy` refuse it until they are fixed."]
-    return []
 
 
 def _get_staging_dir(name):

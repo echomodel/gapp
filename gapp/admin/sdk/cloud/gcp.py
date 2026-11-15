@@ -74,20 +74,12 @@ class GCPProvider(CloudProvider):
     def enable_api(self, project_id: str, api: str) -> None:
         """Enable a GCP API on the project. Idempotent.
 
-        Tolerant of PERMISSION_DENIED: CI deploy SAs intentionally
-        do not have `serviceusage.serviceUsageAdmin` (broad, would
-        let CI enable arbitrary APIs across the project). The
-        operator's local `gapp setup` runs as project owner and
-        enables the foundation APIs once; subsequent CI deploys
-        re-call `gapp setup` (idempotent) and need to no-op on the
-        API-enable step rather than fail. If the API was never
-        enabled locally, the subsequent terraform apply will fail
-        loudly with a more actionable message.
-
-        This tolerance existed in pre-v3 `setup._enable_api` and
-        was dropped during the v3 GappSDK/cloud-provider
-        consolidation. Restored here for the same reason: CI deploys
-        depend on it.
+        A PERMISSION_DENIED is tolerated: the deploy identity of a runner
+        is deliberately not allowed to enable APIs (that would let a run
+        turn on any API in the project). The APIs every deployment needs
+        are enabled once by an Owner, with `gapp project setup`, and a
+        deploy from a runner passes over this step. An API that was never
+        enabled then fails the Terraform apply, which names it.
         """
         result = self._run_gcloud(
             ["services", "enable", api, "--project", project_id],
@@ -100,10 +92,6 @@ class GCPProvider(CloudProvider):
             # CI deploy SAs lack serviceusage.serviceUsageAdmin by design.
             return
         raise RuntimeError(f"Failed to enable API {api}: {stderr}")
-
-    def bucket_exists(self, project_id: str, bucket_name: str) -> bool:
-        res = self._run_gcloud(["storage", "buckets", "describe", f"gs://{bucket_name}", "--project", project_id], capture_output=True)
-        return res.returncode == 0
 
     def create_bucket(self, project_id: str, bucket_name: str) -> None:
         self._run_gcloud(["storage", "buckets", "create", f"gs://{bucket_name}", "--project", project_id, "--location", "us", "--uniform-bucket-level-access"], capture_output=True, check=True)
@@ -185,20 +173,6 @@ class GCPProvider(CloudProvider):
         if code != "200":
             self._raise_crm_error(project_id, "write labels of", code, body)
 
-    def list_projects(self, filter_query: Optional[str] = None, limit: Optional[int] = None) -> List[Dict]:
-        args = ["projects", "list", "--format", "json(projectId,labels)"]
-        if filter_query:
-            args.extend(["--filter", filter_query])
-        if limit:
-            args.extend(["--limit", str(limit)])
-
-        res = self._run_gcloud(args, capture_output=True, text=True)
-        if res.returncode != 0:
-            raise CloudAccessError(
-                f"Could not list projects (gcloud exit {res.returncode}): "
-                f"{(res.stderr or '').strip()}\n{self._identity_hint()}"
-            )
-        return json.loads(res.stdout or "[]")
 
     # -- Deployment labels on buckets and services --
 
@@ -219,38 +193,29 @@ class GCPProvider(CloudProvider):
                 out[name] = dict(item.get("labels") or {})
         return out
 
-    def set_bucket_labels(self, project_id: str, bucket_name: str, labels: Dict[str, str]) -> None:
-        pairs = ",".join(f"{k}={v}" for k, v in sorted(labels.items()))
-        res = self._run_gcloud(
-            ["storage", "buckets", "update", f"gs://{bucket_name}", f"--update-labels={pairs}"],
-            capture_output=True, text=True,
+    # -- Objects in a bucket --
+
+    def read_object(self, bucket_name: str, path: str) -> Optional[str]:
+        res = self._run_gcloud(["storage", "cat", f"gs://{bucket_name}/{path}"], capture_output=True, text=True)
+        if res.returncode == 0:
+            return res.stdout
+        said = (res.stderr or "").lower()
+        if _says_not_found(said) or "matched no objects" in said or "404" in said:
+            return None
+        raise CloudAccessError(
+            f"Could not read gs://{bucket_name}/{path} (gcloud exit {res.returncode}): "
+            f"{(res.stderr or '').strip()}\n{self._identity_hint()}"
         )
+
+    def write_object(self, bucket_name: str, path: str, text: str) -> None:
+        res = self._run_gcloud(["storage", "cp", "-", f"gs://{bucket_name}/{path}"],
+                               input=text, capture_output=True, text=True)
         if res.returncode != 0:
             raise CloudAccessError(
-                f"Could not label bucket {bucket_name} (gcloud exit {res.returncode}): "
-                f"{(res.stderr or '').strip()}\n{self._identity_hint(project_id)}"
+                f"Could not write gs://{bucket_name}/{path} (gcloud exit {res.returncode}): "
+                f"{(res.stderr or '').strip()}\n{self._identity_hint()}"
             )
 
-    def get_service_labels(self, project_id: str, region: str, service_name: str) -> Optional[Dict[str, str]]:
-        res = self._run_gcloud(
-            ["run", "services", "describe", service_name, "--region", region, "--project", project_id,
-             "--format", "json"],
-            capture_output=True, text=True,
-        )
-        if res.returncode != 0:
-            stderr = (res.stderr or "").strip()
-            # gcloud's wording for a missing service has changed over time
-            # ("could not be found", "not found", "Cannot find service [x]",
-            # the NOT_FOUND status), so the check is deliberately broad: a
-            # missing service is an ordinary first-run state, never an error.
-            if _says_not_found(stderr):
-                return None
-            raise CloudAccessError(
-                f"Could not read Cloud Run service '{service_name}' on project '{project_id}' "
-                f"(gcloud exit {res.returncode}): {stderr}\n{self._identity_hint(project_id)}"
-            )
-        data = json.loads(res.stdout or "{}") or {}
-        return dict((data.get("metadata") or {}).get("labels") or {})
 
     # -- Custom domains --
 

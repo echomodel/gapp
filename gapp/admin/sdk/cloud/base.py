@@ -31,7 +31,7 @@ def ci_identity_hint(account: Optional[str] = None, project_id: Optional[str] = 
     project = project_id or "<project>"
     return (
         f"This is a CI run as {who}, so signing in again does not apply: the error above names what "
-        f"it lacks. `gapp ci project setup {project}` grants the deploy identity its roles; run it as "
+        f"it lacks. `gapp ci projects connect {project}` grants the deploy identity its roles; run it as "
         f"a project Owner, then deploy again."
     )
 
@@ -47,11 +47,6 @@ class CloudProvider(ABC):
     @abstractmethod
     def enable_api(self, project_id: str, api: str) -> None:
         """Enable a Google Cloud API service."""
-        pass
-
-    @abstractmethod
-    def bucket_exists(self, project_id: str, bucket_name: str) -> bool:
-        """Check if a GCS bucket exists."""
         pass
 
     @abstractmethod
@@ -81,15 +76,6 @@ class CloudProvider(ABC):
         """Replace or update labels on a GCP project."""
         pass
 
-    @abstractmethod
-    def list_projects(self, filter_query: Optional[str] = None, limit: Optional[int] = None) -> List[Dict]:
-        """Find projects matching a filter.
-
-        Returns a list of dicts with 'projectId' and 'labels' keys. An
-        empty list means no project matched; a failed listing raises
-        CloudAccessError instead.
-        """
-        pass
 
     # -- Deployment labels on buckets and services --
 
@@ -99,16 +85,19 @@ class CloudProvider(ABC):
         A failed listing raises CloudAccessError."""
         pass
 
+    # -- Objects in a bucket --
+
     @abstractmethod
-    def set_bucket_labels(self, project_id: str, bucket_name: str, labels: Dict[str, str]) -> None:
-        """Add or update the given labels on a bucket, keeping its others."""
+    def read_object(self, bucket_name: str, path: str) -> Optional[str]:
+        """The text of an object, or None when the object or its bucket
+        does not exist. Any other failure raises CloudAccessError."""
         pass
 
     @abstractmethod
-    def get_service_labels(self, project_id: str, region: str, service_name: str) -> Optional[Dict[str, str]]:
-        """A Cloud Run service's labels, or None when the service does not exist.
-        Any other failure raises CloudAccessError."""
+    def write_object(self, bucket_name: str, path: str, text: str) -> None:
+        """Write an object, replacing one that is there. A failure raises CloudAccessError."""
         pass
+
 
     # -- Custom domains --
 

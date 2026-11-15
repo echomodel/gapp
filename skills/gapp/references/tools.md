@@ -1,46 +1,68 @@
 # Operations: CLI command and MCP tool
 
-Both surfaces call the same SDK and return the same structured
-result. Use whichever is present. Arguments map one to one unless
-noted.
+Both call the same SDK and return the same result. Use whichever is
+present. Every CLI command takes `--json`, which prints what the tool
+returns. A deployment is `--deployment <name>` on the CLI and
+`deployment=` on a tool; inside a clone of its repo it can be left out.
+
+A refusal changes nothing: the CLI exits 2, and a tool returns
+`{"refused": true, "message": ...}`. Relay the message; it names the
+command that fixes it.
+
+## The fleet and its definitions (no cloud)
 
 | Operation | CLI | MCP tool | Notes |
 |---|---|---|---|
-| Live `gapp.yaml` JSON schema | `gapp manifest schema` | `gapp_schema` | single source of truth for fields |
-| Annotated example | `gapp manifest example` | `gapp_manifest_example` | every key with a comment; valid YAML |
-| Show this repo's settings | `gapp manifest [--file FILE] show` | `gapp_manifest_show(file=)` | every setting, set or not, with what it means; env variables by kind; how the app starts; `issues` for anything the schema refuses |
-| Change a setting | `gapp manifest set <key> <value>`, `gapp manifest unset <key>` | `gapp_manifest_set(key, value, new_deployment=)`, `gapp_manifest_unset(key, new_deployment=)` | keys: name, public, domain, start, memory, cpu, max-instances; `--file`/`file=` targets a fleet-side manifest file instead (no name there). Validated; written only when it changes. A different name is a new deployment: refused unless `new_deployment`, which needs the user's yes |
-| Environment variables | `gapp manifest env set <NAME> <value>` / `--secret <s> [--generate]` / `--data-path [<sub>]`, `gapp manifest env unset <NAME>` | `gapp_manifest_env_set(name, value=, secret=, generate=, data_path=)`, `gapp_manifest_env_unset(name)` | one kind per variable; replaces by name |
-| View or set the account | `gapp config account <email>` | `gapp_user(account=)` | per-machine config |
-| Initialize `gapp.yaml` | `gapp init [--fresh]` | `gapp_init(fresh=)` | idempotent; writes the deployment's name (`name_source` says where it came from); every other setting goes through `gapp manifest`. A broken gapp.yaml is never changed; `fresh` keeps it as gapp.yaml.bak and writes one with only the name (`fresh_result`), so get the user's yes first. Reports how the app starts (`start`: its Dockerfile, or its Procfile `web:` line); with neither, `next_step` says it isn't deployable yet. Takes no start command: that is the app's Procfile |
-| GCP foundation | `gapp setup --project <project-id>` | `gapp_setup(project_id=)` | first run on a project needs the id; marks the project `gapp=hosted` once (never from a CI run) |
-| Deploy | `gapp deploy [--project p] [--ref r] [--replace-domain]` | `gapp_deploy(project_id=, ref=, replace_domain=)` | build via Cloud Build, then terraform apply; blocking. Refuses before terraform to replace or remove a live domain mapping without `--replace-domain`, and to map a domain the deploying identity has not verified |
-| Status | `gapp status [<name>] [--project p]` | `gapp_status(name=, project=)` | the direct system only (never CI); includes `next_step` and `domain` (`pending_dns`, `pending_cert`, `active`, `error`, with the CNAME target). With no usable Google Cloud identity it returns `next_step: sign in` with the login command rather than failing |
-| List solutions | `gapp list` | `gapp_list(project_limit=)` | every deployment on the projects marked `gapp=hosted` |
-| Secrets | `gapp secrets list [<name>]`, `gapp secrets get <secret-name> [--plaintext]`, `gapp secrets set <secret-name> [value]`, each with `[--deployment <name>]` | `gapp_secret_list(name=, deployment=)`, `gapp_secret_get(name, plaintext=, deployment=)`, `gapp_secret_set(name, value, deployment=)` | `list` takes a deployment name (the checkout's by default); `get` and `set` use the checkout's gapp.yaml, where `name` is the secret's name. With `deployment`, all three read the project and declared secrets from the fleet instead, from any folder (needs `gh` too). `get` returns a hash and length unless plaintext is requested |
-| CI: the fleet repo | `gapp ci init [<owner>/<repo>] [--create] [--owner <org>]` | `gapp_ci_init(repo=, owner=, create=)` | the only operation that sets the fleet repo (gapp's local config). No args: shows the saved one, or finds the one repo tagged `gapp-ci` under the gh user (`owner=` for an org); several are listed, none gives the `--create` step. With a repo: sets it if it exists and installs or updates gapp's workflows and `gapp/deployments.yaml` (needs a `gh` that can write); `create` makes a new private fleet repo. A repo that does not exist, or exists when `create` is asked, is `ok: false` with the exact command |
-| CI: allow a source owner | `gapp ci sources add\|remove\|list <owner>` | `gapp_ci_sources(action=, owner=)` | the fleet repo variable `GAPP_ALLOWED_SOURCES`; needs `gh` with write access |
-| CI: trust a project | `gapp ci project setup <project>` | `gapp_ci_project_setup(project=)` | once per project, idempotent; the only `ci` operation that touches GCP. Needs gcloud signed in as an Owner of the project and `gh` as an admin of the fleet repo; creates or confirms WIF pool, provider, `gapp-deploy` service account and binding, and records them as the fleet repo's GitHub Environment `<project>`. Without gcloud the result says to run it where gcloud is |
-| CI: a deployment | `gapp ci setup [<name>] --repo <owner>/<repo> --project <id> [--domain <host>] [--manifest FILE] [--update] [--no-watch]` | `gapp_ci_setup(name=, repo=, project=, domain=, manifest=, update=, watch=)` | mirrors `setup` for the fleet; never gcloud, never the working directory. The name defaults to the repo's name; the same name again changes the entry's domain (`domain` sets it, `""` removes it) only with `update`: without it the result is `ok: false` with `changes_shown` (before → after), so show it to the user and ask before passing `update`; `manifest` replaces the deployment's whole fleet-side manifest (read it first with `gapp_ci_manifest`); the rest comes from the app repo's own gapp.yaml. Re-running it with `update` also drops any key gapp.yaml does not have, which is how `gapp ci status` repairs an entry a deploy would refuse. Dispatches the register run, which writes the entry with its own token, so this needs only a `gh` that can dispatch. A project not yet trusted or an owner not yet allowed is `ok: false` with the verbatim one-time message; relay it as is. A repo already deployed under another name is refused with both ways on (update it, or `--copy-of`) |
-| CI: a deployment's fleet-side manifest | `gapp ci manifest <name>` | `gapp_ci_manifest(name)` | the gapp.yaml keys the fleet sets for it, merged over the app repo's gapp.yaml at deploy (the whole file when the repo has none). Print only YAML, ready to save, edit with `gapp manifest --file`, and upload with `ci setup --manifest FILE --update`, which replaces it whole. One read of the fleet repo |
-| CI: what a deploy would use | `gapp ci manifest <name> --merged [--ref REF]` | `gapp_ci_manifest(name, merged=True, ref=...)` | the fleet-side manifest merged over the app repo's gapp.yaml at REF (default branch by default), how it starts, `problems` the deploy would refuse, `notes` (fleet on another gapp version). Reads the app repo with this machine's login; a repo it can't read here can still deploy. Saves nothing |
-| CI: another deployment of a repo | `gapp ci setup <new> --copy-of <existing> [--project <id>] [--domain <host>]` | `gapp_ci_setup(name=, copy_of=, project=, domain=)` | an environment or second instance: same repo, its own id, no domain or secret values; `project` defaults to the source's. |
-| CI: rename | `gapp ci rename <old> <new>` | `gapp_ci_rename(old=, new=)` | the name only; id and GCP resources unchanged |
-| CI: deploy | `gapp ci deploy <name> [--ref r] [--no-watch]` | `gapp_ci_deploy(name=, ref=, watch=)` | mirrors `deploy` for the fleet; dispatches `gapp-deploy.yml` with the deployment's name (and `ref` when given; without it the run deploys the app repo's default branch); needs `gh` logged in; any GitHub tool that dispatches that workflow with `deployment` and `ref` is equivalent. An unknown name is `ok: false` naming `ci setup` and `ci list`; a failed run comes with its link |
-| CI: one deployment | `gapp ci status <name> [--verbose]` | `gapp_ci_status(name=)` | mirrors `status` for the fleet, GitHub only and fast: `repo`, `project`, `domain`, `overlay` (the gapp.yaml keys the entry sets), `last_deploy` (or that runs could not be read), `problem`, `next_step` and `live_hint`. `id` shows only with `--verbose` |
-| CI: live service state | `gapp ci status <name> --live` | `gapp_ci_status(name=, live=True)` | dispatches the fleet's read-only status workflow, which runs `gapp status` for the deployment on a runner with the project's deploy identity; `live` is that result (the same dict `gapp_status` returns: services, URL, domain, next step). Takes a runner start; stores nothing; needs only a `gh` that can dispatch |
-| CI: the fleet | `gapp ci list [--repo <owner>/<repo>] [--verbose]` | `gapp_ci_list(repo=, verbose=)` | mirrors `list` for the fleet: every deployment with name, id, repo, project, domain and keys; `verbose` adds the fleet repo's files (present, current, or not checked), variables and per-solution workflows left from gapp 3.x |
+| Where the fleet lives | `gapp fleet` | `gapp_fleet()` | a file on this machine, or a git repo; how many deployments |
+| Move the fleet | `gapp fleet use <owner>/<repo> [--create]`, `gapp fleet use local` | `gapp_fleet_use(target, create=)` | any git host; refused when both places hold deployments |
+| Copy it out or in | `gapp fleet export [<file>]`, `gapp fleet import <file>` | `gapp_fleet_export()`, `gapp_fleet_import(fleet)` | the tools take and return the document, not a path. Import replaces the whole fleet: get the user's yes |
+| Every definition | `gapp list` | `gapp_list()` | name, repo, project, ref, gapp version, "upgrade available" |
+| One definition | `gapp show` | `gapp_show(deployment=)` | `effective`: every setting a deploy would use and where it comes from; `settings`: the object `apply` takes |
+| Define a deployment | `gapp add [<name>] --project <p> [--repo <r>] [--ref <r>]` | `gapp_add(name=, project=, repo=, ref=)` | in a clone, name and repo come from its remote |
+| A second deployment of a repo | `gapp add <name> --copy-of <existing> [--project <p>] [--ref <r>]` | `gapp_add(name=, copy_of=, project=, ref=)` | copies settings except the domain |
+| Rename | `gapp rename <old> <new>` | `gapp_rename(old, new)` | the name only; the id and cloud resources stay |
+| Remove from the fleet | `gapp remove <name>` | `gapp_remove(name)` | the fleet only: the service, bucket and secrets stay in Google Cloud, and nothing in gapp takes them down. Confirm with the user first |
+| Set or clear a value | `gapp set <key> <value>`, `gapp unset <key>` | `gapp_set(key, value, deployment=)`, `gapp_unset(key, deployment=)` | keys: `ref`, `repo`, `public`, `domain`, `start`, `memory`, `cpu`, `max_instances` |
+| Extra APIs | `gapp apis add <api>`, `gapp apis remove <api>` | `gapp_apis(action, api, deployment=)` | |
+| A variable | `gapp env set <NAME> <value>` / `--data-path [<sub>]` / `--secret [<secret-name>] [--generate]`, `gapp env unset <NAME>` | `gapp_env_set(name, value=, data_path=, secret=, generate=, deployment=)`, `gapp_env_unset(name, deployment=)` | one kind per variable |
+| Replace all settings | `gapp apply <file> [--dry-run]` | `gapp_apply(settings, deployment=, dry_run=)` | what it leaves out goes back to its default; start from `gapp show` |
+| Bring a definition to this gapp | `gapp upgrade` | `gapp_upgrade(deployment=)` | changes the definition only; the next deploy needs `upgrade` |
 
-Two fleet systems, kept apart: the root operations deploy the local
-checkout with a Google Cloud identity (the GCP label is the record) and
-the `ci` operations manage the fleet through GitHub (the fleet repo's
-`gapp/deployments.yaml` and the project's Environment are the record).
-No `ci` operation reads the working directory, so every one takes names.
-Every `ci` result carries `ok` and, when false, `next_step` with a plain
-sentence and the exact fix; relay that instead of improvising one. Every
-`ci` command takes `--json`, which prints that result dict and nothing else.
-Something is "missing" only when GitHub confirmed it; "Couldn't check
-..." means a read failed, in GitHub's words, and is not a verdict.
+## Google Cloud (gcloud on this machine)
+
+| Operation | CLI | MCP tool | Notes |
+|---|---|---|---|
+| Prepare a project | `gapp project setup <project>` | `gapp_project_setup(project)` | once per project, as an Owner. Run it again on a project a deploy says is not set up: it adds only what is missing |
+| Deploy | `gapp deploy [--dry-run] [--rebuild] [--replace-domain] [--upgrade]` | `gapp_deploy(deployment=, dry_run=, rebuild=, replace_domain=, upgrade=)` | from a clone on the definition's ref; needs terraform. Dry run first |
+| What is live | `gapp status` | `gapp_status(deployment=)` | URL, health, the domain's state, which gapp deployed it, the next step |
+| Secrets and their state | `gapp secrets list` | `gapp_secrets_list(deployment=)` | |
+| Is a secret set | `gapp secrets get <secret-name> [--plaintext]` | `gapp_secrets_get(name, plaintext=, deployment=)` | a hash and length unless plaintext is asked for |
+| Set a secret's value | `gapp secrets set <secret-name> [--from-stdin]` | none | prompts; the user runs it. No tool takes a value |
+
+## GitHub Actions (`gh` on this machine)
+
+| Operation | CLI | MCP tool | Notes |
+|---|---|---|---|
+| Install the workflows | `gapp ci init` | `gapp_ci_init()` | in the fleet repo; again after installing another gapp |
+| Whose repos runners deploy | `gapp ci sources add\|remove\|list [<owner>]` | `gapp_ci_sources(action, owner=)` | |
+| Connect a project | `gapp ci projects connect <project>` | `gapp_ci_projects("connect", project)` | once per project; gcloud as an Owner and `gh` as an admin of the fleet repo; after `gapp project setup` |
+| Connected projects | `gapp ci projects list` | `gapp_ci_projects("list")` | |
+| Deploy on a runner | `gapp ci deploy [--upgrade] [--no-watch]` | `gapp_ci_deploy(deployment=, upgrade=, watch=)` | waits for the run and reports what it said |
+| The last run, or what is live | `gapp ci status [--live]` | `gapp_ci_status(deployment=, live=)` | `live` starts a runner |
+
+Every `gapp ci` result has `ok`. When true, `lines` is what to tell the
+user and `next_step.hint` the next command. When false, `next_step.hint`
+says why and what to run, and `refused` says whether nothing was changed
+(true) or something failed part way (false). "Couldn't check ..." means
+a read failed, in GitHub's words; it is not a verdict that something is
+missing.
+
+## This machine
+
+| Operation | CLI | Notes |
+|---|---|---|
+| Profiles | `gapp config profile list\|use\|add\|remove\|rename` | a profile is a separate fleet and Google Cloud login |
+| The login gapp uses | `gapp config account [<email>]` | for the active profile |
 
 When neither surface is present, say so and go to
 `references/environment.md`. Do not invent commands.

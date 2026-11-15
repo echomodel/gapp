@@ -25,29 +25,15 @@ class DummyCloudProvider(CloudProvider):
         self.domain_mappings = {} # (project_id, domain) -> mapping resource dict
         self.unreadable_state = set()  # (bucket, prefix) whose Terraform state cannot be read
         self.services = {}  # (project_id, service_name) -> labels
-        self.label_writes = []  # ("project" | "bucket", target, labels) in call order
+        self.label_writes = []  # ("project", target, labels) in call order
+        self.objects = {}  # (bucket, path) -> text
+        self.apply_fails = None  # a message: the next applies fail with it
 
-    def host(self, project_id: str, deployment: str, version: str = "4", service: bool = True,
-             hosted: bool = True) -> str:
-        """Test setup: a deployment as gapp leaves it, on a project marked
-        gapp=hosted (unless hosted=False). Returns the bucket name."""
-        labels = self.project_labels.setdefault(project_id, {})
-        if hosted:
-            labels["gapp"] = "hosted"
-        dep_labels = {"gapp-deployment": deployment, "gapp-version": version}
-        bucket = f"gapp-{deployment}-{project_id}".lower()
-        self.buckets[bucket] = {"project": project_id, "labels": dict(dep_labels)}
-        if service:
-            self.services[(project_id, deployment)] = dict(dep_labels)
-        return bucket
 
     # -- GCP Foundation --
 
     def enable_api(self, project_id: str, api: str) -> None:
         self.apis_enabled.add((project_id, api))
-
-    def bucket_exists(self, project_id: str, bucket_name: str) -> bool:
-        return bucket_name in self.buckets
 
     def create_bucket(self, project_id: str, bucket_name: str) -> None:
         self.buckets[bucket_name] = {"project": project_id, "labels": {}}
@@ -62,41 +48,6 @@ class DummyCloudProvider(CloudProvider):
         self.label_writes.append(("project", project_id, dict(labels)))
         self.project_labels[project_id] = labels
 
-    def list_projects(self, filter_query: Optional[str] = None, limit: Optional[int] = None) -> List[Dict]:
-        """Mimic the subset of gcloud filter syntax gapp uses.
-
-        Supported forms:
-          labels.<key>=<value>     — exact key/value match
-          labels:<key>             — key exists (any value)
-          labels:<prefix>*         — at least one key starts with prefix
-        """
-        def matches(labels: Dict[str, str]) -> bool:
-            if not filter_query:
-                return True
-            q = filter_query.strip()
-            # labels.<key>=<value>
-            if q.startswith("labels.") and "=" in q:
-                key, _, val = q[len("labels."):].partition("=")
-                val = val.strip("'\"")
-                return labels.get(key) == val
-            # labels:<rest>
-            if q.startswith("labels:"):
-                rest = q[len("labels:"):]
-                if rest.endswith("*"):
-                    prefix = rest[:-1]
-                    return any(k.startswith(prefix) for k in labels.keys())
-                # exact key existence
-                return rest in labels
-            return True
-
-        results = []
-        for pid, labels in self.project_labels.items():
-            if not matches(labels):
-                continue
-            results.append({"projectId": pid, "labels": labels})
-            if limit and len(results) >= limit:
-                break
-        return results
 
     # -- Deployment labels on buckets and services --
 
@@ -104,14 +55,16 @@ class DummyCloudProvider(CloudProvider):
         return {name: dict(meta.get("labels") or {}) for name, meta in self.buckets.items()
                 if meta.get("project") == project_id}
 
-    def set_bucket_labels(self, project_id: str, bucket_name: str, labels: Dict[str, str]) -> None:
-        self.label_writes.append(("bucket", bucket_name, dict(labels)))
-        meta = self.buckets.setdefault(bucket_name, {"project": project_id, "labels": {}})
-        meta.setdefault("labels", {}).update(labels)
+    # -- Objects in a bucket --
 
-    def get_service_labels(self, project_id: str, region: str, service_name: str) -> Optional[Dict[str, str]]:
-        labels = self.services.get((project_id, service_name))
-        return dict(labels) if labels is not None else None
+    def read_object(self, bucket_name: str, path: str) -> Optional[str]:
+        return self.objects.get((bucket_name, path))
+
+    def write_object(self, bucket_name: str, path: str, text: str) -> None:
+        if bucket_name not in self.buckets:
+            raise CloudAccessError(f"Could not write gs://{bucket_name}/{path}: the bucket does not exist")
+        self.objects[(bucket_name, path)] = text
+
 
     # -- Custom domains --
 
@@ -144,6 +97,10 @@ class DummyCloudProvider(CloudProvider):
 
     def apply_infrastructure(self, staging_dir: Path, bucket_name: str, state_prefix: str, auto_approve: bool, tfvars: Dict) -> Dict:
         self.last_tfvars = tfvars
+        if self.apply_fails:
+            raise RuntimeError(self.apply_fails)
+        self.buckets.setdefault(tfvars["data_bucket"], {"project": tfvars["project_id"], "labels": {}})["labels"] = dict(
+            tfvars.get("labels") or {})
         self.services[(tfvars["project_id"], tfvars["service_name"])] = dict(tfvars.get("labels") or {})
         outputs = {
             "service_url": f"https://{tfvars['service_name']}.a.run.app",

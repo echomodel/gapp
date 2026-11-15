@@ -11,7 +11,7 @@ from gapp.admin.sdk.cloud.gcp import GCPProvider
 
 CI_HINT = (
     "This is a CI run as {who}, so signing in again does not apply: the error above names what it "
-    "lacks. `gapp ci project setup {project}` grants the deploy identity its roles; run it as a "
+    "lacks. `gapp ci projects connect {project}` grants the deploy identity its roles; run it as a "
     "project Owner, then deploy again."
 )
 
@@ -33,35 +33,40 @@ def test_bucket_labels_are_listed_by_bucket_name(provider):
     assert run.call_args[0][0][:5] == ["storage", "buckets", "list", "--project", "p"]
 
 
-def test_bucket_labels_are_updated_not_replaced(provider):
+def test_an_object_is_read_as_text(provider):
+    with patch.object(provider, "_run_gcloud", return_value=_done(0, "gapp: 4.0.0\n")) as run:
+        assert provider.read_object("gapp-p", "deployments/a/deployed.yaml") == "gapp: 4.0.0\n"
+    assert run.call_args[0][0] == ["storage", "cat", "gs://gapp-p/deployments/a/deployed.yaml"]
+
+
+@pytest.mark.parametrize("said", [
+    "ERROR: (gcloud.storage.cat) The following URLs matched no objects or files:\ngs://gapp-p/x",
+    "ERROR: (gcloud.storage.cat) gs://gapp-p not found: 404.",
+])
+def test_an_object_or_bucket_that_is_not_there_reads_as_none(provider, said):
+    with patch.object(provider, "_run_gcloud", return_value=_done(1, stderr=said)):
+        assert provider.read_object("gapp-p", "x") is None
+
+
+def test_an_object_that_cannot_be_read_is_not_taken_for_a_missing_one(provider):
+    with patch.object(provider, "_run_gcloud", return_value=_done(1, stderr="ERROR: 403 denied")):
+        with pytest.raises(CloudAccessError, match="Could not read gs://gapp-p/x"):
+            provider.read_object("gapp-p", "x")
+
+
+def test_an_object_is_written_from_stdin_and_a_refusal_raises(provider):
     with patch.object(provider, "_run_gcloud", return_value=_done(0)) as run:
-        provider.set_bucket_labels("p", "gapp-a-p", {"gapp-version": "4", "gapp-deployment": "a"})
-    assert run.call_args[0][0] == ["storage", "buckets", "update", "gs://gapp-a-p",
-                                   "--update-labels=gapp-deployment=a,gapp-version=4"]
+        provider.write_object("gapp-p", "x", "text")
+    assert run.call_args[0][0] == ["storage", "cp", "-", "gs://gapp-p/x"] and run.call_args[1]["input"] == "text"
+    with patch.object(provider, "_run_gcloud", return_value=_done(1, stderr="ERROR: 403 denied")):
+        with pytest.raises(CloudAccessError, match="Could not write gs://gapp-p/x"):
+            provider.write_object("gapp-p", "x", "text")
 
 
 def test_a_refused_bucket_listing_raises(provider):
     with patch.object(provider, "_run_gcloud", return_value=_done(1, stderr="ERROR: 403 denied")):
         with pytest.raises(CloudAccessError, match="Could not list the buckets of project 'p'.*403"):
             provider.list_bucket_labels("p")
-
-
-def test_service_labels_come_from_the_service_and_a_missing_service_is_none(provider):
-    out = json.dumps({"metadata": {"labels": {"gapp-version": "4"}}})
-    with patch.object(provider, "_run_gcloud", return_value=_done(0, out)):
-        assert provider.get_service_labels("p", "us-central1", "a") == {"gapp-version": "4"}
-    # gcloud has worded a missing service several ways; every one is "no service", not an error.
-    for missing in (
-        "ERROR: (gcloud.run.services.describe) Cannot find service [a]",
-        "ERROR: (gcloud.run.services.describe) Cannot find service [a]: it could not be found.",
-        "ERROR: (gcloud.run.services.describe) Service [a] not found",
-        "ERROR: (gcloud.run.services.describe) NOT_FOUND: Resource 'a' of kind 'SERVICE' does not exist",
-    ):
-        with patch.object(provider, "_run_gcloud", return_value=_done(1, stderr=missing)):
-            assert provider.get_service_labels("p", "us-central1", "a") is None, missing
-    with patch.object(provider, "_run_gcloud", return_value=_done(1, stderr="ERROR: PERMISSION_DENIED")):
-        with pytest.raises(CloudAccessError, match="PERMISSION_DENIED"):
-            provider.get_service_labels("p", "us-central1", "a")
 
 
 def test_on_a_ci_runner_a_refusal_never_suggests_signing_in(provider, monkeypatch):

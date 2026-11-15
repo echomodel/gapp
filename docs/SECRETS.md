@@ -1,101 +1,115 @@
 # Secrets
 
-gapp manages secrets for a deployed solution by:
+A deployment's definition names the secrets its app reads. The values
+live in Secret Manager, in the deployment's project, and nowhere
+else: the fleet holds a secret's name, never its value.
 
-1. Reading `env: [{secret: ...}]` declarations from `gapp.yaml`.
-2. For each declaration, computing the GCP Secret Manager ID as
-   `<solution>-<short-name>`.
-3. Stamping every secret it creates with the label
-   `gapp-solution=<solution>` so ownership is machine-readable.
-4. Wiring the secret into the Cloud Run service as an env var.
+For each variable that comes from a secret, gapp:
 
-The label is gapp's discovery mechanism. Every operation — list, set,
-validate, materialize — uses a single label-filtered query
-(`gcloud secrets list --filter labels.gapp-solution=<solution>`) to
-enumerate what gapp owns. Secrets in the same project that lack the
-label, or carry a label for a different solution, are not gapp-managed.
+1. Computes the Secret Manager id as `<deployment id>-<secret-name>`.
+2. Labels every secret it creates `gapp-solution=<deployment id>`, so
+   ownership can be read from the secret itself.
+3. Wires the secret into the Cloud Run service as that variable.
+
+The label is how gapp finds its secrets. Every operation uses one
+label-filtered query to list what the deployment owns. A secret in the
+same project without the label, or labelled for another deployment, is
+not the deployment's.
 
 ## Declaring secrets
 
-```yaml
-name: my-app
-env:
-  - name: APP_KEY
-    secret:
-      name: app-key
-      generate: true             # gapp creates + sets a 32-char value on deploy
-
-  - name: API_TOKEN
-    secret:
-      name: api-token            # operator must `gapp secrets set api-token <v>`
+```bash
+gapp env set API_TOKEN --secret
+gapp env set APP_KEY --secret --generate
+gapp env set DB_URL --secret database-url
 ```
 
-Secret IDs are not configurable — they are always `<solution>-<short-name>`.
-Operators set the short name; gapp owns the prefix.
+| Command | The variable reads | Its value |
+|---|---|---|
+| `--secret` | The secret named after the variable: `API_TOKEN` reads `api-token` | You set it: `gapp secrets set api-token` |
+| `--secret <secret-name>` | That secret | You set it |
+| `--secret --generate` | The secret named after the variable | gapp makes a 32-character value at the first deploy, and never again |
+
+In the fleet file that is:
+
+```yaml
+settings:
+  env:
+    API_TOKEN: {secret: api-token}
+    APP_KEY: {secret: app-key, generate: true}
+```
+
+The id in Secret Manager is always `<deployment id>-<secret-name>`. You
+choose the name; gapp owns the prefix.
 
 ## Commands
 
-| Surface | Command | Behavior |
-|---|---|---|
-| CLI | `gapp secrets list` | Show declared secrets, status, and remediation hints. |
-| CLI | `gapp secrets get NAME` | Fetch a secret. Default: hash + length. `--plaintext` prints the value. |
-| CLI | `gapp secrets set NAME [VALUE]` | Set a secret. Without VALUE, prompts (or use `--from-stdin`). |
-| CLI | `gapp secrets list\|get\|set ... --deployment NAME` | The same, for a deployment of your fleet, from any folder (see below). |
-| MCP | `gapp_secret_list` | Same as CLI list, returns structured JSON. |
-| MCP | `gapp_secret_get` | Same as CLI get. |
-| MCP | `gapp_secret_set` | Same as CLI set. |
+| Command | Does |
+|---|---|
+| `gapp secrets list` | The secrets the definition names, the state of each, and what to do about any that is not ready |
+| `gapp secrets get <secret-name>` | Whether it is set, with its length and a hash. `--plaintext` prints the value |
+| `gapp secrets set <secret-name>` | Stores a value, typed at a prompt, or read from stdin with `--from-stdin` |
 
-### A deployment with no folder: `--deployment`
+Each takes `--deployment <name>`, or inside a clone works on the clone's
+deployment. They need gcloud. The value goes from your machine to Secret
+Manager; no runner is involved and nothing is written to the fleet.
 
-Without `--deployment`, the commands work on the app in the current folder: its gapp.yaml says which secrets are declared.
+A secret the definition does not name is refused, with the ones it does
+name listed.
 
-A deployment configured only in the fleet (the app repo has no gapp.yaml), or a copy made with `gapp ci setup --copy-of`, has no folder that describes it. Name it instead:
+The MCP tools `gapp_secrets_list` and `gapp_secrets_get` do the same. No
+tool takes a secret's value: set one from a terminal.
 
-```bash
-gapp secrets list --deployment alerts
-gapp secrets set channels --deployment alerts
+## What `gapp secrets list` shows
+
+One row per secret the definition names:
+
+```
+  Secret       Variable     Generated  In Secret Manager
+  --------------------------------------------------------
+  api-token    API_TOKEN    no         not set
+  app-key      APP_KEY      yes        not set
+  db-url       DB_URL       no         set
+
+  To do before a deploy:
+    api-token has no value. Set it: gapp secrets set api-token --deployment my-app
+
+  Nothing to do:
+    app-key is generated. The next deploy makes it.
 ```
 
-The deployment's id, project and declared secrets are read from the fleet: the fleet-side manifest merged over the app repo's gapp.yaml, which is what a CI deploy uses. The value still goes from your machine to Secret Manager, so this needs gcloud as well as `gh`. No runner is involved and nothing is written to GitHub. A secret the deployment doesn't declare is refused, with the declared ones listed. The MCP tools take the same `deployment` argument.
-
-CLI and MCP are thin wrappers over a single SDK module
-(`gapp.admin.sdk.secrets`). All logic — discovery, classification,
-validation, materialization — lives in the SDK so behavior is
-identical regardless of surface.
-
-## Status values
-
-`gapp secrets list` classifies each declared secret into one of:
-
-| Status | Meaning |
+| Column | Holds |
 |---|---|
-| `ready` | Declared, present in GCP, labeled for this solution. |
-| `missing` | Declared, not present in GCP. Operator must run `gapp secrets set`. |
-| `missing-generate` | Declared with `generate: true`, not yet present. `gapp deploy` will create it. |
-| `unattached` | Declared, a secret with the expected ID exists in GCP, but it has no `gapp-solution` label. |
-| `conflict` | Declared, a secret with the expected ID exists in GCP labeled for a different solution. |
-| `no-project` | Solution exists locally but no GCP project is resolved yet. Run `gapp setup`. |
+| Generated | From the definition: whether gapp makes the value |
+| In Secret Manager | The secret's state in Google Cloud, and nothing else |
+
+| In Secret Manager | `status` in `--json` | Meaning |
+|---|---|---|
+| set | `ready` | It has a value, and is labelled for this deployment |
+| not set | `missing` | No such secret. A generated one is made by the next deploy; any other stops a deploy until you set it |
+| unlabelled | `unattached` | A secret with that id exists and has no `gapp-solution` label |
+| another deployment's | `conflict` | A secret with that id exists, labelled for another deployment |
+
+It says nothing about the running service: a value set after the last
+deploy reaches the app at the next deploy.
 
 Plus a separate `orphans` list: secrets in GCP labeled for this solution
-that have no matching declaration in `gapp.yaml`.
+that the definition does not name.
 
 ## Worked example: declared vs. labeled in GCP
 
 A combined walkthrough that exercises every status in one shot. The
-solution `my-app` declares three secrets in `gapp.yaml`. The same GCP
+deployment `my-app` names three secrets in its definition. The same GCP
 project hosts three secrets, two of them labeled for this solution.
 
-### Manifest
+### The definition's settings
 
 ```yaml
-name: my-app
-env:
-  - name: APP_KEY
-    secret: { name: app-key }
-  - name: API_TOKEN
-    secret: { name: api-token }
-  - name: DB_PASSWORD
-    secret: { name: db-password }
+settings:
+  env:
+    APP_KEY: {secret: app-key}
+    API_TOKEN: {secret: api-token}
+    DB_PASSWORD: {secret: db-password}
 ```
 
 ### State of GCP Secret Manager
@@ -106,12 +120,11 @@ env:
 | `my-app-api-token` | _(none)_ |
 | `my-app-stale-key` | `my-app` |
 
-So: 3 declared in yaml, 3 in GCP. Of the GCP set, 2 carry the gapp
-label. One labeled secret matches a yaml entry (`app-key`); the
-other labeled secret has no yaml counterpart (`stale-key`). The
-unlabeled GCP secret happens to share the conventional ID for the
-yaml entry `api-token`. The third yaml entry (`db-password`) has no
-GCP counterpart at all.
+So: 3 named in the definition, 3 in GCP. Of the GCP set, 2 carry the
+gapp label. One labeled secret matches a named one (`app-key`); the
+other labeled secret is named nowhere (`stale-key`). The unlabeled GCP
+secret happens to share the conventional ID for `api-token`. The third
+(`db-password`) has no GCP counterpart at all.
 
 ### What `gapp secrets list` produces
 
@@ -125,7 +138,7 @@ Project: my-project
   api-token            API_TOKEN                 unattached         no
   db-password          DB_PASSWORD               missing            no
 
-  Orphans (labeled in GCP but not declared in gapp.yaml):
+  Orphans (labeled in GCP but not declared in the definition):
     - my-app-stale-key
 
 ========================================================================
@@ -152,7 +165,7 @@ Resolution options
       $ gcloud secrets delete my-app-stale-key --project=my-project
 
     Option: Declare it again, as an env var read from it
-      $ gapp manifest env set <ENV_VAR> --secret stale-key
+      $ gapp env set <ENV_VAR> --secret stale-key
 ```
 
 ### Reading the output
@@ -162,18 +175,18 @@ Resolution options
 | `app-key` declared, labeled match in GCP | row in `secrets[]`, `status: ready` |
 | `api-token` declared, unlabeled GCP secret at the conventional ID | row in `secrets[]`, `status: unattached`, plus a hint with adopt-or-delete options |
 | `db-password` declared, no GCP secret at all | row in `secrets[]`, `status: missing`, no hint (the resolution is `gapp secrets set`) |
-| `my-app-stale-key` labeled for solution but not in yaml | listed in `orphans[]`, plus a hint with delete-or-re-declare options |
+| `my-app-stale-key` labeled for solution but not in the definition | listed in `orphans[]`, plus a hint with delete-or-re-declare options |
 
 The unlabeled `my-app-api-token` is **not** listed as its own line in
 `orphans[]` — by design, it is considered untracked by gapp. It only
-surfaces because the manifest happens to declare a secret whose
+surfaces because the definition happens to name a secret whose
 conventional ID matches it.
 
 The integrated case shows two important properties:
 
-1. **`secrets[]` is yaml-driven; `orphans[]` is GCP-driven.** Each
-   row in `secrets[]` corresponds 1:1 to a yaml declaration. Each
-   ID in `orphans[]` corresponds to a labeled secret with no yaml
+1. **`secrets[]` is definition-driven; `orphans[]` is GCP-driven.** Each
+   row in `secrets[]` corresponds 1:1 to a variable the definition names. Each
+   ID in `orphans[]` corresponds to a labeled secret with no definition
    match. The two compartments never duplicate.
 2. **Hints fire only for non-trivial states.** `ready` and `missing`
    produce no hints (the action is obvious or the action is a single
@@ -187,7 +200,7 @@ isolation, with the exact commands to resolve it.
 
 These are the cases where a deploy can fail or `gapp secrets list`
 shows something other than `ready`. They are not expected in a
-solution that has been managed exclusively by gapp v3+ from the
+solution that has been managed exclusively by gapp from the
 start. They typically arise from one of:
 
 - A solution last deployed under an older gapp version that did not
@@ -195,7 +208,7 @@ start. They typically arise from one of:
 - A secret created manually with `gcloud secrets create` outside gapp.
 - A solution rename without a corresponding cleanup of secrets in the
   old name's namespace.
-- A `gapp.yaml` declaration that was deleted without removing the
+- A declaration that was deleted without removing the
   underlying GCP secret.
 
 In each scenario below, the placeholder solution name is `my-app`,
@@ -219,11 +232,11 @@ This is the expected state for a freshly cloned solution before any
 secret has been provisioned. Resolution:
 
 ```
-gapp secrets set api-token <value>
+gapp secrets set api-token
 ```
 
-Or, if the manifest declares `generate: true`, simply run `gapp deploy`
-— the deploy pipeline materializes generated secrets automatically.
+Or, if the variable was set with `--generate`, run `gapp deploy`: the
+deploy makes generated secrets itself.
 
 ### 2. `unattached` — secret exists but lacks the gapp-solution label
 
@@ -292,7 +305,7 @@ Resolution options
     not 'my-app'. gapp will not modify another solution's secret.
 
     Option: Give this secret another name than 'api-token' (gapp stores it as my-app-<name>)
-      $ gapp manifest env set API_TOKEN --secret <new-name>
+      $ gapp env set API_TOKEN --secret <new-name>
 
     Option: Re-label for 'my-app' if 'other-app' is gone (manual takeover)
       $ gcloud secrets update my-app-api-token \
@@ -306,15 +319,11 @@ the same project happening to land on the same computed ID.
 
 Two paths forward:
 
-**Rename in `gapp.yaml`.** Cleanest answer if both solutions are
-active. Pick a different short name; gapp will compute a different
-secret ID and the collision goes away:
+**Give the secret another name.** Cleanest answer if both are active.
+gapp then computes a different secret ID and the collision goes away:
 
-```yaml
-env:
-  - name: API_TOKEN
-    secret:
-      name: my-app-api-token   # was just `api-token`; now namespaced
+```
+gapp env set API_TOKEN --secret my-app-api-token
 ```
 
 The secret ID becomes `my-app-my-app-api-token`. Ugly but unambiguous.
@@ -340,7 +349,7 @@ gcloud secrets update my-app-api-token \
 ### 4. `orphan` — labeled for this solution but not declared
 
 ```
-  Orphans (labeled in GCP but not declared in gapp.yaml):
+  Orphans (labeled in GCP but not declared in the definition):
     - my-app-old-key
 
 Resolution options
@@ -353,10 +362,10 @@ Resolution options
       $ gcloud secrets delete my-app-old-key --project=my-project
 
     Option: Declare it again, as an env var read from it
-      $ gapp manifest env set <ENV_VAR> --secret old-key
+      $ gapp env set <ENV_VAR> --secret old-key
 ```
 
-This is a leftover. The yaml declaration that produced this secret
+This is a leftover. The declaration that produced this secret
 was deleted at some point but the secret itself wasn't cleaned up.
 It's labeled gapp-managed, so gapp tracks it; it just has nothing to
 do.
@@ -370,9 +379,9 @@ genuinely no longer needed:
 gcloud secrets delete my-app-old-key --project=my-project
 ```
 
-**Re-add.** If the declaration was deleted by mistake, re-add it
-under `env:` with a `secret.name` of `old-key`. The next deploy will
-re-wire the existing value into the Cloud Run service.
+**Re-add.** If the variable was removed by mistake, set it again:
+`gapp env set <ENV_VAR> --secret old-key`. The next deploy wires the
+existing value into the Cloud Run service.
 
 ## Why the strict label model
 

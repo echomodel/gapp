@@ -3,16 +3,108 @@
 Notable changes to gapp. Versions are git tags (`vX.Y.Z`); the version
 source is `gapp/__init__.py`.
 
-## Unreleased
+## 4.0.0rc14 (pre-release of 4.0.0)
+
+One fleet. Every deployment is defined once, in your fleet, and every
+command works from that definition. `docs/INTERFACE.md` lists every
+command, file and MCP tool.
+
+Breaking changes:
+
+- **The fleet.** A deployment's definition (its repo, project, ref, the
+  gapp version that wrote it, and its settings) is kept in your fleet: a
+  file on this machine by default, or `gapp.yaml` at the root of a git
+  repo once you choose one with `gapp fleet use <owner>/<repo>` (any git
+  host; `--create` makes it on GitHub; `gapp fleet use local` brings it
+  back). In a repo, every change is one commit, pushed with the git
+  access the machine has; no CI is involved. `gapp fleet` says where it
+  is. `gapp fleet export [<file>]` copies it out and `gapp fleet import
+  <file>` replaces it, keeping the one it replaced. The file starts with
+  `format: 1`: a gapp that does not know a file's format stops there and
+  changes nothing.
+- **Where state lives.** `gapp project setup` makes one bucket per
+  project, `gapp-<project>`. Each deployment's Terraform state is there,
+  with a record of each deploy: the definition as deployed, the commit,
+  the image, when, by whom and from where. No app can reach it. A
+  deployment's own bucket holds its data only and is made by Terraform.
+  Which gapp last deployed a deployment is read from that record, not
+  from a bucket label. Run `gapp project setup <project>` again on a
+  project set up by an earlier release candidate; a deploy to it is
+  refused until then. State already in a deployment's bucket has to be
+  copied to `gs://gapp-<project>/deployments/<id>/terraform/state/`
+  before its next deploy.
+- **Defining deployments.** `gapp add` (with `--copy-of`), `gapp rename`,
+  `gapp remove`, `gapp list`, `gapp show`, `gapp set`, `gapp unset`, `gapp apis
+  add|remove`, `gapp env set|unset` and `gapp apply <file> [--dry-run]`.
+  None touches the cloud. Each names its deployment with `--deployment`,
+  or inside a clone takes the one its remote has; a folder's name is
+  never used. A refusal changes nothing and exits 2, and every command
+  takes `--json`.
+- **`gapp.yaml` in an app's repo is no longer read**, and `gapp init`,
+  `gapp setup` and `gapp manifest` are gone. gapp reads a repo's
+  Dockerfile or Procfile, and the `env` block of its `app.json` if it has
+  one. Everything a `gapp.yaml` held is a setting of the definition.
+- **`app.json`** (Heroku's format, unextended) lets an app list the
+  variables it reads. A deploy reads it from the commit it builds, and
+  nothing else reads it. The definition wins: a `value` there is the
+  default for a variable the definition does not set, and a variable it
+  needs with no default (required, or `generator: "secret"`) refuses
+  the deploy with the command that sets it. A variable the definition
+  sets that `app.json` does not list gets a warning. `gapp deploy
+  --dry-run` shows all of it.
+- **`gapp secrets list`** shows each secret's state in Secret Manager in
+  its own column, with what to do listed under the table. The statuses
+  are `ready`, `missing`, `unattached` and `conflict`; whether a secret
+  is generated is the separate `generate` field (`missing-generate` and
+  `no-project` are gone).
+- **Deploying.** `gapp project setup <project>` prepares a project, once.
+  `gapp deploy` builds the definition's ref from a clone of its repo,
+  checked out at that ref, and deploys with the definition's settings. It
+  takes no `--project` and no `--ref`: a release, a rollback and trying a
+  branch are `gapp set ref`. The first deploy creates the deployment's
+  bucket.
+- **gapp versions.** A definition records the gapp version that wrote it,
+  a runner installs exactly that version, and the deployment's bucket
+  records the version that last deployed it. `gapp upgrade` brings a
+  definition to the installed gapp's version and changes nothing else;
+  the next deploy applies it and needs `--upgrade`, which is refused when
+  no upgrade is pending. `gapp show`, `gapp status` and `gapp deploy
+  --dry-run` say in advance.
+- **`gapp status` and `gapp secrets list|get|set`** take their deployment
+  from the fleet. `status` reports which gapp last deployed it and
+  whether the next deploy would apply an upgrade. `secrets set` no longer
+  takes the value as an argument: it prompts, or reads stdin with
+  `--from-stdin`.
+- **`gapp ci`** is everything gapp does with GitHub Actions, and nothing
+  else in gapp needs it. It works on a fleet kept in a GitHub repo, whose
+  workflows read `gapp.yaml` there: `gapp ci init`, `gapp ci projects
+  connect <project>` (which needs `gapp project setup <project>` first),
+  `gapp ci projects list`, `gapp ci sources add|remove|list`, `gapp ci
+  deploy [--upgrade] [--no-watch]` and `gapp ci status [--live]`. A run
+  is started with the deployment's name and nothing else. `gapp ci`
+  never changes the fleet. Gone: `gapp ci setup`, `gapp ci project
+  setup`, `gapp ci rename`, `gapp ci list`, `gapp ci manifest`, the
+  register workflow and `gapp/deployments.yaml`. Run `gapp ci init` again
+  to install the two workflows this gapp uses.
+- **`gapp config`** is `gapp config profile list|use|add|remove|rename`
+  and `gapp config account [<email>]`. A profile is a separate fleet and
+  a separate Google Cloud login on one machine. `gapp config discovery`
+  is gone: nothing searches cloud projects for deployments any more.
+- **MCP tools** are one per command, named after it, with the same
+  arguments (`gapp_add`, `gapp_show`, `gapp_apply`, `gapp_deploy`,
+  `gapp_status`, `gapp_fleet_use`, `gapp_ci_deploy` and the rest). Gone:
+  `gapp_init`, `gapp_setup`, `gapp_schema`, `gapp_manifest_*`,
+  `gapp_user`, `gapp_ci_setup`, `gapp_ci_project_setup`,
+  `gapp_ci_rename`, `gapp_ci_list`, `gapp_ci_manifest` and
+  `gapp_ci_trigger`. `gapp_secret_list` and `gapp_secret_get` are now
+  `gapp_secrets_list` and `gapp_secrets_get`, and no tool takes a
+  secret's value.
+
+Other changes:
 
 - Releasing no longer needs a tag pushed by hand: a workflow tags the
   commit and publishes the GitHub release when the version changes on
   `main`.
-- The advice `gapp secrets list` prints for an orphan or a conflicting
-  secret names the `gapp manifest env set` command where it said to edit
-  gapp.yaml by hand, and no longer says the declaration is missing "in
-  gapp.yaml": with `--deployment` it can come from the fleet's settings,
-  and the advice then says where either can be changed.
 
 ## 4.0.0rc13 (pre-release of 4.0.0)
 

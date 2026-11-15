@@ -1,134 +1,132 @@
 ---
 name: gapp
-description: "Deploy, redeploy, set up and operate apps that serve HTTP (web servers, APIs, MCP servers) on Google Cloud Run with gapp, in any language that runs in a container, from any machine: a workstation, a CI runner or a cloud agent session. Use when asked to deploy, host, ship, publish or redeploy an app to Google Cloud or Cloud Run, push changes to production, set up CI/CD or GitHub Actions deploys, deploy the same app to several projects, or check a deployed app's status or URL, add a custom domain, or manage its secrets when the app runs on Cloud Run or its repo has a gapp.yaml file. Also use when the machine lacks the gapp CLI, a Google Cloud login or terraform, and for any question about hosting an app on Google Cloud, even if gapp is not named."
-compatibility: Needs the gapp admin tools (the gapp CLI, or the gapp plugin's MCP tools) plus gcloud for most steps; terraform for local deploys; GitHub access for CI deploys. The skill detects what is missing and routes around it.
+description: "Deploy, redeploy, set up and operate apps that serve HTTP (web servers, APIs, MCP servers) on Google Cloud Run with gapp, in any language that runs in a container, from any machine: a workstation, a CI runner or a cloud agent session. Use when asked to deploy, host, ship, publish or redeploy an app to Google Cloud or Cloud Run, push changes to production, set up CI/CD or GitHub Actions deploys, deploy the same app to several projects, or check a deployed app's status or URL, add a custom domain, change its settings, or manage its secrets when the app runs on Cloud Run or is a deployment in a gapp fleet. Also use when the machine lacks the gapp CLI, a Google Cloud login or terraform, and for any question about hosting an app on Google Cloud, even if gapp is not named."
+compatibility: Needs the gapp CLI (or its MCP tools). gcloud for project setup, secrets, status and a deploy from this machine; terraform for that deploy; the GitHub CLI for deploys on GitHub Actions. The skill detects what is missing and routes around it.
 ---
 
 # gapp
 
-gapp deploys containerized Python services to Cloud Run with
-Terraform. The solution stays cloud-agnostic: no GCP imports, no
-framework dependencies. A small `gapp.yaml` is the only touchpoint.
-gapp handles the container build, Secret Manager, data volumes,
-domain mapping, and IAM.
+gapp deploys apps that serve HTTP to Cloud Run with Terraform. A
+deployment is defined once, in the user's **fleet**, and every command
+works from that definition. The app's repo stays cloud-agnostic: it
+needs a Procfile or a Dockerfile, optionally an `app.json` listing its
+variables, and nothing that names gapp. gapp
+handles the container build, Secret Manager, a data volume, the domain
+and access.
+
+| Word | Meaning |
+|---|---|
+| Fleet | The record of the user's deployments: one file, on their machine or in a git repo |
+| Definition | One deployment's entry: its name, repo, project, the ref a deploy builds, and its settings |
+| Deployment | The running service with its data and secrets |
 
 ## Invariants
 
-These hold in every phase, so keep them in mind before reading on.
-
-- Every gapp operation is idempotent and reports a `next_step`.
-  Trust it; it is derived from live cloud state, not local memory.
-- The build ships `git archive HEAD`, so uncommitted changes are
-  never deployed and a dirty tree blocks the build. Images are
-  tagged by commit SHA; an existing image skips the build.
-- Secret values live in Secret Manager, never in the repo. Only
-  names go in `gapp.yaml`.
-- gapp does not do auth, users, or tokens. That is the solution's
-  own framework's job; point the user at that framework's docs.
-- One repo is one solution is one Cloud Run service.
-- Two fleet systems, kept apart: the root commands deploy the local
-  checkout (Google Cloud identity, GCP labels) and `gapp ci` manages
-  the fleet through GitHub (the fleet repo's `gapp/deployments.yaml`,
-  one entry per deployment). `ci` never uses gcloud (one command
-  excepted) and never reads the working directory, so it takes names.
-  Neither reads the other's state. Every `ci` result carries `ok` and,
-  when false, `next_step` with a plain sentence and the exact fix.
-- Never put a credential into chat, a file in the repo, or a Cloud
-  Run env var as a workaround. Never run an interactive login the
-  user cannot complete from this machine.
-- Guide step by step. Assess where the user is, do the next phase,
-  stop.
+- **Everything comes from the definition.** A deploy, a status and a
+  secret all take the project, the id and the settings from it. Nothing
+  searches the cloud, and `gapp.yaml` in an app's repo is not read.
+  The app's `app.json` only fills in defaults, at deploy; the definition
+  always wins (`references/settings.md`).
+- **Name the deployment with `deployment`** (`--deployment <name>`), or
+  run inside a clone of its repo, where gapp finds it by the clone's
+  remote. A folder's name is never used.
+- **A refusal changes nothing.** The CLI exits 2 and a tool returns
+  `{"refused": true, "message": ...}`. The message names the command
+  that fixes it; relay it, do not work around it.
+- **Never hand-edit the fleet file.** Change a definition with `gapp
+  set`, `gapp env set`, `gapp apis` or `gapp apply`.
+- **What a deploy builds is the definition's ref.** No deploy takes a
+  ref. To release, roll back or try a branch: `gapp set ref <ref>`,
+  then deploy. From a clone, the clone must be on that ref.
+- **The build ships `git archive HEAD`**, so uncommitted changes are
+  not deployed. Images are tagged by commit; an image that exists is
+  not built again.
+- **Secret values live in Secret Manager only.** The fleet holds names.
+  No tool takes a secret's value: the user sets one from a terminal
+  with `gapp secrets set <secret-name>`. Never put a credential in
+  chat, a repo, the fleet or a plain variable.
+- **gapp upgrades are explicit.** A definition records its gapp
+  version. `gapp upgrade` then a deploy with `--upgrade`; never pass
+  `--upgrade` unless `gapp show` or a dry run says one is pending.
+- **gapp does not do auth, users or tokens.** That is the app's own
+  framework's job.
+- **One deployment is one Cloud Run service.**
+- Never run an interactive login the user cannot complete from this
+  machine. Guide step by step: find where the user is, do the next
+  step, stop.
 
 ## Where to read next
 
 | When you need | Read |
 |---|---|
 | To decide whether this machine can do the step, install what is missing, or hand off a login | `references/environment.md` |
-| To write or change `gapp.yaml`, judge candidacy, make an MCP server cloud-ready | `references/manifest.md` |
-| The phases in detail: init, GCP foundation, secrets, deploy, verify, custom domain, ongoing ops | `references/lifecycle.md` |
-| Secrets: declaring them, readiness before a deploy, setting and reading values | `references/secrets.md` |
+| To judge whether a repo fits, make it startable, choose its settings, make an MCP server cloud-ready | `references/settings.md` |
+| The steps in detail: define, prepare the project, secrets, deploy, verify, domain, CI, upgrades | `references/lifecycle.md` |
+| Secrets: naming them, readiness before a deploy, setting and reading values | `references/secrets.md` |
 | The CLI command and MCP tool for each operation | `references/tools.md` |
+
+The repo's `docs/INTERFACE.md` is the full reference for every command
+and for the fleet file.
 
 ## Two tool surfaces, one SDK
 
-gapp admin operations come two ways and return the same structured
-result, because both call the same SDK:
+- the `gapp` CLI, wherever gapp is installed; every command takes
+  `--json`
+- the MCP tools named `gapp_*`, when `gapp-mcp` is registered
 
-- the `gapp` CLI, available wherever gapp is installed
-- the gapp plugin's MCP tools, named `gapp_*`, available when the
-  plugin is loaded
-
-When both are loaded, prefer the MCP tools: they return structured
-results instead of text to parse. Hand off only commands that exist:
-the CLI and MCP columns in `references/tools.md` are the complete
-list. Triggering a CI deploy is the one operation with a third
-route: any GitHub tool that can dispatch a workflow and read the run
-does the same job as `gapp ci deploy`, which matters in sessions
-where `gh` is not logged in but GitHub tools are.
+They return the same result. Prefer the tools when both are present.
+Use only commands and tools that exist: `references/tools.md` is the
+complete list.
 
 ## Step 0: probe before you plan
 
-Decide by capability, not by guessing where you are. A cloud agent
-container that someone provisioned with a service-account key and
-terraform is a perfectly good deploy machine; a laptop with nothing
-installed is not. Check what is actually installed, logged in, and
-configured. The probes below are hints, not a script: adapt them to
-the shell and tools in front of you, and skip any whose answer you
-already know.
+Decide by what this machine has, not by guessing where you are.
 
-| Capability | How to find out (examples) | Needed by |
+| Capability | How to find out | Needed by |
 |---|---|---|
-| gapp admin tools | MCP tools named `gapp_*` are present; or the `gapp` command is on PATH (`gapp --version`, `which gapp`, `pipx list`). Missing: install it, pinned to the release, without asking | every phase after init |
-| GCP identity | an active account in `gcloud auth list`; or application default credentials, for example `GOOGLE_APPLICATION_CREDENTIALS` set or `gcloud auth application-default print-access-token` succeeding | setup, secrets, status, local deploy |
-| terraform | `terraform version` or `which terraform` | local deploy only |
-| GitHub write access | `gh auth status`; or GitHub tools in this agent that can read repos and dispatch workflows | CI wiring, CI deploys |
-| Interactive login possible | a hint, not a verdict: `CLAUDE_CODE_REMOTE`, `CI`, or `CODESPACES` set usually means no browser; when unsure, ask the user | preparing this machine versus handing off |
-| Solution state | `gapp.yaml` exists; then `gapp status` when an identity exists, else read the file | which phase is next |
-| Fleet | `gapp ci init` (the fleet repo set on this machine, or how to get one) and `gapp ci list` (its deployments); `gapp status` never mentions CI | whether deploys can go through Actions |
+| gapp | `gapp_*` tools present, or `gapp --version`. Missing: install it, pinned to the release, without asking | everything |
+| The fleet | `gapp fleet` (where it lives, how many deployments) and `gapp list` | everything |
+| This deployment | `gapp show` in the clone, or `gapp show --deployment <name>` | which step is next |
+| Google Cloud login | an active account in `gcloud auth list`, or application default credentials | project setup, secrets, status, a deploy from here |
+| terraform | `terraform version` | a deploy from here, status |
+| GitHub | `gh auth status` | `gapp ci` |
+| A browser login is possible | a hint, not a verdict: `CLAUDE_CODE_REMOTE`, `CI` or `CODESPACES` set usually means no; when unsure, ask | preparing this machine or handing off |
 
-Then match what the next step needs against what you found. The
-needs table and the three outcomes (proceed; install missing tooling
-and configure, on any machine, without asking; or route an identity
-step elsewhere) are in `references/environment.md`. Read it whenever
-anything is missing. Only a login ever needs the user; tools never do.
+Then match what the next step needs against what you found
+(`references/environment.md`). Only a login ever needs the user; tools
+never do.
 
-## Lifecycle router
+## Which step is next
 
-`gapp status` tells you where a solution is. Read `next_step.action`
-and go to that phase; do not walk the user through phases they have
-already completed.
+| What you find | Next |
+|---|---|
+| The repo has no Dockerfile and no Procfile | Make it startable (`references/settings.md`) |
+| `gapp show` says the repo has no deployment | Define it: `gapp add` |
+| The project is not set up (a deploy or dry run says so) | `gapp project setup <project>`, as an Owner |
+| `gapp secrets list` shows a secret that is not ready | Have the user set it |
+| Defined, never deployed (`gapp status`) | Deploy |
+| Deployed | Ongoing operations: redeploy, settings, domain, upgrade |
 
-| State | `initialized` | project | `pending` | Next |
-|---|---|---|---|---|
-| Not initialized | false | none | n/a | Phase 1 init |
-| Initialized, no project | true | none | true | Phase 2 setup |
-| Has project, not deployed | true | set | true | Phase 4 deploy (after Phase 3 if secrets are declared) |
-| Deployed | true | set | false | Ongoing operations |
+`gapp deploy --dry-run` says what a deploy would do and whether an
+upgrade is pending, and changes nothing. Use it before a first deploy.
 
-Phases, each detailed in `references/lifecycle.md`:
+## Two ways to deploy
 
-1. **Init**: confirm the repo is a fit, write a minimal `gapp.yaml`
-   (`references/manifest.md`), register the solution. Needs no
-   cloud identity, so it is always doable here.
-2. **GCP foundation**: pick or reuse a project, optionally bind it
-   to an env, run setup. Needs a project-admin identity.
-3. **Secrets**: list declared secrets, set the missing ones
-   (`references/secrets.md`). Needs an identity with Secret Manager
-   access.
-4. **Deploy**: locally (gapp, identity, terraform, clean tree) or
-   through GitHub Actions as a deployment of a fleet (GitHub access
-   only). Recommend the fleet for anyone who wants to deploy from more
-   than one machine, from agents, or to more than one project.
-5. **Verify and hand over**: status, service URL, admin credential
-   retrieval, custom domain if wanted.
+| | From this machine | On a runner |
+|---|---|---|
+| Command | `gapp deploy` | `gapp ci deploy` |
+| Needs here | gcloud, terraform, a clone on the definition's ref | `gh` only |
+| One-time setup | `gapp project setup <project>` | that, plus the fleet in a GitHub repo, `gapp ci init`, `gapp ci sources add <owner>`, `gapp ci projects connect <project>` |
+
+Both run the same deploy from the same definition. Recommend runners
+to anyone who wants to deploy from more than one machine or from an
+agent session.
 
 ## Handing off when this machine cannot do a step
 
-When a step needs something this machine does not have and cannot
-get, do everything that does not need it first (write and commit
-`gapp.yaml`, push, add the deployment to the fleet), then give the user a
-handoff they can act on without re-deriving anything: which machine,
-the exact commands or tool calls in order, and what to report back.
-The template is in `references/environment.md`. One-time steps
-(setup, `gapp ci project setup`) are the usual reason; once a project
-trusts the fleet, deploys never need the workstation again.
+Do everything that does not need the missing thing first, then give
+the user a handoff they can act on without working anything out: which
+machine, the exact commands in order, and what to report back. The
+template is in `references/environment.md`. The one-time Owner steps
+(`gapp project setup`, `gapp ci projects connect`) and setting a
+secret's value are the usual reasons.

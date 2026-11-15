@@ -1,13 +1,10 @@
-# Read-only status workflow for the deployments of this fleet repo.
-# Installed and kept current by `gapp ci init`; gapp owns this file, so do
-# not edit it. `gapp ci status <name> --live` dispatches it: the first job
-# reads the deployment's entry from gapp/deployments.yaml, and the second
-# runs in the GitHub Environment named after the entry's project,
-# authenticates exactly as a deploy does (the project's existing deploy
-# identity, through Workload Identity Federation), runs `gapp status` for
-# the deployment's id and reports the result as one line the operator's
-# command prints. Nothing is written anywhere: live state is asked of the
-# project, never stored in this repository.
+# Reports what is live for one deployment of this fleet, on a runner.
+# Installed by `gapp ci init`; gapp owns this file, so do not edit it.
+# `gapp ci status --live` starts it. The first job reads the deployment's
+# project and gapp version from gapp.yaml; the second runs in the GitHub
+# Environment named after the project, signs in as a deploy does, and runs
+# `gapp ci runner status <deployment>`, which prints the answer as one line
+# the command that asked reads. Nothing is written anywhere.
 
 name: Status of a gapp deployment
 run-name: Status ${{ inputs.deployment }} ${{ inputs.request_id }}
@@ -16,12 +13,12 @@ on:
   workflow_dispatch:
     inputs:
       request_id:
-        description: Set by gapp to find the run this dispatch created (it ends the run name); leave empty when dispatching by hand
+        description: Set by gapp to find the run it started (it ends the run name); leave empty when starting one by hand
         required: false
         default: ''
         type: string
       deployment:
-        description: Deployment to ask about (an entry in gapp/deployments.yaml)
+        description: The deployment to ask about (a name under deployments in gapp.yaml)
         required: true
         type: string
 
@@ -34,31 +31,45 @@ jobs:
     permissions:
       contents: read
     outputs:
-      project: ${{ steps.entry.outputs.project }}
-      id: ${{ steps.entry.outputs.id }}
+      project: ${{ steps.definition.outputs.project }}
+      gapp_ref: ${{ steps.definition.outputs.gapp_ref }}
     steps:
       - uses: actions/checkout@v4
         with:
-          sparse-checkout: gapp/deployments.yaml
+          sparse-checkout: gapp.yaml
           sparse-checkout-cone-mode: false
 
-      - name: Read the entry
-        id: entry
+      - name: Read the definition
+        id: definition
         env:
           DEPLOYMENT: ${{ inputs.deployment }}
-          DATA_FILE: gapp/deployments.yaml
+          FLEET_FILE: gapp.yaml
         run: |
           set -euo pipefail
           # The Go yq pre-installed on GitHub's Ubuntu runners. strenv() reads
           # the input from the environment, so it is never interpolated here.
-          if [ "$(yq 'has(strenv(DEPLOYMENT))' "$DATA_FILE")" != "true" ]; then
-            echo "gapp-status: '$DEPLOYMENT' is not a deployment in $DATA_FILE. Set it up first: gapp ci setup $DEPLOYMENT --repo <owner>/<repo> --project <project>"
+          if [ ! -f "$FLEET_FILE" ]; then
+            echo "gapp-status: this repo has no $FLEET_FILE, so it holds no fleet. Keep your fleet here with: gapp fleet use $GITHUB_REPOSITORY"
             exit 1
           fi
-          entry='.[strenv(DEPLOYMENT)]'
+          format="$(yq '.format // ""' "$FLEET_FILE")"
+          if [ "$format" != "1" ]; then
+            echo "gapp-status: $FLEET_FILE is in format '${format:-none}', and this workflow reads format 1. Install the workflows of the gapp that wrote it: gapp ci init"
+            exit 1
+          fi
+          if [ "$(yq '.deployments // {} | has(strenv(DEPLOYMENT))' "$FLEET_FILE")" != "true" ]; then
+            echo "gapp-status: '$DEPLOYMENT' is not a deployment in this fleet. Define it first: gapp add $DEPLOYMENT --project <project> --repo <owner>/<repo>"
+            exit 1
+          fi
+          definition='.deployments[strenv(DEPLOYMENT)]'
+          version="$(yq "$definition | .gapp // \"\"" "$FLEET_FILE")"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(rc[0-9]+)?$ ]]; then
+            echo "gapp-status: '$DEPLOYMENT' names gapp '${version:-none}', which is not a gapp version."
+            exit 1
+          fi
           {
-            echo "project=$(yq "$entry | .project" "$DATA_FILE")"
-            echo "id=$(yq "$entry | .id // strenv(DEPLOYMENT)" "$DATA_FILE")"
+            echo "project=$(yq "$definition | .project // \"\"" "$FLEET_FILE")"
+            echo "gapp_ref=v$version"
           } >> "$GITHUB_OUTPUT"
 
   status:
@@ -80,34 +91,41 @@ jobs:
           [ -n "$WIF_PROVIDER" ] || missing="GAPP_WIF_PROVIDER"
           [ -n "$DEPLOY_SA" ] || missing="${missing:+$missing and }GAPP_DEPLOY_SERVICE_ACCOUNT"
           if [ -n "$missing" ]; then
-            echo "gapp-status: the Environment '$ENVIRONMENT' of this fleet repo has no $missing variable, so this run cannot authenticate to GCP. Run: gapp ci project setup $ENVIRONMENT"
+            echo "gapp-status: the Environment '$ENVIRONMENT' of this repo has no $missing, so this run cannot sign in to Google Cloud. Run: gapp ci projects connect $ENVIRONMENT"
             exit 1
           fi
 
-      - name: Authenticate to Google Cloud
+      - name: Check out the fleet
+        uses: actions/checkout@v4
+        with:
+          path: fleet
+          sparse-checkout: gapp.yaml
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Sign in to Google Cloud
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ vars.GAPP_WIF_PROVIDER }}
           service_account: ${{ vars.GAPP_DEPLOY_SERVICE_ACCOUNT }}
 
-      # `gapp status` reports a custom domain's mapping with `gcloud beta run
-      # domain-mappings describe` (the GA group is Cloud Run for Anthos only).
+      # The domain's state is read with `gcloud beta run domain-mappings`.
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v2
         with:
           install_components: beta
 
-      # `gapp status` reads the deployment's Terraform outputs from its state
-      # in the project's bucket, so the runner needs terraform, as a deploy does.
+      # What is live is read from the deployment's Terraform outputs.
       - name: Install Terraform
         uses: hashicorp/setup-terraform@v3
 
       - name: Install gapp
-        run: pip install --quiet "gapp @ git+https://github.com/__GAPP_REPO__.git@__GAPP_REF__"
-
-      - name: Ask gapp status
         env:
+          GAPP_REF: ${{ needs.resolve.outputs.gapp_ref }}
+        run: pip install --quiet "gapp @ git+https://github.com/__GAPP_REPO__.git@${GAPP_REF}"
+
+      - name: Ask gapp
+        env:
+          GAPP_FLEET_FILE: ${{ github.workspace }}/fleet/gapp.yaml
           DEPLOYMENT: ${{ inputs.deployment }}
-          SOLUTION_ID: ${{ needs.resolve.outputs.id }}
-          PROJECT: ${{ needs.resolve.outputs.project }}
-        run: gapp ci runner status
+        run: gapp ci runner status "$DEPLOYMENT"
