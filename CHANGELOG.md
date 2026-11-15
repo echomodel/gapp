@@ -29,6 +29,17 @@ Changed:
 Unchanged: every version move is still `gapp upgrade` and then a deploy
 with `--upgrade`, and a deploy builds only with the definition's version.
 
+Added:
+
+- **`gapp deployments list`**: every deployment in the fleet with the gapp
+  of its definition and of its last deploy, and where it stands against
+  this gapp. Filters (`--name`, `--repo`, `--project`, `--below`) narrow
+  the fleet before anything is read; `--limit` caps the reads.
+  `--below <version>` shows what a newer gapp would leave behind.
+- **`gapp deployments scan`**: every deployment gapp has a deploy record
+  for in its projects, found without naming them, and the commands that
+  add back the ones the fleet does not hold.
+
 ## 4.0.0rc16 (pre-release of 4.0.0)
 
 Added:

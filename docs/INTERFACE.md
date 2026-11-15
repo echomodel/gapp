@@ -245,6 +245,16 @@ Each changes one definition and nothing else.
 | `gapp secrets set <secret-name> [--from-stdin]` | Stores a value, typed at a prompt or piped | gcloud |
 | `gapp secrets get <secret-name> [--plaintext]` | Shows whether it is set; the value only with `--plaintext` | gcloud |
 
+### Deployments
+
+What is deployed, read from Google Cloud: each deployment's deploy record
+in its project's gapp bucket. Nothing is changed.
+
+| Command | Does | Needs |
+|---|---|---|
+| `gapp deployments list [--name <pattern>] [--repo <owner/repo>] [--project <project>] [--below <version>] [--limit <n>]` | Every deployment in the fleet with the gapp of its definition and of its last deploy, and where it stands against this gapp: current, upgrade available, upgrade pending, upgrade required, too old for this gapp, or install a newer gapp. The filters narrow the fleet before anything is read; each deployment left costs one small read, at most `--limit`, in name order. `--below` keeps those on an older gapp than the version given, so `--below` a new gapp's `COMPATIBLE_FROM` shows what it would leave behind. A record that cannot be read is reported on its row | gcloud, read access to the projects |
+| `gapp deployments scan [--project <project>]` | Every deployment gapp has a deploy record for, in one project or in every project set up for gapp that the login can see, and whether the fleet holds it. For one it does not hold, the commands that add it back. The projects are found by one search Google Cloud filters on its side, so the cost follows the number of gapp projects, not every project the login can see; more than 50 is refused, with `--project` to narrow | gcloud, read access to the projects |
+
 ### GitHub Actions (optional)
 
 Everything about GitHub Actions is under `gapp ci`, and nothing else knows
@@ -301,7 +311,7 @@ deployment is always the `deployment` argument.
 `gapp_project_setup`, `gapp_add`, `gapp_upgrade`, `gapp_rename`, `gapp_remove`, `gapp_list`, `gapp_show`,
 `gapp_set`, `gapp_unset`, `gapp_apis`, `gapp_env_set`, `gapp_env_unset`,
 `gapp_apply`, `gapp_deploy`, `gapp_status`, `gapp_secrets_list`,
-`gapp_secrets_get`, `gapp_ci_init`, `gapp_ci_projects`,
+`gapp_secrets_get`, `gapp_deployments_list`, `gapp_deployments_scan`, `gapp_ci_init`, `gapp_ci_projects`,
 `gapp_ci_deploy`, `gapp_ci_status`,
 `gapp_ci_sources`, `gapp_fleet`, `gapp_fleet_use`,
 `gapp_fleet_export`, `gapp_fleet_import`.
@@ -311,13 +321,11 @@ no tool for `gapp secrets set`: a value is typed at its prompt or piped in.
 
 ## Not in 4.0.0, and addable without a break
 
-- Removing a definition (`gapp remove <name>`).
 - Several services in one deployment (reserved above).
 - Fleet changes by pull request.
 - Secrets from a machine with no gcloud.
 - A shortcut for choosing among several deployments of one repo.
 - Reading more of a repo, such as a Compose file.
-- Rebuilding a lost fleet from what is deployed (`gapp fleet recover`).
 - Disconnecting a project from the runners (`gapp ci projects disconnect`).
 - A command that describes gapp to an agent (`gapp guide`).
 - A gapp version chosen per deployment ahead of an upgrade, and upgrading

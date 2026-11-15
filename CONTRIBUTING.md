@@ -696,6 +696,36 @@ are in [docs/CI.md](docs/CI.md). The rules to keep:
 - **Workflows pass inputs through the environment**, never into a
   script.
 
+### Listing and scanning deployments
+
+`gapp deployments list` and `gapp deployments scan`
+(`gapp/admin/sdk/deployments.py`) are the two collection commands over
+what is deployed. They only report: neither refuses a deployment for its
+version, and neither changes anything. Their cost is bounded before
+anything is read, and these rules keep it that way:
+
+- **`list` starts from the fleet.** The fleet gives every name for
+  nothing, so every filter that can (name, repo, project) runs on it
+  first, and only the deployments left cost a read: one small deploy
+  record each, read in parallel. `--limit` caps those reads.
+- **`list` orders by name and nothing else.** Ordering by anything that
+  is only known once deployed (its version, when it was deployed) means
+  reading every record before the first row, which makes `--limit`
+  pointless and the command O(n) whatever is asked. Do not add it.
+- **`scan` starts from the cloud,** because it is for what the fleet does
+  not hold. It finds gapp's projects with one search for the mark `gapp
+  project setup` puts on a project, which Google Cloud filters on its side: the
+  cost follows the number of gapp projects, not every project the login
+  can see, which in a large organization is thousands. Nobody using it
+  needs to know about the mark. Above `SCAN_MAX_PROJECTS` it stops and
+  asks for `--project` rather than running long.
+- **A read that fails is reported on its row** ("couldn't read"), never
+  taken for "not deployed", and the other rows still come back.
+- **Recovery lives here, not under `gapp fleet`.** It is about what runs,
+  and `gapp fleet` is about the fleet as a whole. `scan` prints the same
+  commands `gapp remove` prints for adding a deployment back
+  (`definitions.add_again`).
+
 ### The runner hand-off
 
 A runner deploy involves two gapp versions on purpose: the workflows come

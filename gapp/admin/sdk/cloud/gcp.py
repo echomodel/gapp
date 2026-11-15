@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import time
+from urllib.parse import quote
 from pathlib import Path
 from typing import Optional, List, Dict
 
@@ -174,6 +175,28 @@ class GCPProvider(CloudProvider):
             self._raise_crm_error(project_id, "write labels of", code, body)
 
 
+    def search_projects_by_label(self, key: str, value: str) -> List[str]:
+        """Resource Manager's project search, with the label as its query, so
+        Google Cloud returns only the matching projects, a page at a time."""
+        found, page = [], ""
+        while True:
+            url = f"{_CRM_PROJECTS}:search?query=" + quote(f"labels.{key}:{value}") + (f"&pageToken={quote(page)}" if page else "")
+            token = self.get_auth_token()
+            res = subprocess.run(["curl", "-s", "-w", "\n%{http_code}", "-H", f"Authorization: Bearer {token}", url],
+                                 capture_output=True, text=True)
+            if res.returncode != 0:
+                raise CloudAccessError(f"Could not reach Cloud Resource Manager to find gapp's projects "
+                                       f"(curl exit {res.returncode}): {(res.stderr or '').strip()}")
+            body, _, code = res.stdout.rpartition("\n")
+            if code.strip() != "200":
+                raise CloudAccessError(f"Could not search for gapp's projects (HTTP {code.strip()}): "
+                                       f"{_api_error_message(body)}\n{self._identity_hint()}")
+            data = json.loads(body or "{}")
+            found += [p["projectId"] for p in data.get("projects", []) if p.get("state", "ACTIVE") == "ACTIVE"]
+            page = data.get("nextPageToken") or ""
+            if not page:
+                return sorted(found)
+
     # -- Deployment labels on buckets and services --
 
     def list_bucket_labels(self, project_id: str) -> Dict[str, Dict[str, str]]:
@@ -206,6 +229,18 @@ class GCPProvider(CloudProvider):
             f"Could not read gs://{bucket_name}/{path} (gcloud exit {res.returncode}): "
             f"{(res.stderr or '').strip()}\n{self._identity_hint()}"
         )
+
+    def list_object_paths(self, bucket_name: str, pattern: str) -> List[str]:
+        res = self._run_gcloud(["storage", "ls", f"gs://{bucket_name}/{pattern}"], capture_output=True, text=True)
+        if res.returncode != 0:
+            said = (res.stderr or "").lower()
+            if _says_not_found(said) or "matched no objects" in said or "404" in said:
+                return []
+            raise CloudAccessError(
+                f"Could not list gs://{bucket_name}/{pattern} (gcloud exit {res.returncode}): "
+                f"{(res.stderr or '').strip()}\n{self._identity_hint()}")
+        prefix = f"gs://{bucket_name}/"
+        return sorted(line.strip()[len(prefix):] for line in res.stdout.splitlines() if line.strip().startswith(prefix))
 
     def write_object(self, bucket_name: str, path: str, text: str) -> None:
         res = self._run_gcloud(["storage", "cp", "-", f"gs://{bucket_name}/{path}"],
