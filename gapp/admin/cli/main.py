@@ -733,10 +733,9 @@ def _definition_command(json_out, nothing, fn, *args, **kwargs):
 @click.option("--project", default=None, metavar="PROJECT", help="The Google Cloud project it runs in.")
 @click.option("--repo", default=None, metavar="REPO", help="Where its code is. Inside a clone: the clone's remote.")
 @click.option("--ref", default=None, metavar="REF", help="The branch, tag or commit a deploy builds. Left out: the default branch.")
-@click.option("--id", "id_", default=None, metavar="ID", help="The prefix on its cloud resources. Left out: the name.")
 @click.option("--copy-of", default=None, metavar="EXISTING", help="Make it a second deployment of that one's repo, with its settings.")
 @_JSON
-def add_cmd(name, project, repo, ref, id_, copy_of, json_out):
+def add_cmd(name, project, repo, ref, copy_of, json_out):
     """Define a deployment. Touches no cloud.
 
     \b
@@ -746,7 +745,7 @@ def add_cmd(name, project, repo, ref, id_, copy_of, json_out):
     """
     from gapp.admin.sdk import definitions
     try:
-        result = definitions.add(name, project=project, repo=repo, ref=ref, id=id_, copy_of=copy_of)
+        result = definitions.add(name, project=project, repo=repo, ref=ref, copy_of=copy_of)
     except definitions.Refused as e:
         _refused(e, json_out)
     if json_out:
@@ -775,8 +774,7 @@ def rename_cmd(old, new, json_out):
 def remove_cmd(name, json_out):
     """Take a deployment out of the fleet. Touches no cloud.
 
-    What it had deployed stays in Google Cloud. The output names it, and
-    the command that defines the deployment again.
+    What it had deployed stays in Google Cloud, and the output names it.
     """
     from gapp.admin.sdk import definitions
     try:
@@ -794,11 +792,10 @@ def remove_cmd(name, json_out):
     if left["secrets"]:
         click.echo(f"  the secrets {', '.join(left['secrets'])}")
     click.echo("gapp has no command to take them down yet.")
-    click.echo(f"To define it again, on the same resources: {result['restore']}")
-    if result["backup"]:
-        click.echo(f"Its settings are in the fleet as it was: gapp fleet import {result['backup']}")
-    else:
-        click.echo("Its settings are in the fleet repo's commit before this one.")
+    click.echo("A deployment added with these commands uses them again, data included:")
+    for command in result["add_again"]:
+        click.echo(f"  {command}")
+    click.echo("That does not bring back its settings. Set them again before you deploy.")
 
 
 @main.command("show")

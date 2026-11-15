@@ -98,7 +98,7 @@ def _settings(definition: dict) -> dict:
 
 @_guard
 def add(name: str | None = None, *, project: str | None = None, repo: str | None = None,
-        ref: str | None = None, id: str | None = None, copy_of: str | None = None,
+        ref: str | None = None, copy_of: str | None = None,
         cwd: Path | None = None) -> dict:
     """Define a deployment. Touches no cloud."""
     where, deployments = _load()
@@ -131,16 +131,8 @@ def add(name: str | None = None, *, project: str | None = None, repo: str | None
             f"'{name}' is already a deployment ({held.get('repo') or 'no repo'}, on {held.get('project')}). "
             f"Pick another name, or change that one with the settings commands."
         )
-    if id:
-        id = fleet.validate_name(id)
-        if len(id) > fleet.ID_MAX:
-            raise Refused(f"An id is at most {fleet.ID_MAX} characters; '{id}' is {len(id)}.")
-        clash = [n for n, d in deployments.items() if d.get("project") == project and d.get("id") == id]
-        if clash:
-            raise Refused(f"The id '{id}' is already used on {project}, by '{clash[0]}'.")
-    else:
-        id = fleet.allocate_id(deployments, name, project)
-    definition = entryfile.new_definition(id=id, project=project, repo=repo, ref=ref)
+    id_ = fleet.allocate_id(deployments, name, project)
+    definition = entryfile.new_definition(id=id_, project=project, repo=repo, ref=ref)
     if source is not None:
         copied = _settings(source)
         copied.pop("domain", None)
@@ -164,27 +156,28 @@ def _repo(repo: str) -> str:
 def remove(name: str) -> dict:
     """Take a deployment out of the fleet. Touches no cloud.
 
-    What it had deployed stays as it is, and the result names it, with the
-    command that defines it again under the same id.
+    What it had deployed stays as it is. The result names it, and the
+    commands that define a deployment on those resources again; they do
+    not bring its settings back.
     """
     where, deployments = _load()
     name = lookup.find(deployments, name=name).name
     definition = deployments.pop(name)
-    backup = fleetstore.write(deployments, where, f"gapp: remove {name}")
+    _save(where, deployments, f"gapp: remove {name}")
     id_, project = definition.get("id"), definition.get("project")
     env = (definition.get("settings") or {}).get("env") or {}
     secrets = sorted({f"{id_}-{spec['secret']}" for spec in env.values()
                       if isinstance(spec, dict) and spec.get("secret")})
-    restore = f"gapp add {name} --project {project} --id {id_}"
+    again = f"gapp add {id_} --project {project}"
     if definition.get("repo"):
-        restore += f" --repo {definition['repo']}"
+        again += f" --repo {definition['repo']}"
     if definition.get("ref"):
-        restore += f" --ref {definition['ref']}"
+        again += f" --ref {definition['ref']}"
     return _result(
         name, [{"key": "deployment", "before": "defined", "after": "removed"}], where,
         removed=definition,
         left={"project": project, "service": id_, "bucket": f"gapp-{id_}-{project}".lower(), "secrets": secrets},
-        restore=restore, backup=str(backup) if backup else None,
+        add_again=[again] + ([f"gapp rename {id_} {name}"] if name != id_ else []),
     )
 
 

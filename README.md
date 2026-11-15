@@ -295,8 +295,10 @@ gapp config profile list
 
 - One deployment is one Cloud Run service.
 - A deployment's region is `us-central1`.
-- A definition is removed only by importing a fleet without it; nothing
-  takes a deployment's cloud resources down.
+- `gapp remove <name>` takes a deployment out of your fleet and leaves
+  what it deployed in Google Cloud. Nothing takes those resources down,
+  and a deployment of the same name added later on that project uses
+  them again.
 - `gapp ci` works with a fleet repo on github.com.
 
 ## For agents

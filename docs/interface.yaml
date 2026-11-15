@@ -14,7 +14,7 @@ commands:
 
   add:
     args: ["[name]"]
-    options: [--project, --repo, --ref, --id, --copy-of]
+    options: [--project, --repo, --ref, --copy-of]
   upgrade: {one: true}
   rename: {args: ["<old>", "<new>"]}
   remove: {args: ["<name>"]}

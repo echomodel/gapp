@@ -18,9 +18,10 @@ command that fixes it.
 | Copy it out or in | `gapp fleet export [<file>]`, `gapp fleet import <file>` | `gapp_fleet_export()`, `gapp_fleet_import(fleet)` | the tools take and return the document, not a path. Import replaces the whole fleet: get the user's yes |
 | Every definition | `gapp list` | `gapp_list()` | name, repo, project, ref, gapp version, "upgrade available" |
 | One definition | `gapp show` | `gapp_show(deployment=)` | `effective`: every setting a deploy would use and where it comes from; `settings`: the object `apply` takes |
-| Define a deployment | `gapp add [<name>] --project <p> [--repo <r>] [--ref <r>] [--id <id>]` | `gapp_add(name=, project=, repo=, ref=, id=)` | in a clone, name and repo come from its remote |
+| Define a deployment | `gapp add [<name>] --project <p> [--repo <r>] [--ref <r>]` | `gapp_add(name=, project=, repo=, ref=)` | in a clone, name and repo come from its remote |
 | A second deployment of a repo | `gapp add <name> --copy-of <existing> [--project <p>] [--ref <r>]` | `gapp_add(name=, copy_of=, project=, ref=)` | copies settings except the domain |
 | Rename | `gapp rename <old> <new>` | `gapp_rename(old, new)` | the name only; the id and cloud resources stay |
+| Remove from the fleet | `gapp remove <name>` | `gapp_remove(name)` | the fleet only: the service, bucket and secrets stay in Google Cloud, and nothing in gapp takes them down. Confirm with the user first |
 | Set or clear a value | `gapp set <key> <value>`, `gapp unset <key>` | `gapp_set(key, value, deployment=)`, `gapp_unset(key, deployment=)` | keys: `ref`, `repo`, `public`, `domain`, `start`, `memory`, `cpu`, `max_instances` |
 | Extra APIs | `gapp apis add <api>`, `gapp apis remove <api>` | `gapp_apis(action, api, deployment=)` | |
 | A variable | `gapp env set <NAME> <value>` / `--data-path [<sub>]` / `--secret [<secret-name>] [--generate]`, `gapp env unset <NAME>` | `gapp_env_set(name, value=, data_path=, secret=, generate=, deployment=)`, `gapp_env_unset(name, deployment=)` | one kind per variable |

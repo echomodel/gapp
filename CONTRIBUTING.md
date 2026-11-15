@@ -644,7 +644,12 @@ For development, use an editable install: `pipx install -e .`
 - Moving the fleet to another repo means `gapp ci projects connect`
   again for each project, because the trust names the repo.
 - A session with no gcloud login cannot set a secret's value.
-- Nothing removes a definition or takes a deployment's resources down.
+- Nothing takes a deployment's resources down. `gapp remove` changes the
+  fleet only and prints no teardown commands, because a partial list
+  would read as a complete one. A deployment added later under the same
+  id on that project uses what was left, data included.
+- The operator never chooses a deployment's id. gapp picks it at `gapp
+  add`, so the id stays out of the commands people type.
 
 ## Open questions
 
