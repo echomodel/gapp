@@ -187,11 +187,19 @@ class GappSDK:
             project_id = fleet.validate_project(project_id)
         except fleet.FleetRefusal as e:
             raise Refused(e.message) from e
+        on = self.provider.enabled_apis(project_id)
+        added = []
         for api in FOUNDATION_APIS:
+            if on is not None and api in on:
+                continue
             self.provider.enable_api(project_id, api)
-        self.provider.ensure_build_permissions(project_id)
+            if on is not None:
+                added.append(api)
+        granted = self.provider.ensure_build_permissions(project_id)
+        added += [f"Cloud Build's {role}" for role in granted or []]
         bucket = record.bucket(project_id)
         if bucket not in self.provider.list_bucket_labels(project_id):
+            added.append(f"the bucket {bucket}")
             try:
                 self.provider.create_bucket(project_id, bucket)
             except Exception as e:
@@ -204,7 +212,8 @@ class GappSDK:
         marked = labels.get(HOSTED_LABEL) == HOSTED_VALUE
         if not marked:
             self.provider.set_project_labels(project_id, {**labels, HOSTED_LABEL: HOSTED_VALUE})
-        return {"project": project_id, "apis": list(FOUNDATION_APIS), "bucket": bucket, "was_set_up": marked}
+        return {"project": project_id, "apis": list(FOUNDATION_APIS), "bucket": bucket, "was_set_up": marked,
+                "added": added, "checked": on is not None and granted is not None}
 
     def _clone_of(self, definition: dict, name: str, cwd: Path) -> Path:
         """The clone a deploy builds from: the folder's git root, whose remote must be the definition's repo."""

@@ -221,7 +221,7 @@ class FakeGitHub:
                                   "log": log, "name": name, "created_at": created, "hidden_polls": hidden_polls}
         self._next_run = max(self._next_run, int(run_id) + 1)
 
-    def _runs_list(self, repo, workflow, cmd):
+    def _runs_list(self, repo, workflow, cmd, query=""):
         runs = []
         for i, r in sorted(self.runs.items(), key=lambda kv: int(kv[0]), reverse=True):
             if r["repo"] != repo or r["workflow"] != workflow:
@@ -232,7 +232,12 @@ class FakeGitHub:
             runs.append((i, r))
         if "--jq" in cmd:
             return _Result(0, f"{runs[0][0]}\n" if runs else "null\n")
-        return _Result(0, json.dumps({"total_count": len(runs), "workflow_runs": [
+        params = dict(kv.partition("=")[::2] for kv in query.split("&") if kv)
+        total = len(runs)
+        if "per_page" in params:
+            size, page = int(params["per_page"]), int(params.get("page", 1))
+            runs = runs[(page - 1) * size: page * size]
+        return _Result(0, json.dumps({"total_count": total, "workflow_runs": [
             {"id": int(i), "name": r["name"], "display_title": r["name"], "status": r["status"],
              "conclusion": r["conclusion"], "created_at": r["created_at"],
              "html_url": f"https://github.com/{repo}/actions/runs/{i}"} for i, r in runs]}))
@@ -342,7 +347,7 @@ class FakeGitHub:
                 return _Result(0, json.dumps({"name": rest[2], "value": self.variables[(repo, rest[2])]}))
             return _Result(1, "", "gh: Not Found (HTTP 404)")
         if rest[:2] == ["actions", "workflows"] and rest[3:] == ["runs"]:
-            return self._runs_list(repo, rest[2], cmd)
+            return self._runs_list(repo, rest[2], cmd, query)
         if rest[:2] == ["actions", "runs"] and len(rest) == 3:
             return self._run_get(rest[2], cmd)
         if rest[:2] == ["actions", "runs"] and rest[3:] == ["jobs"]:

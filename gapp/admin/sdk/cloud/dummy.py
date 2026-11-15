@@ -40,8 +40,15 @@ class DummyCloudProvider(CloudProvider):
     def create_bucket(self, project_id: str, bucket_name: str) -> None:
         self.buckets[bucket_name] = {"project": project_id, "labels": {}}
 
-    def ensure_build_permissions(self, project_id: str) -> None:
-        self.iam_bindings.append({"project": project_id, "roles": ["viewer", "writer"]})
+    def enabled_apis(self, project_id: str):
+        return {api for project, api in self.apis_enabled if project == project_id}
+
+    def ensure_build_permissions(self, project_id: str):
+        had = {role for b in self.iam_bindings if b["project"] == project_id for role in b["roles"]}
+        added = [role for role in ("viewer", "writer") if role not in had]
+        if added:
+            self.iam_bindings.append({"project": project_id, "roles": added})
+        return added
 
     def get_project_labels(self, project_id: str) -> Dict[str, str]:
         return self.project_labels.get(project_id, {})

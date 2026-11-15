@@ -93,9 +93,17 @@ class CloudProvider(ABC):
         """Create a new GCS bucket."""
         pass
 
+    def enabled_apis(self, project_id: str) -> Optional[set]:
+        """The APIs turned on in the project, or None when they cannot be listed."""
+        return None
+
     @abstractmethod
-    def ensure_build_permissions(self, project_id: str) -> None:
-        """Ensure the Cloud Build service account has necessary roles."""
+    def ensure_build_permissions(self, project_id: str) -> Optional[List[str]]:
+        """Ensure the Cloud Build service account has necessary roles.
+
+        Returns the roles it had to grant, or None when it could not tell
+        which it already had (it grants them all then).
+        """
         pass
 
     @abstractmethod

@@ -90,7 +90,7 @@ def test_status_and_its_live_form(ci):
 
 def test_init_and_projects_print_their_lines_and_next_step(ci):
     assert _run("init")[1].splitlines() == ["The workflows in acme/fleet are this gapp's already. Nothing changed.",
-                                            "Next: gapp ci projects connect <project>"]
+                                            "Next: gapp ci deploy --deployment my-app"]
     assert _run("projects", "list")[1].splitlines() == ["Runners in acme/fleet can deploy to:", "  my-proj"]
 
 
@@ -112,3 +112,23 @@ def test_no_ci_command_changes_the_fleet(ci):
                  ["projects", "list"]):
         assert _run(*argv)[0] == 0, argv
     assert ci.files[(FLEET, entryfile.FILE_NAME)] == before
+
+
+def test_init_names_the_project_that_is_not_connected_yet(ci):
+    ci.define(FLEET, "other", "me/other", "other-proj")
+    assert _run("init")[1].splitlines()[-1] == "Next: gapp ci projects connect other-proj"
+
+
+def test_init_names_connecting_when_the_environments_cannot_be_read(ci):
+    ci.fail_with["environments"] = "gh: HTTP 403: request blocked"
+    assert _run("init")[1].splitlines()[-1] == "Next: gapp ci projects connect <project>"
+
+
+def test_add_on_a_fleet_in_a_github_repo_names_a_deploy_on_a_runner(ci, monkeypatch):
+    from gapp.admin.sdk import lookup
+    monkeypatch.setattr(lookup, "clone_remotes", lambda path: {})
+    res = CliRunner().invoke(main, ["add", "new-app", "--project", "my-proj", "--repo", "me/new-app"])
+    out = res.output
+    assert res.exit_code == 0, (res.output, res.exception)
+    assert "Deploy it on a runner: gapp ci deploy --deployment new-app" in out
+    assert "or from a clone of its repo: gapp deploy --deployment new-app" in out

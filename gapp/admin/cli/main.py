@@ -108,7 +108,8 @@ def config_profile_list(json_out):
 def config_profile_use(name, json_out):
     """Switch to a profile. Refused when it does not exist."""
     _config_end(lambda c: c.use_profile(name), json_out, lambda r: [
-        f"Profile '{r['profile']}' is active." if r["changed"] else f"Profile '{r['profile']}' was already active."])
+        f"Profile '{r['profile']}' is active." if r["changed"] else f"Profile '{r['profile']}' was already active.",
+        "Next: gapp list"])
 
 
 @config_profile_group.command("add")
@@ -246,6 +247,13 @@ def status(sdk: GappSDK, deployment, json_out):
         click.echo(result["next_step"])
 
 
+def _columns(rows: list[list[str]], indent: str = "  ") -> list[str]:
+    """Rows as lines, each column padded to its widest cell (the last one is not)."""
+    widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]) - 1)] if rows else []
+    return [indent + "  ".join([cell.ljust(widths[i]) for i, cell in enumerate(row[:-1])] + [row[-1]]).rstrip()
+            for row in rows]
+
+
 @main.command("list")
 @click.option("--json", "json_out", is_flag=True, help="Machine-readable output.")
 @click.pass_obj
@@ -265,11 +273,11 @@ def list_cmd(sdk: GappSDK, json_out):
     if not rows:
         click.echo("It holds no deployments yet. Define one: gapp add <name> --project <project>")
         return
-    width = max(len(r["deployment"]) for r in rows)
-    for r in rows:
-        note = f"  ({UPGRADE_NOTES[r['upgrade']]})" if r["upgrade"] else ""
-        click.echo(f"  {r['deployment']:<{width}}  {r['repo'] or 'no repo'}  on {r['project']}  "
-                   f"builds {r['ref'] or 'the default branch'}  gapp {r['gapp']}{note}")
+    for line in _columns([[r["deployment"], r["repo"] or "no repo", f"on {r['project']}",
+                           f"builds {r['ref'] or 'the default branch'}",
+                           f"gapp {r['gapp']}" + (f"  ({UPGRADE_NOTES[r['upgrade']]})" if r["upgrade"] else "")]
+                          for r in rows]):
+        click.echo(line)
 
 
 @main.group("deployments")
@@ -326,10 +334,11 @@ def deployments_list_cmd(name, repo, project, below, limit, json_out):
         if not rows:
             return lines + ["No deployment matches." if r["read"] else "The fleet holds no deployment that matches."]
         width = max(len(row["deployment"]) for row in rows)
-        for row in rows:
-            deployed = row["deployed"] or ("unknown" if row["problem"] else "not deployed")
-            lines.append(f"  {row['deployment']:<{width}}  {row['project']}  definition {row['definition']}  "
-                         f"deployed {deployed}  {row['stands']}")
+        table = _columns([[row["deployment"], row["project"], f"definition {row['definition']}",
+                           f"deployed {row['deployed'] or ('unknown' if row['problem'] else 'not deployed')}",
+                           row["stands"]] for row in rows])
+        for row, line in zip(rows, table):
+            lines.append(line)
             if row["problem"]:
                 lines.append(f"  {'':<{width}}  {row['problem']}")
         if r["limited"]:
@@ -368,11 +377,12 @@ def deployments_scan_cmd(project, json_out):
                 lines.append(f"{p['project']}: nothing deployed by gapp.")
                 continue
             lines.append(f"{p['project']}:")
-            for d in p["deployments"]:
-                if d["in_fleet"]:
-                    lines.append(f"  {d['id']}  gapp {d['deployed']}  in your fleet as {d['in_fleet']}")
-                else:
-                    lines.append(f"  {d['id']}  gapp {d['deployed']}  not in your fleet. Add it back with:")
+            table = _columns([[d["id"], f"gapp {d['deployed']}",
+                               f"in your fleet as {d['in_fleet']}" if d["in_fleet"]
+                               else "not in your fleet. Add it back with:"] for d in p["deployments"]])
+            for d, line in zip(p["deployments"], table):
+                lines.append(line)
+                if not d["in_fleet"]:
                     lines += [f"      {c}" for c in d["add_again"]]
         lines.append(f"{r['found']} found, {r['not_in_fleet']} not in your fleet ({r['fleet']}).")
         return lines
@@ -407,8 +417,17 @@ def project_setup_cmd(sdk: GappSDK, project, json_out):
     if json_out:
         click.echo(json_mod.dumps(result, indent=2, default=str))
         return
-    click.echo(f"{result['project']} is ready for gapp deployments."
-               + (" It already was; anything missing was added." if result["was_set_up"] else ""))
+    project = result["project"]
+    if not result["was_set_up"]:
+        click.echo(f"{project} is ready for gapp deployments.")
+    elif result["added"]:
+        click.echo(f"{project} was already set up for gapp deployments. Added what was missing: "
+                   f"{', '.join(result['added'])}.")
+    elif result["checked"]:
+        click.echo(f"{project} was already set up for gapp deployments. Nothing was missing.")
+    else:
+        click.echo(f"{project} was already set up for gapp deployments. gapp could not list what it already "
+                   f"had, so it turned on its APIs and Cloud Build's permissions again.")
     click.echo(f"Next: gapp add <name> --project {result['project']}")
 
 
@@ -668,6 +687,7 @@ def fleet_use_cmd(target, create, json_out):
         return
     if not result["moved"]:
         click.echo(f"Your fleet is already kept in {result['where']}.")
+        click.echo("Next: gapp list")
         return
     if result["created"]:
         click.echo("The repo was created, private.")
@@ -678,6 +698,7 @@ def fleet_use_cmd(target, create, json_out):
                     + (", carried across." if result.get("carried") else "."))
     if result.get("backup"):
         click.echo(f"The file it was in is gone; a copy is kept as {result['backup']}.")
+    click.echo("Next: gapp add <name> --project <project>" if not count else "Next: gapp list")
 
 
 def _fleet_end(fn, json_out, say):
@@ -837,7 +858,14 @@ def add_cmd(name, project, repo, ref, copy_of, json_out):
                f"building {d.get('ref') or 'the default branch'}.")
     if result["copied_from"]:
         click.echo(f"Its settings are {result['copied_from']}'s, without the domain.")
-    click.echo(f"Nothing is deployed yet. Deploy it from a clone of its repo: gapp deploy --deployment {result['deployment']}")
+    from gapp.admin.sdk import ci, fleetstore
+    name = result["deployment"]
+    where = fleetstore.location()
+    if where.kind == "github" and ci.GITHUB_REPO_RE.match(where.repo or "") and d.get("repo"):
+        click.echo(f"Nothing is deployed yet. Deploy it on a runner: gapp ci deploy --deployment {name}")
+        click.echo(f"  or from a clone of its repo: gapp deploy --deployment {name}")
+    else:
+        click.echo(f"Nothing is deployed yet. Deploy it from a clone of its repo: gapp deploy --deployment {name}")
 
 
 @main.command("rename")
@@ -874,10 +902,9 @@ def remove_cmd(name, json_out):
         click.echo(f"  the secrets {', '.join(left['secrets'])}")
     click.echo(f"  its Terraform state and the record of its deploys, under {left['state']}")
     click.echo("gapp has no command to take them down yet.")
-    click.echo("A deployment added with these commands uses them again, data included:")
+    click.echo("A deployment added with these commands uses them again, data included, with its settings:")
     for command in result["add_again"]:
         click.echo(f"  {command}")
-    click.echo("That does not bring back its settings. Set them again before you deploy.")
     if result["see_removed"]:
         kept = ("The change that removed it" if result["see_removed"].startswith("git ")
                 else "Your fleet as it was")
