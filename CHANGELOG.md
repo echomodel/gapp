@@ -26,6 +26,14 @@ Changed:
   runner refuses workflows older than its `COMPATIBLE_FROM`. Run `gapp ci
   init` after upgrading to install workflows that pass it.
 
+- **What to do when Google Cloud refuses names the account.** Every
+  command says which account gapp acted as and which case applies: no
+  account signed in, no login on this machine for the account `gapp
+  config account` names, an expired or revoked login, or a signed-in
+  account that can't reach the project. `gapp deployments scan` that
+  finds no project says whose login searched, and `gapp deployments
+  list` explains unreadable deploy records once, under the list.
+
 Unchanged: every version move is still `gapp upgrade` and then a deploy
 with `--upgrade`, and a deploy builds only with the definition's version.
 
@@ -39,6 +47,13 @@ Added:
 - **`gapp deployments scan`**: every deployment gapp has a deploy record
   for in its projects, found without naming them, and the commands that
   add back the ones the fleet does not hold.
+
+Fixed:
+
+- **A machine without gcloud got a Python traceback** from every command
+  that calls Google Cloud. It now gets: "gapp needs the Google Cloud CLI
+  (gcloud), and it isn't installed on this machine", with how to install
+  it and that `gapp ci deploy` deploys without it.
 
 ## 4.0.0rc16 (pre-release of 4.0.0)
 

@@ -20,6 +20,45 @@ class ProjectNotFoundError(CloudAccessError):
     """The project does not exist, or the current identity cannot see it."""
 
 
+GCLOUD_MISSING = (
+    "gapp needs the Google Cloud CLI (gcloud), and it isn't installed on this machine. Install it, "
+    "sign in with `gcloud auth login`, then run this again. To deploy without it, use `gapp ci deploy`."
+)
+
+
+class GcloudNotInstalled(CloudAccessError):
+    """gcloud is not on this machine's PATH, so no Google Cloud call can be made."""
+
+    def __init__(self):
+        super().__init__(GCLOUD_MISSING)
+
+
+def access_hint(account: Optional[str], signed_in: bool, project_id: Optional[str] = None,
+                configured: bool = False) -> str:
+    """What to do when Google Cloud refused a call or could not be asked.
+
+    Names the account gapp acted as, so the operator never has to guess
+    whether the login is missing, belongs to another account, or simply
+    cannot reach the project. `configured` says the account came from
+    `gapp config account` rather than gcloud's own active account.
+    """
+    if not account:
+        return "No Google Cloud account is signed in on this machine. Sign in with `gcloud auth login`, then run this again."
+    if not signed_in:
+        whose = f"gapp is set to use {account} (`gapp config account`)" if configured else f"gcloud is set to use {account}"
+        return (f"{whose}, and this machine has no Google Cloud login for it. Sign in with `gcloud auth login {account}`, "
+                f"or point gapp at another account with `gapp config account <email>`, then run this again.")
+    reach = f"which can't reach project '{project_id}'" if project_id else "which Google Cloud refused here"
+    return (f"Signed in to Google Cloud as {account}, {reach}. Sign in as an account that can (`gcloud auth login`), "
+            f"or point gapp at one with `gapp config account <email>`.")
+
+
+def expired_login_hint(account: str) -> str:
+    """What to do when the login exists but gcloud can no longer get a token for it."""
+    return (f"The Google Cloud login for {account} can't be used: it has expired or was revoked. "
+            f"Sign in again with `gcloud auth login {account}`, then run this again.")
+
+
 def on_ci_runner() -> bool:
     """True on a GitHub Actions runner, where gapp acts as the deploy identity."""
     return os.environ.get("GITHUB_ACTIONS") == "true"
@@ -192,6 +231,14 @@ class CloudProvider(ABC):
     def get_auth_token(self) -> str:
         """Return a fresh GCP access token."""
         pass
+
+    def identity_hint(self, project_id: Optional[str] = None) -> str:
+        """What to do when the cloud refused a call: on a runner, what the deploy
+        identity lacks; elsewhere, which account gapp acted as and how to fix it."""
+        account = self.active_account()
+        if on_ci_runner():
+            return ci_identity_hint(account, project_id)
+        return access_hint(account, signed_in=bool(account), project_id=project_id)
     
     @abstractmethod
     def check_http_health(self, url: str) -> bool:

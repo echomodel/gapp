@@ -522,6 +522,40 @@ data goes); "what the app uses without a vendor's library" and "what the
 app makes no network request to" (both put a store on Google Cloud
 outside, and neither is why an outside identity provider is).
 
+## Google Cloud access
+
+gapp never signs anyone in, and never stores or refreshes a Google Cloud
+credential. gcloud owns the login, and on runners the runner's own
+identity does. When gapp calls an API directly, it borrows a short-lived
+token from gcloud for that call and keeps it only in memory. A second
+login path, such as application-default credentials or gapp's own OAuth,
+would give the operator two identities that can disagree and give gapp a
+secret to protect.
+
+When Google Cloud cannot be asked or refuses, one place says what to do:
+the provider's `identity_hint` (`gapp/admin/sdk/cloud/`). Keep it that
+way:
+
+- **It names the account gapp acted as**, the `gapp config account` one
+  or else gcloud's active one, and which case applies: no account signed
+  in, an account gapp is set to with no login on this machine, a login
+  that can no longer get a token (expired or revoked), or a signed-in
+  account that cannot reach the project. Without the account, the
+  operator has to guess which of those it is.
+- **A missing gcloud is a message, never a traceback.** Every gcloud call
+  goes through `GCPProvider._run_gcloud` or `util.run_gcloud`, which turn
+  "not found" into `GcloudNotInstalled`, a `CloudAccessError`, so every
+  caller that already handles a refused call handles it too.
+- **Who is signed in is asked only after something failed,** and once
+  per provider, so a working command never pays for it.
+- **The cloud's own answer stays** in the error, on its own line, before
+  the hint.
+- **On a runner the hint is about the deploy identity's roles**
+  (`ci_identity_hint`): signing in does not apply there.
+- **Unit tests never run the real gcloud.** They stand in for it
+  (`_run_gcloud`, `_gcloud_installed`, or a provider whose login is
+  already known).
+
 ## External Framework Awareness
 
 gapp is a deployment tool. It deploys containers, manages secrets,

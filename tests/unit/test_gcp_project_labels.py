@@ -28,6 +28,8 @@ def _api_error(status, message):
 def provider(monkeypatch):
     p = GCPProvider(account="deployer@example.com")
     monkeypatch.setattr(p, "get_auth_token", lambda: "tok")
+    monkeypatch.setattr(GCPProvider, "_gcloud_installed", staticmethod(lambda: True))
+    p._login = ("deployer@example.com", True)       # signed in; the hint never asks gcloud here
     return p
 
 

@@ -79,8 +79,15 @@ def test_on_a_ci_runner_a_refusal_never_suggests_signing_in(provider, monkeypatc
     assert "gcloud auth" not in text
 
 
-def test_off_a_runner_the_sign_in_hint_is_unchanged(provider):
-    with patch.object(provider, "_run_gcloud", return_value=_done(1, stderr="ERROR: 403 denied")):
+def test_off_a_runner_the_hint_names_the_account_and_the_project(provider, monkeypatch):
+    monkeypatch.setattr(GCPProvider, "_gcloud_installed", staticmethod(lambda: True))
+    me = "@".join(["me", "example.test"])
+
+    def run(args, **kwargs):
+        if args[:2] == ["auth", "list"]:
+            return _done(0, json.dumps([{"account": me, "status": "ACTIVE"}]))
+        return _done(1, stderr="ERROR: 403 denied")
+    with patch.object(provider, "_run_gcloud", side_effect=run):
         with pytest.raises(CloudAccessError) as exc:
             provider.list_bucket_labels("my-proj")
-    assert "Check `gcloud auth list`, and run `gcloud auth login`" in str(exc.value)
+    assert f"Signed in to Google Cloud as {me}, which can't reach project 'my-proj'." in str(exc.value)
