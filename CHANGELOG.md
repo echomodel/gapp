@@ -3,6 +3,20 @@
 Notable changes to gapp. Versions are git tags (`vX.Y.Z`); the version
 source is `gapp/__init__.py`.
 
+## Unreleased
+
+Added:
+
+- **Runner deploys refuse a gapp version mismatch up front.** The
+  workflows `gapp ci init` installs refuse, before installing anything, a
+  definition on a gapp older than they can run, with "upgrade it first".
+  `gapp ci deploy` and `gapp ci status --live` refuse it before starting a
+  run, and also refuse a definition that needs newer workflows than the
+  fleet repo has, with "gapp ci init". The minimum is 4.0.0rc15, where
+  the fleet variable the workflows pass changed: a definition still on
+  4.0.0rc14 is refused until `gapp upgrade`. Run `gapp ci init` after
+  upgrading to install workflows that check.
+
 ## 4.0.0rc15 (pre-release of 4.0.0)
 
 Added:
