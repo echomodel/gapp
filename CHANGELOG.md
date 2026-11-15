@@ -3,6 +3,18 @@
 Notable changes to gapp. Versions are git tags (`vX.Y.Z`); the version
 source is `gapp/__init__.py`.
 
+## Unreleased
+
+Fixed:
+
+- **`gapp ci deploy` and `gapp ci status --live` never ran from a machine
+  that can't read GitHub Environments**, such as a cloud agent session with
+  GitHub access only, or a token without that permission. Both stopped with
+  "Couldn't check the Environment …" before starting a run. Now only a
+  project GitHub confirms is not connected is refused up front; when the
+  Environment can't be read, the run starts, and the runner itself refuses,
+  before signing in, if the project's deploy identity is missing.
+
 ## 4.0.0rc17 (pre-release of 4.0.0)
 
 Changed:

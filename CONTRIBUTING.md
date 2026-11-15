@@ -72,6 +72,11 @@ setting a secret's value, and `gapp deployments list` and `scan`, which
 read Google Cloud directly (`gapp list` and `gapp ci status --live` serve
 a GitHub-only machine instead). A change that makes a GitHub-only machine
 need a Google Cloud login for anything else breaks this goal.
+The same goes for GitHub access itself: a machine may reach only some of
+GitHub's API (an agent's proxy, a narrowly scoped token). A check made
+before starting a run, which the runner makes again anyway, stops the
+command only when GitHub confirms the problem, never when the check
+cannot be made.
 
 **Each added capability is opt-in.** A fleet in a git repo, CI and
 profiles are each something an operator turns on. Someone who uses none
