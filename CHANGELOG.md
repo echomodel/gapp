@@ -23,7 +23,7 @@ Breaking changes:
   `format: 1`: a gapp that does not know a file's format stops there and
   changes nothing.
 - **Defining deployments.** `gapp add` (with `--copy-of`), `gapp rename`,
-  `gapp list`, `gapp show`, `gapp set`, `gapp unset`, `gapp apis
+  `gapp remove`, `gapp list`, `gapp show`, `gapp set`, `gapp unset`, `gapp apis
   add|remove`, `gapp env set|unset` and `gapp apply <file> [--dry-run]`.
   None touches the cloud. Each names its deployment with `--deployment`,
   or inside a clone takes the one its remote has; a folder's name is

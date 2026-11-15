@@ -397,11 +397,10 @@ def _definition_tool(fn, *args, **kwargs) -> dict:
 
 @_tool()
 def gapp_add(name: str | None = None, project: str | None = None, repo: str | None = None,
-             ref: str | None = None, id: str | None = None, copy_of: str | None = None) -> dict:
+             ref: str | None = None, copy_of: str | None = None) -> dict:
     """Define a deployment in the fleet: its name, the repo it runs
     (`owner/repo`), its Google Cloud project, and optionally the `ref` a
-    deploy builds (a branch, tag or commit; none means the default branch)
-    and the `id` that prefixes its cloud resources (the name by default).
+    deploy builds (a branch, tag or commit; none means the default branch).
     Touches no cloud and deploys nothing. Refused when the name exists.
     With `copy_of`, the new deployment is another deployment of that one's
     repo: it takes its settings except the domain, and its project and ref
@@ -410,7 +409,7 @@ def gapp_add(name: str | None = None, project: str | None = None, repo: str | No
     nothing was changed; the same holds for every tool that changes a
     definition.
     """
-    return _definition_tool("add", name, project=project, repo=repo, ref=ref, id=id, copy_of=copy_of)
+    return _definition_tool("add", name, project=project, repo=repo, ref=ref, copy_of=copy_of)
 
 
 @_tool()
@@ -418,6 +417,18 @@ def gapp_rename(old: str, new: str) -> dict:
     """Change a deployment's name. Its id, and so every cloud resource it
     has, stays as it is."""
     return _definition_tool("rename", old, new)
+
+
+@_tool()
+def gapp_remove(name: str) -> dict:
+    """Take a deployment out of the fleet. It touches no cloud: a service,
+    bucket and secrets it had deployed stay, and gapp has no tool that
+    takes them down. The result names them under `left`, and holds
+    the definition it removed under `removed`. A deployment added with the
+    commands under `add_again` uses those resources again, data included;
+    that does not bring its settings back. Confirm with the user before
+    calling it."""
+    return _definition_tool("remove", name)
 
 
 @_tool()

@@ -91,7 +91,7 @@ that knows both reads both.
 | Field | Meaning | Changes after creation |
 |---|---|---|
 | The key under `deployments` (`my-app`) | The name. Unique in the fleet. The word you type | `gapp rename` |
-| `id` | The prefix on the deployment's cloud resources. The name by default | Never |
+| `id` | The prefix on the deployment's cloud resources. gapp picks it when the deployment is added: the name, or the name with a number when that is taken on the project | Never |
 | `repo` | Where the code is: `owner/repo` on GitHub, `host/path` elsewhere. Absent for an app with no remote | `gapp set repo` |
 | `project` | The Google Cloud project | Never |
 | `ref` | The branch, tag or commit a deploy builds. Absent: the default branch | `gapp set ref` |
@@ -181,8 +181,8 @@ One rule, for every command about one deployment:
 3. Left out, outside a clone: refused.
 
 The name is a positional argument in exactly three places, where the name
-is the thing being made or changed: `gapp add <name>`, `gapp rename <old>
-<new>`, `gapp remove <name>` (when it exists). Everywhere else positional
+is the thing being made, changed or removed: `gapp add <name>`, `gapp
+rename <old> <new>`, `gapp remove <name>`. Everywhere else positional
 arguments are the things inside the deployment: a setting, a variable, a
 secret.
 
@@ -209,10 +209,11 @@ reasons are in [FLEET-IN-GIT.md](FLEET-IN-GIT.md).
 
 | Command | Does |
 |---|---|
-| `gapp add [<name>] --project <p> [--repo <r>] [--ref <r>] [--id <id>]` | Defines a deployment. Touches no cloud. Refused if the name exists. Inside a clone, name and repo default to the clone's |
+| `gapp add [<name>] --project <p> [--repo <r>] [--ref <r>]` | Defines a deployment. Touches no cloud. Refused if the name exists. Inside a clone, name and repo default to the clone's |
 | `gapp add <name> --copy-of <existing> [--project <p>] [--ref <r>]` | A second deployment of the same repo. Copies settings except `domain`. Project and ref default to the original's |
 | `gapp upgrade` | Brings one definition to the installed gapp's version. Takes no version. Prints its plan first. Changes the definition only. Refused when there is nothing to upgrade, when the definition is newer than this gapp, or when it is older than this gapp can upgrade from; the refusal names the gapp to install |
 | `gapp rename <old> <new>` | Changes the name only. The id and the cloud resources stay |
+| `gapp remove <name>` | Takes the definition out of the fleet and touches no cloud. Names the service, bucket and secrets it leaves in the project, and says that a deployment of the same name added on that project uses them again. Its settings do not come back with it. Refused for a name the fleet does not hold |
 | `gapp list` | Every definition: name, repo, project, ref, gapp version, and "upgrade available" or "upgrade required" where that applies. Says where the fleet lives |
 | `gapp show` | One definition and its settings, each marked as set on the definition or as its default. Says when the next deploy would apply an upgrade, and from which version to which. With `--json`, `settings` is the settings object as `gapp apply` takes it |
 
@@ -284,7 +285,7 @@ GitHub repo.
 One tool per command, named after it, with the same arguments. A
 deployment is always the `deployment` argument.
 
-`gapp_project_setup`, `gapp_add`, `gapp_upgrade`, `gapp_rename`, `gapp_list`, `gapp_show`,
+`gapp_project_setup`, `gapp_add`, `gapp_upgrade`, `gapp_rename`, `gapp_remove`, `gapp_list`, `gapp_show`,
 `gapp_set`, `gapp_unset`, `gapp_apis`, `gapp_env_set`, `gapp_env_unset`,
 `gapp_apply`, `gapp_deploy`, `gapp_status`, `gapp_secrets_list`,
 `gapp_secrets_get`, `gapp_ci_init`, `gapp_ci_projects`,

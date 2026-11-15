@@ -1,5 +1,5 @@
 """Defining deployments and changing their settings in a local fleet:
-`add`, `rename`, `show`, `upgrade`, `set`, `unset`, `apis`, `env`, `apply`.
+`add`, `rename`, `remove`, `show`, `upgrade`, `set`, `unset`, `apis`, `env`, `apply`.
 None of them touches the cloud; a refusal changes nothing and exits 2."""
 
 import json
@@ -84,11 +84,15 @@ def test_add_refuses_a_name_that_exists_and_says_whose_it_is(my_app):
     assert "already a deployment (acme/my-app, on my-project)" in message
 
 
-def test_two_names_on_one_project_get_different_ids(my_app):
-    definitions.add("second", project="my-project", repo="acme/my-app", id="my-app-b")
-    assert fleet()["second"]["id"] == "my-app-b"
-    assert "already used on my-project, by 'my-app'" in refused(
-        definitions.add, "third", project="my-project", id="my-app")
+def test_a_name_whose_id_is_taken_on_the_project_gets_the_next_one(my_app):
+    definitions.rename("my-app", "prod")
+    definitions.add("my-app", project="my-project", repo="acme/other")
+    assert fleet()["prod"]["id"] == "my-app" and fleet()["my-app"]["id"] == "my-app-2"
+
+
+def test_add_takes_no_id():
+    assert run("add", "my-app", "--project", "my-project", "--id", "x").exit_code == 2
+    assert fleet() == {}
 
 
 def test_a_repo_given_as_a_url_is_recorded_as_owner_and_name():
@@ -150,6 +154,47 @@ def test_rename_changes_the_name_and_keeps_the_id(my_app):
 def test_rename_refuses_a_taken_name(my_app):
     definitions.add("other", project="my-project", repo="acme/other")
     assert "already a deployment" in refused(definitions.rename, "my-app", "other")
+
+
+
+# --- remove ---
+
+
+def test_remove_takes_the_definition_out_and_says_what_it_left(my_app):
+    definitions.env_set("API_KEY", secret="api-key", deployment="my-app")
+    definitions.set_value("ref", "v1.2.0", deployment="my-app")
+    result = definitions.remove("my-app")
+    assert fleet() == {}
+    assert result["left"] == {"project": "my-project", "service": "my-app",
+                              "bucket": "gapp-my-app-my-project", "secrets": ["my-app-api-key"]}
+    assert result["add_again"] == ["gapp add my-app --project my-project --repo acme/my-app --ref v1.2.0"]
+    assert result["removed"]["settings"]["env"]["API_KEY"] == {"secret": "api-key"}
+
+
+def test_a_removed_deployment_added_again_gets_the_same_id_even_after_a_rename(my_app):
+    definitions.rename("my-app", "prod")
+    for command in definitions.remove("prod")["add_again"]:
+        assert run(*command.split()[1:]).exit_code == 0
+    assert list(fleet()) == ["prod"] and fleet()["prod"]["id"] == "my-app"
+
+
+def test_remove_leaves_the_other_deployments(my_app):
+    definitions.add("other", project="my-project", repo="acme/other")
+    definitions.remove("my-app")
+    assert list(fleet()) == ["other"]
+
+
+def test_remove_refuses_a_name_the_fleet_does_not_hold(my_app):
+    assert "nope" in refused(definitions.remove, "nope")
+
+
+def test_remove_says_what_stays_and_gives_no_teardown_commands(my_app):
+    out = run("remove", "my-app").output
+    assert "Nothing in Google Cloud was touched." in out
+    assert "gapp has no command to take them down yet." in out
+    assert "  gapp add my-app --project my-project --repo acme/my-app\n" in out
+    assert "does not bring back its settings" in out
+    assert "gcloud" not in out and "terraform" not in out and "--id" not in out
 
 
 # --- set and unset ---
