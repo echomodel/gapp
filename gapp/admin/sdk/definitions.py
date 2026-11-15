@@ -158,12 +158,18 @@ def remove(name: str) -> dict:
 
     What it had deployed stays as it is. The result names it, and the
     commands that define a deployment on those resources again; they do
-    not bring its settings back.
+    not bring its settings back. `see_removed` is the command that shows
+    what was removed, settings included.
     """
     where, deployments = _load()
     name = lookup.find(deployments, name=name).name
     definition = deployments.pop(name)
-    _save(where, deployments, f"gapp: remove {name}")
+    backup = fleetstore.write(deployments, where, f"gapp: remove {name}")
+    if where.kind == "local":
+        see = f"cat {backup}" if backup else None
+    else:
+        from gapp.admin.sdk import fleetrepo
+        see = fleetrepo.show_last_change(where.repo)
     id_, project = definition.get("id"), definition.get("project")
     env = (definition.get("settings") or {}).get("env") or {}
     secrets = sorted({f"{id_}-{spec['secret']}" for spec in env.values()
@@ -178,6 +184,7 @@ def remove(name: str) -> dict:
         removed=definition,
         left={"project": project, "service": id_, "bucket": f"gapp-{id_}-{project}".lower(), "secrets": secrets},
         add_again=[again] + ([f"gapp rename {id_} {name}"] if name != id_ else []),
+        see_removed=see,
     )
 
 
