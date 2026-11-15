@@ -487,3 +487,22 @@ def no_real_deploy_record(monkeypatch):
     def unreachable(project, deployment_id):
         raise RuntimeError("no real project in a unit test")
     monkeypatch.setattr(definitions, "last_deployed_by", unreachable)
+
+
+@pytest.fixture(autouse=True)
+def no_real_gcloud(monkeypatch, tmp_path_factory):
+    """A unit test never runs the real gcloud. A stand-in named gcloud comes
+    first on the PATH: it records the call and fails, and the test then fails
+    naming the call, so a stub that does not reach far enough is caught
+    rather than quietly asking whatever account this machine is signed in to.
+    A test that wants no gcloud at all sets PATH itself."""
+    import os
+    bindir = tmp_path_factory.mktemp("no-gcloud")
+    calls = bindir / "calls"
+    stand_in = bindir / "gcloud"
+    stand_in.write_text(f'#!/bin/sh\necho "$*" >> "{calls}"\necho "unit tests never run the real gcloud" >&2\nexit 1\n')
+    stand_in.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}")
+    yield
+    if calls.exists():
+        pytest.fail(f"this test ran the real gcloud: {calls.read_text().strip()}")
