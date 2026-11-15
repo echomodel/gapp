@@ -297,6 +297,14 @@ The rules:
   `COMPATIBLE_FROM`, whatever the definition says.
 - **There is no fleet-wide version.** Deployments in one fleet can be on
   different gapp versions, so a new gapp can be tried on one of them.
+- **An older gapp keeps working with everything it wrote until a person
+  moves it forward.** Installing a newer gapp never changes a fleet, a
+  definition or a deployment by itself, so nobody else has to upgrade
+  because one machine did. Once someone deliberately moves something
+  forward (`gapp upgrade`, or a future change of the fleet's format), an
+  older gapp may refuse it, cleanly and saying to install a newer gapp;
+  that is not a breaking change. A release that changes data on its own,
+  or stops reading what an earlier 4.x wrote, is.
 - **Only the newer gapp knows how to get to itself.** Upgrade steps
   belong to the gapp being upgraded to, and anything below its
   `UPGRADES_FROM` is refused with the gapp to install first.
@@ -478,6 +486,13 @@ file and [docs/INTERFACE.md](docs/INTERFACE.md) first.
 - Exit codes: 0 done, 2 refused and nothing changed, 1 failed.
 - Every command takes `--json` and prints what its tool returns.
 - A message says what was found and the exact command that fixes it.
+
+MCP tools are held more loosely than CLI commands: agents read the tool
+list each session and adapt, so a tool can be renamed or reshaped
+without a new major version, when there is a clear reason and the change
+is made deliberately. It still updates `docs/interface.yaml`, the
+skill's tool reference and the CHANGELOG, which names the change so
+anyone with a permission rule for that tool can update it.
 
 ### Testing
 
@@ -800,7 +815,13 @@ its own `COMPATIBLE_FROM`; and `gapp ci deploy` and `gapp ci status
 "gapp ci init"). A release that changes the hand-off either keeps the old
 form as well (adding a variable an older gapp ignores is fine) or raises
 `COMPATIBLE_FROM` and records the new hand-off in `HANDOFF`; the test
-fails when it does neither. Without these checks, a runner deploy the
+fails when it does neither.
+
+The gapp on the runner reads the fleet itself, through `GAPP_FLEET`, in
+the format its own version knows. A new fleet format therefore reaches
+runners of older versions only through the workflows (which could hand
+an older gapp the one definition in the format it reads), or once every
+definition is on a gapp that reads the new format. Without these checks, a runner deploy the
 workflows cannot run starts anyway and fails halfway with an error about
 something else (a fleet that seems empty), instead of being refused with
 what to do.
@@ -920,7 +941,11 @@ For development, use an editable install: `pipx install -e .`
 
 - **Two records of what is deployed** (one for deploys from a clone, one
   for CI), each patched towards the other. Every patch adds a path
-  between them while the two authorities remain.
+  between them while the two authorities remain. This includes recording
+  CI deploys as GitHub deployments so `gapp ci status` could show health
+  without a runner: the deploy record in the project stays the only
+  record, and a status built from the last recorded deploy cannot stand
+  in for the live check anyway.
 - **Finding deployments by searching the cloud for labels.** A list of
   what one login can see is not a list of what is meant to run, and it
   cannot say what a deployment's settings should be.
