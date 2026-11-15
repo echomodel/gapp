@@ -237,7 +237,7 @@ Each changes one definition and nothing else.
 | Command | Does | Needs |
 |---|---|---|
 | `gapp deploy [--dry-run] [--rebuild] [--replace-domain] [--upgrade]` | Builds the definition's ref from this clone and deploys it. Refused when the clone is not at that ref. Terraform makes the deployment's data bucket the first time. After a deploy succeeds, writes the record of it to the project's gapp bucket: the definition as deployed, the commit, the image, when, by whom and from where. Refused on a project whose gapp bucket is missing, with the `gapp project setup` command. `--dry-run` is the full preview: everything the deploy would use and do, including what the app's `app.json` adds and any variable it needs that is not set, with nothing built or changed | gcloud, Terraform, a clone |
-| `gapp status` | What is live: URL, revision, domain state | gcloud |
+| `gapp status` | What is live: URL, health, domain state, and which gapp deployed it. When the Terraform state cannot be read it says so, and never reports that as nothing deployed (`deployed` is `null` with `--json`) | gcloud |
 | `gapp secrets list` | The definition's secrets, whether each is generated, and its state in Secret Manager: set, not set, unlabelled, or another deployment's. What to do about each is listed under the table | gcloud |
 | `gapp secrets set <secret-name> [--from-stdin]` | Stores a value, typed at a prompt or piped | gcloud |
 | `gapp secrets get <secret-name> [--plaintext]` | Shows whether it is set; the value only with `--plaintext` | gcloud |

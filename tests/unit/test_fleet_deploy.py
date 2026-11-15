@@ -177,6 +177,12 @@ def test_a_deploy_on_a_runner_records_the_fleet_repo_and_the_run(sdk, cloud, mon
                                        "run": "https://github.com/acme/fleet/actions/runs/42"}
 
 
+def test_the_record_names_who_deployed_when_no_account_is_configured(sdk, cloud):
+    cloud.account = "gapp-deploy" + "@" + "my-project.iam.gserviceaccount.com"
+    sdk.deploy_definition()
+    assert recorded(cloud)["deployed_by"] == cloud.account
+
+
 def test_a_failed_deploy_goes_in_the_history_and_leaves_the_last_good_one(sdk, cloud):
     sdk.deploy_definition()
     good = recorded(cloud)
