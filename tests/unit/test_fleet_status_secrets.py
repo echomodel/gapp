@@ -167,8 +167,10 @@ def cloud():
 
 
 def deployed(cloud, version=__version__, url="https://my-app.a.run.app", domain=""):
-    cloud.buckets[BUCKET] = {"project": PROJECT, "labels": {"gapp-version": settings.version_label(version)}}
-    cloud.tf_outputs[(BUCKET, "terraform/state")] = {"service_url": url, "custom_domain": domain}
+    cloud.buckets["gapp-my-project"] = {"project": PROJECT, "labels": {}}
+    cloud.objects[("gapp-my-project", "deployments/my-app/deployed.yaml")] = f"gapp: {version}\n"
+    cloud.tf_outputs[("gapp-my-project", "deployments/my-app/terraform/state")] = {"service_url": url,
+                                                                                  "custom_domain": domain}
 
 
 def test_a_deployment_that_was_never_deployed_names_the_deploy_command(cloud):

@@ -10,7 +10,8 @@ from gapp.admin.sdk.cloud.dummy import DummyCloudProvider
 from gapp.admin.sdk.core import GappSDK
 
 PROJECT = "my-project"
-BUCKET = "gapp-my-app-my-project"
+BUCKET = "gapp-my-project"
+STATE = "deployments/my-app/terraform/state"
 
 
 def _conditions(ready, routable="True", cert="True", cert_message=None):
@@ -77,9 +78,10 @@ def cloud(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     definitions.add("my-app", project=PROJECT, repo="acme/my-app")
     provider = DummyCloudProvider()
-    provider.buckets[BUCKET] = {"project": PROJECT, "labels": {"gapp-version": settings.version_label(__version__)}}
-    provider.tf_outputs[(BUCKET, "terraform/state")] = {"service_url": "https://my-app.a.run.app",
-                                                        "custom_domain": "mcp.example.com"}
+    provider.buckets[BUCKET] = {"project": PROJECT, "labels": {}}
+    provider.objects[(BUCKET, "deployments/my-app/deployed.yaml")] = f"gapp: {__version__}\n"
+    provider.tf_outputs[(BUCKET, STATE)] = {"service_url": "https://my-app.a.run.app",
+                                            "custom_domain": "mcp.example.com"}
     return provider
 
 
@@ -110,7 +112,7 @@ def test_a_domain_in_the_state_with_no_mapping_is_an_error_that_names_the_fix(cl
 
 
 def test_a_deployment_with_no_domain_reports_none(cloud):
-    cloud.tf_outputs[(BUCKET, "terraform/state")]["custom_domain"] = ""
+    cloud.tf_outputs[(BUCKET, STATE)]["custom_domain"] = ""
     assert _status(cloud)["domain"] is None
 
 
@@ -120,7 +122,7 @@ def test_a_deployment_with_no_domain_reports_none(cloud):
 def _no_identity(cloud, monkeypatch, said):
     def refuse(*args, **kwargs):
         raise CloudAccessError(f"Could not read the bucket (gcloud exit 1): {said}")
-    monkeypatch.setattr(cloud, "bucket_exists", refuse)
+    monkeypatch.setattr(cloud, "list_bucket_labels", refuse)
 
 
 def test_status_without_a_usable_login_names_the_sign_in(cloud, monkeypatch):

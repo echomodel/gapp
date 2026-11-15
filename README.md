@@ -19,7 +19,7 @@ adds what that command leaves to you:
 
 | You get | How |
 |---|---|
-| A redeploy that changes only what changed | Each deployment's service, access, secrets, volume and domain are applied with Terraform, from state kept in the deployment's own bucket |
+| A redeploy that changes only what changed | Each deployment's service, access, secrets, volume and domain are applied with Terraform, from state kept in the project's own gapp bucket, which no app can reach |
 | Data that survives redeploys | Each deployment has a bucket, mounted in the container |
 | Secrets that are checked before a deploy | A deployment names the secrets it reads. gapp makes generated ones, and refuses to deploy while one has no value |
 | A domain that is not taken down by accident | A deploy that would replace or remove a live custom domain stops before anything is built |
@@ -76,7 +76,8 @@ gapp project setup my-project
 ```
 
 It turns on the APIs every deployment needs, gives Cloud Build its
-permissions and marks the project. It needs gcloud signed in as an Owner
+permissions, makes the project's gapp bucket (`gapp-<project>`, for
+Terraform state and a record of each deploy) and marks the project. It needs gcloud signed in as an Owner
 of the project.
 
 ### 3. Define the deployment

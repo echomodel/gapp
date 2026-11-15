@@ -22,6 +22,17 @@ Breaking changes:
   <file>` replaces it, keeping the one it replaced. The file starts with
   `format: 1`: a gapp that does not know a file's format stops there and
   changes nothing.
+- **Where state lives.** `gapp project setup` makes one bucket per
+  project, `gapp-<project>`. Each deployment's Terraform state is there,
+  with a record of each deploy: the definition as deployed, the commit,
+  the image, when, by whom and from where. No app can reach it. A
+  deployment's own bucket holds its data only and is made by Terraform.
+  Which gapp last deployed a deployment is read from that record, not
+  from a bucket label. Run `gapp project setup <project>` again on a
+  project set up by an earlier release candidate; a deploy to it is
+  refused until then. State already in a deployment's bucket has to be
+  copied to `gs://gapp-<project>/deployments/<id>/terraform/state/`
+  before its next deploy.
 - **Defining deployments.** `gapp add` (with `--copy-of`), `gapp rename`,
   `gapp remove`, `gapp list`, `gapp show`, `gapp set`, `gapp unset`, `gapp apis
   add|remove`, `gapp env set|unset` and `gapp apply <file> [--dry-run]`.

@@ -125,7 +125,7 @@ else. Their names and places never change.
 | Where | Says | Checked |
 |---|---|---|
 | `format`, at the top of the entry file | How the file is laid out | Before anything else in the file is read |
-| The `gapp-version` label on the deployment's bucket | Which gapp last deployed it, written like `4-0-0` | Before a deploy builds or changes anything |
+| The record of the deployment's last successful deploy, in the project's gapp bucket | Which gapp last deployed it | Before a deploy builds or changes anything |
 
 A gapp that finds a value it does not support, or none, stops there. It
 says what it found and where, reads no further, writes nothing and
@@ -203,7 +203,7 @@ reasons are in [FLEET-IN-GIT.md](FLEET-IN-GIT.md).
 
 | Command | Does | Needs |
 |---|---|---|
-| `gapp project setup <project>` | Once per project: enables APIs, grants Cloud Build its permissions, marks the project. Nothing about CI | gcloud as an Owner |
+| `gapp project setup <project>` | Once per project: enables APIs, grants Cloud Build its permissions, makes the project's gapp bucket `gapp-<project>` (Terraform state and the record of each deploy, out of every app's reach), marks the project. Running it again adds only what is missing. Nothing about CI | gcloud as an Owner |
 
 ### Definitions
 
@@ -213,7 +213,7 @@ reasons are in [FLEET-IN-GIT.md](FLEET-IN-GIT.md).
 | `gapp add <name> --copy-of <existing> [--project <p>] [--ref <r>]` | A second deployment of the same repo. Copies settings except `domain`. Project and ref default to the original's |
 | `gapp upgrade` | Brings one definition to the installed gapp's version. Takes no version. Prints its plan first. Changes the definition only. Refused when there is nothing to upgrade, when the definition is newer than this gapp, or when it is older than this gapp can upgrade from; the refusal names the gapp to install |
 | `gapp rename <old> <new>` | Changes the name only. The id and the cloud resources stay |
-| `gapp remove <name>` | Takes the definition out of the fleet and touches no cloud. Names the service, bucket and secrets it leaves in the project, and says that a deployment of the same name added on that project uses them again. Its settings do not come back with it; the output gives the command that shows them: the commit that removed it, for a fleet in a repo, or the copy of the fleet from before, for a local one. Refused for a name the fleet does not hold |
+| `gapp remove <name>` | Takes the definition out of the fleet and touches no cloud. Names the service, data bucket, secrets, Terraform state and deploy record it leaves in the project, and says that a deployment of the same name added on that project uses them again. Its settings do not come back with it; the output gives the command that shows them: the commit that removed it, for a fleet in a repo, or the copy of the fleet from before, for a local one. Refused for a name the fleet does not hold |
 | `gapp list` | Every definition: name, repo, project, ref, gapp version, and "upgrade available" or "upgrade required" where that applies. Says where the fleet lives |
 | `gapp show` | One definition and its settings, each marked as set on the definition or as its default. Says when the next deploy would apply an upgrade, and from which version to which. With `--json`, `settings` is the settings object as `gapp apply` takes it |
 
@@ -236,7 +236,7 @@ Each changes one definition and nothing else.
 
 | Command | Does | Needs |
 |---|---|---|
-| `gapp deploy [--dry-run] [--rebuild] [--replace-domain] [--upgrade]` | Builds the definition's ref from this clone and deploys it. Refused when the clone is not at that ref. Creates the deployment's bucket the first time. `--dry-run` is the full preview: everything the deploy would use and do, including what the app's `app.json` adds and any variable it needs that is not set, with nothing built or changed | gcloud, Terraform, a clone |
+| `gapp deploy [--dry-run] [--rebuild] [--replace-domain] [--upgrade]` | Builds the definition's ref from this clone and deploys it. Refused when the clone is not at that ref. Terraform makes the deployment's data bucket the first time. After a deploy succeeds, writes the record of it to the project's gapp bucket: the definition as deployed, the commit, the image, when, by whom and from where. Refused on a project whose gapp bucket is missing, with the `gapp project setup` command. `--dry-run` is the full preview: everything the deploy would use and do, including what the app's `app.json` adds and any variable it needs that is not set, with nothing built or changed | gcloud, Terraform, a clone |
 | `gapp status` | What is live: URL, revision, domain state | gcloud |
 | `gapp secrets list` | The definition's secrets, whether each is generated, and its state in Secret Manager: set, not set, unlabelled, or another deployment's. What to do about each is listed under the table | gcloud |
 | `gapp secrets set <secret-name> [--from-stdin]` | Stores a value, typed at a prompt or piped | gcloud |

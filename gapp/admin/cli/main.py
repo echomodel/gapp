@@ -791,6 +791,7 @@ def remove_cmd(name, json_out):
     click.echo(f"  the bucket gs://{left['bucket']}, with its data")
     if left["secrets"]:
         click.echo(f"  the secrets {', '.join(left['secrets'])}")
+    click.echo(f"  its Terraform state and the record of its deploys, under {left['state']}")
     click.echo("gapp has no command to take them down yet.")
     click.echo("A deployment added with these commands uses them again, data included:")
     for command in result["add_again"]:

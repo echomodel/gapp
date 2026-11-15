@@ -96,3 +96,18 @@ module "svc" {{
     res = _run(["terraform", "validate"], tmp_path)
     assert res.returncode != 0
     assert "labels" in res.stdout + res.stderr
+
+
+def test_the_deploy_configuration_validates_and_takes_over_an_existing_data_bucket(tmp_path):
+    """The files a deploy stages (root configuration plus the module) are
+    valid, and the block that takes an existing data bucket into state is
+    one this Terraform accepts."""
+    root = MODULE_PATH.parent.parent / "terraform"
+    for tf in root.glob("*.tf"):
+        (tmp_path / tf.name).write_text(tf.read_text().replace('backend "gcs" {}', ""))
+    shutil.copytree(MODULE_PATH.parent, tmp_path / "modules")
+    assert "adopt_data_bucket" in (tmp_path / "main.tf").read_text()
+    init = _run(["terraform", "init", "-backend=false", "-input=false"], tmp_path)
+    assert init.returncode == 0, f"terraform init failed:\n{init.stderr}"
+    res = _run(["terraform", "validate"], tmp_path)
+    assert res.returncode == 0, f"validate failed:\n{res.stdout}\n{res.stderr}"

@@ -32,7 +32,7 @@ command that fixes it.
 
 | Operation | CLI | MCP tool | Notes |
 |---|---|---|---|
-| Prepare a project | `gapp project setup <project>` | `gapp_project_setup(project)` | once per project, as an Owner |
+| Prepare a project | `gapp project setup <project>` | `gapp_project_setup(project)` | once per project, as an Owner. Run it again on a project a deploy says is not set up: it adds only what is missing |
 | Deploy | `gapp deploy [--dry-run] [--rebuild] [--replace-domain] [--upgrade]` | `gapp_deploy(deployment=, dry_run=, rebuild=, replace_domain=, upgrade=)` | from a clone on the definition's ref; needs terraform. Dry run first |
 | What is live | `gapp status` | `gapp_status(deployment=)` | URL, health, the domain's state, which gapp deployed it, the next step |
 | Secrets and their state | `gapp secrets list` | `gapp_secrets_list(deployment=)` | |

@@ -100,7 +100,8 @@ from the fleet repo's Environments.
 ### What the deploy identity may do
 
 `gapp-deploy` can build, deploy the service, manage the deployment's
-secrets and bucket, and create its service account. It cannot enable
+secrets and data bucket, read and write the project's gapp bucket, and
+create the deployment's service account. It cannot enable
 APIs, change project labels or reach another project. So:
 
 - An extra API in a definition's `apis` must be on already. Run one

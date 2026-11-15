@@ -10,13 +10,17 @@ from click.testing import CliRunner
 
 from gapp import __version__
 from gapp.admin.cli.main import main
-from gapp.admin.sdk import definitions, entryfile, fleetstore, secrets, settings
+import yaml
+
+from gapp.admin.sdk import definitions, entryfile, fleetstore, record, secrets, settings
 from gapp.admin.sdk.cloud.dummy import DummyCloudProvider
 from gapp.admin.sdk.core import GappSDK
 from gapp.admin.sdk.definitions import Refused
 
 PROJECT = "my-project"
 BUCKET = "gapp-my-app-my-project"
+PROJECT_BUCKET = "gapp-my-project"
+STATE = "deployments/my-app/terraform/state"
 REAL_VALIDATE, REAL_MATERIALIZE = secrets.validate_declared_secrets, secrets.materialize_generated_secrets
 
 
@@ -64,7 +68,23 @@ def clone(monkeypatch, tmp_path):
 def cloud():
     provider = DummyCloudProvider()
     provider.project_labels[PROJECT] = {"gapp": "hosted"}
+    provider.buckets[PROJECT_BUCKET] = {"project": PROJECT, "labels": {}}
     return provider
+
+
+def last_deployed_by(cloud, version):
+    """The project's bucket says this gapp last deployed my-app."""
+    cloud.objects[(PROJECT_BUCKET, "deployments/my-app/deployed.yaml")] = yaml.safe_dump({"gapp": version})
+
+
+def recorded(cloud):
+    """The record of my-app's last successful deploy."""
+    return yaml.safe_load(cloud.objects[(PROJECT_BUCKET, "deployments/my-app/deployed.yaml")])
+
+
+def history(cloud):
+    return [yaml.safe_load(text) for (bucket, path), text in sorted(cloud.objects.items())
+            if path.startswith("deployments/my-app/history/")]
 
 
 @pytest.fixture
@@ -80,7 +100,7 @@ def refused(fn, *args, **kwargs):
 
 
 def nothing_happened(cloud):
-    return cloud.last_tfvars is None and not cloud.label_writes
+    return cloud.last_tfvars is None and not cloud.objects and BUCKET not in cloud.buckets
 
 
 # --- a deploy takes everything from the definition ---
@@ -110,12 +130,67 @@ def test_a_deploy_reads_no_gapp_yaml_from_the_repo(sdk, cloud, clone):
     assert cloud.last_tfvars["env"] == {}
 
 
-def test_the_first_deploy_creates_the_bucket_and_labels_it_with_the_full_version(sdk, cloud):
+def test_terraform_makes_the_data_bucket_and_labels_it_with_the_full_version(sdk, cloud):
     assert BUCKET not in cloud.buckets
     sdk.deploy_definition()
+    assert cloud.last_tfvars["adopt_data_bucket"] is False
     assert cloud.buckets[BUCKET]["labels"] == {"gapp-deployment": "my-app",
                                                "gapp-version": settings.version_label(__version__)}
     assert "." not in cloud.buckets[BUCKET]["labels"]["gapp-version"]
+
+
+def test_a_data_bucket_that_is_there_already_is_taken_over_not_made(sdk, cloud):
+    cloud.buckets[BUCKET] = {"project": PROJECT, "labels": {}}
+    sdk.deploy_definition()
+    assert cloud.last_tfvars["adopt_data_bucket"] is True
+    sdk.deploy_definition()
+    assert cloud.last_tfvars["adopt_data_bucket"] is True
+
+
+def test_state_and_the_record_go_in_the_projects_bucket_not_the_apps(sdk, cloud):
+    sdk.deploy_definition()
+    assert (PROJECT_BUCKET, STATE) in cloud.tf_outputs
+    assert {bucket for bucket, _ in cloud.objects} == {PROJECT_BUCKET}
+    assert all(path.startswith("deployments/my-app/") for _, path in cloud.objects)
+
+
+def test_a_deploy_writes_down_what_it_deployed(sdk, cloud, clone):
+    definitions.set_value("ref", "main", deployment="my-app")
+    definitions.env_set("LOG_LEVEL", "info", deployment="my-app")
+    result = sdk.deploy_definition()
+    entry = recorded(cloud)
+    assert entry["result"] == "deployed" and entry["deployment"] == "my-app"
+    assert entry["commit"] == git(clone, "rev-parse", "HEAD") and entry["image"] == result["image"]
+    assert entry["gapp"] == __version__ and entry["gapp_installed"] == __version__
+    assert entry["from"] == {"kind": "machine"} and entry["deployed_at"].endswith("Z")
+    assert entry["definition"] == fleetstore.read()["my-app"]
+    assert entry["definition"]["repo"] == "acme/my-app" and entry["definition"]["ref"] == "main"
+    assert history(cloud) == [entry]
+
+
+def test_a_deploy_on_a_runner_records_the_fleet_repo_and_the_run(sdk, cloud, monkeypatch):
+    for key, value in {"GITHUB_ACTIONS": "true", "GITHUB_SERVER_URL": "https://github.com",
+                       "GITHUB_REPOSITORY": "acme/fleet", "GITHUB_RUN_ID": "42"}.items():
+        monkeypatch.setenv(key, value)
+    sdk.deploy_definition()
+    assert recorded(cloud)["from"] == {"kind": "runner", "fleet_repo": "acme/fleet",
+                                       "run": "https://github.com/acme/fleet/actions/runs/42"}
+
+
+def test_a_failed_deploy_goes_in_the_history_and_leaves_the_last_good_one(sdk, cloud):
+    sdk.deploy_definition()
+    good = recorded(cloud)
+    cloud.apply_fails = "terraform apply failed"
+    with pytest.raises(RuntimeError):
+        sdk.deploy_definition()
+    assert recorded(cloud) == good
+    assert [(e["result"], e.get("error")) for e in history(cloud)][-1] == ("failed", "terraform apply failed")
+
+
+def test_a_deploy_to_a_project_without_its_bucket_names_the_command(sdk, cloud):
+    del cloud.buckets[PROJECT_BUCKET]
+    assert refused(sdk.deploy_definition).endswith("gapp project setup my-project")
+    assert nothing_happened(cloud)
 
 
 def test_the_cloud_resources_are_named_by_the_id_not_the_name(sdk, cloud):
@@ -227,6 +302,7 @@ def test_an_upgrade_is_applied_only_when_the_deploy_says_so(sdk, cloud, monkeypa
     assert cloud.last_tfvars is None
     result = sdk.deploy_definition(upgrade=True)
     assert result["upgraded_from"] == __version__
+    assert recorded(cloud)["gapp"] == "4.0.1" and recorded(cloud)["upgraded_from"] == __version__
     assert cloud.buckets[BUCKET]["labels"]["gapp-version"] == "4-0-1"
 
 
@@ -234,30 +310,24 @@ def test_a_dry_run_says_an_upgrade_is_pending_and_changes_nothing(sdk, cloud, mo
     sdk.deploy_definition()
     as_gapp(monkeypatch, "4.0.1")
     definitions.upgrade("my-app")
-    cloud.last_tfvars, writes = None, list(cloud.label_writes)
+    cloud.last_tfvars, written = None, dict(cloud.objects)
     plan = sdk.deploy_definition(dry_run=True)
     assert plan["upgrade_pending"] is True and plan["last_deployed_by"] == __version__
-    assert cloud.last_tfvars is None and cloud.label_writes == writes
+    assert cloud.last_tfvars is None and cloud.objects == written
 
 
 def test_a_deployment_last_deployed_by_a_newer_gapp_than_its_definition_is_refused(sdk, cloud):
-    cloud.buckets[BUCKET] = {"project": PROJECT, "labels": {"gapp-version": "9-0-0"}}
+    last_deployed_by(cloud, "9.0.0")
     assert "A deployment does not go back" in refused(sdk.deploy_definition)
-    assert nothing_happened(cloud)
+    assert cloud.last_tfvars is None and history(cloud) == []
 
 
-def test_a_bucket_labelled_with_only_a_major_number_counts_as_an_earlier_gapp(sdk, cloud):
-    cloud.buckets[BUCKET] = {"project": PROJECT, "labels": {"gapp-version": "4"}}
-    assert sdk.deploy_definition(dry_run=True)["upgrade_pending"] is True
-
-
-def test_the_label_is_written_only_after_the_deploy_succeeds(sdk, cloud, monkeypatch):
-    def fail(**kwargs):
-        raise RuntimeError("terraform apply failed")
-    monkeypatch.setattr(cloud, "apply_infrastructure", fail)
+def test_which_gapp_deployed_last_is_recorded_only_after_the_deploy_succeeds(sdk, cloud):
+    cloud.apply_fails = "terraform apply failed"
     with pytest.raises(RuntimeError):
         sdk.deploy_definition()
-    assert not cloud.label_writes
+    assert (PROJECT_BUCKET, "deployments/my-app/deployed.yaml") not in cloud.objects
+    assert sdk.deploy_definition(dry_run=True)["first_deploy"] is True
 
 
 # --- the app's app.json, read from the commit the deploy builds ---
@@ -365,7 +435,8 @@ def test_the_commands_print_the_warning_and_the_dry_run_prints_what_is_missing(s
 
 
 @pytest.mark.parametrize("key", ["project_id", "service_name", "image", "memory", "cpu", "max_instances", "env",
-                                 "secrets", "public", "custom_domain", "data_bucket", "labels"])
+                                 "secrets", "public", "custom_domain", "data_bucket",
+                                 "adopt_data_bucket", "labels"])
 def test_every_variable_the_service_module_requires_is_passed(sdk, cloud, key):
     """The module declares these with no default, so a deploy that drops
     one fails at plan instead of deploying without, say, its data volume."""
@@ -412,7 +483,8 @@ def test_a_secret_with_no_value_stops_the_deploy_before_terraform(sdk, cloud, se
     definitions.env_set("API_TOKEN", secret="", deployment="my-app")
     with pytest.raises(RuntimeError, match="api-token"):
         sdk.deploy_definition()
-    assert cloud.last_tfvars is None and not cloud.label_writes
+    assert cloud.last_tfvars is None and BUCKET not in cloud.buckets
+    assert [e["result"] for e in history(cloud)] == ["failed"]
 
 
 # --- the custom domain is never taken down by accident ---
@@ -437,8 +509,8 @@ def builds(sdk, cloud, monkeypatch):
 
 
 def live_domain(cloud, domain):
-    cloud.buckets[BUCKET] = {"project": PROJECT, "labels": {"gapp-version": settings.version_label(__version__)}}
-    cloud.tf_outputs[(BUCKET, "terraform/state")] = {"service_url": "https://my-app.a.run.app", "custom_domain": domain}
+    last_deployed_by(cloud, __version__)
+    cloud.tf_outputs[(PROJECT_BUCKET, STATE)] = {"service_url": "https://my-app.a.run.app", "custom_domain": domain}
 
 
 def test_replacing_a_live_domain_is_refused_before_anything_is_built(sdk, cloud, builds):
@@ -500,10 +572,10 @@ def test_a_redeploy_that_keeps_the_domain_needs_no_verification_and_no_flag(sdk,
 
 def test_state_that_cannot_be_read_is_never_taken_for_no_live_domain(sdk, cloud, builds):
     live_domain(cloud, "mcp.example.com")
-    cloud.unreadable_state.add((BUCKET, "terraform/state"))
+    cloud.unreadable_state.add((PROJECT_BUCKET, STATE))
     with pytest.raises(RuntimeError, match="Refusing to deploy 'my-app': its Terraform state could not be read") as caught:
         sdk.deploy_definition(replace_domain=True)          # not even the flag gets past an unknown state
-    assert "Nothing was built or changed" in str(caught.value) and BUCKET in str(caught.value)
+    assert "Nothing was built or changed" in str(caught.value) and PROJECT_BUCKET in str(caught.value)
     assert builds["n"] == 0 and cloud.last_tfvars is None
 
 
@@ -526,6 +598,24 @@ def test_project_setup_turns_on_the_apis_grants_the_build_and_marks_the_project(
     assert result["was_set_up"] is False and cloud.project_labels[PROJECT] == {"gapp": "hosted"}
     assert (PROJECT, "run.googleapis.com") in cloud.apis_enabled and cloud.iam_bindings
     assert GappSDK(provider=cloud).project_setup(PROJECT)["was_set_up"] is True
+
+
+def test_project_setup_makes_the_projects_bucket_once(clone):
+    cloud = DummyCloudProvider()
+    assert GappSDK(provider=cloud).project_setup(PROJECT)["bucket"] == PROJECT_BUCKET
+    assert cloud.buckets[PROJECT_BUCKET]["project"] == PROJECT
+    cloud.objects[(PROJECT_BUCKET, "kept")] = "x"
+    GappSDK(provider=cloud).project_setup(PROJECT)
+    assert cloud.objects[(PROJECT_BUCKET, "kept")] == "x"
+
+
+def test_project_setup_says_so_when_the_bucket_cannot_be_made(clone, monkeypatch):
+    cloud = DummyCloudProvider()
+    def taken(project, name):
+        raise RuntimeError("409 the name is not available")
+    monkeypatch.setattr(cloud, "create_bucket", taken)
+    message = refused(GappSDK(provider=cloud).project_setup, PROJECT)
+    assert "gapp-my-project could not be made" in message and PROJECT not in cloud.project_labels
 
 
 def test_project_setup_keeps_the_projects_other_labels(clone):

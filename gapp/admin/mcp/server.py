@@ -52,7 +52,9 @@ def gapp_deploy(deployment: str | None = None, dry_run: bool = False, rebuild: b
 def gapp_project_setup(project: str) -> dict:
     """Make a Google Cloud project ready for gapp deployments, once per
     project: turns on the APIs every deployment needs, gives Cloud Build
-    its permissions, and marks the project. Needs gcloud signed in as an
+    its permissions, makes the project's gapp bucket (Terraform state and
+    the record of each deploy), and marks the project. Running it again
+    adds only what is missing. Needs gcloud signed in as an
     Owner of the project. Sets up nothing about CI.
     """
     from gapp.admin.sdk.core import GappSDK

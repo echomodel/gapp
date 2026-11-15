@@ -161,6 +161,7 @@ def remove(name: str) -> dict:
     not bring its settings back. `see_removed` is the command that shows
     what was removed, settings included.
     """
+    from gapp.admin.sdk import record
     where, deployments = _load()
     name = lookup.find(deployments, name=name).name
     definition = deployments.pop(name)
@@ -182,7 +183,8 @@ def remove(name: str) -> dict:
     return _result(
         name, [{"key": "deployment", "before": "defined", "after": "removed"}], where,
         removed=definition,
-        left={"project": project, "service": id_, "bucket": f"gapp-{id_}-{project}".lower(), "secrets": secrets},
+        left={"project": project, "service": id_, "bucket": f"gapp-{id_}-{project}".lower(), "secrets": secrets,
+              "state": f"gs://{record.bucket(project)}/{record.folder(id_)}/"},
         add_again=[again] + ([f"gapp rename {id_} {name}"] if name != id_ else []),
         see_removed=see,
     )

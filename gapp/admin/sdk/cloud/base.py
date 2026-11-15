@@ -50,11 +50,6 @@ class CloudProvider(ABC):
         pass
 
     @abstractmethod
-    def bucket_exists(self, project_id: str, bucket_name: str) -> bool:
-        """Check if a GCS bucket exists."""
-        pass
-
-    @abstractmethod
     def create_bucket(self, project_id: str, bucket_name: str) -> None:
         """Create a new GCS bucket."""
         pass
@@ -90,9 +85,17 @@ class CloudProvider(ABC):
         A failed listing raises CloudAccessError."""
         pass
 
+    # -- Objects in a bucket --
+
     @abstractmethod
-    def set_bucket_labels(self, project_id: str, bucket_name: str, labels: Dict[str, str]) -> None:
-        """Add or update the given labels on a bucket, keeping its others."""
+    def read_object(self, bucket_name: str, path: str) -> Optional[str]:
+        """The text of an object, or None when the object or its bucket
+        does not exist. Any other failure raises CloudAccessError."""
+        pass
+
+    @abstractmethod
+    def write_object(self, bucket_name: str, path: str, text: str) -> None:
+        """Write an object, replacing one that is there. A failure raises CloudAccessError."""
         pass
 
 

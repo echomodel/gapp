@@ -2,13 +2,19 @@
 
 What gapp writes in a project:
 
-  Project label, by `gapp project setup` (an Owner):
-    gapp=hosted                    the project is set up for gapp deployments
+  By `gapp project setup` (an Owner):
+    the project label gapp=hosted  the project is set up for gapp deployments
+    the bucket gapp-<project>      Terraform state and the record of each
+                                   deploy, out of every app's reach (see
+                                   record.py)
 
-  Labels on a deployment's bucket, by gapp once a deploy has succeeded, and
-  on its Cloud Run service, by Terraform:
-    gapp-deployment=<id>
-    gapp-version=<the gapp version that last deployed it>
+  By Terraform, at each deploy, for one deployment:
+    its Cloud Run service, service account and data bucket, the last two
+    labelled gapp-deployment=<id> and gapp-version=<the gapp that deployed>
+
+  By gapp, once a deploy has succeeded:
+    the record of it in the project's bucket, which is what says which
+    gapp last deployed a deployment
 
 A deployment's project, id and settings come from its definition in the
 fleet. Nothing is searched for.
@@ -57,8 +63,21 @@ class GappSDK:
         self.provider = provider or get_provider()
 
     def get_bucket_name(self, deployment_id: str, project_id: str) -> str:
-        """The deployment's bucket. A deployment id is unique within its project."""
+        """The deployment's data bucket. A deployment id is unique within its project."""
         return f"gapp-{deployment_id}-{project_id}".lower()
+
+    def _project_bucket(self, project: str) -> Optional[str]:
+        """The project's gapp bucket, or None when the project has none."""
+        from gapp.admin.sdk import record
+        name = record.bucket(project)
+        return name if name in self.provider.list_bucket_labels(project) else None
+
+    def _write_record(self, project_bucket: str, deployment_id: str, entry: dict, at, latest: bool) -> None:
+        from gapp.admin.sdk import record
+        text = record.dump(entry)
+        self.provider.write_object(project_bucket, record.history_path(deployment_id, at, entry["commit"]), text)
+        if latest:
+            self.provider.write_object(project_bucket, record.latest_path(deployment_id), text)
 
     def _identity_hint(self, project_id: Optional[str] = None) -> str:
         """What to do when no Google Cloud identity this machine holds works."""
@@ -169,9 +188,10 @@ class GappSDK:
         """Make a project ready for gapp deployments. Once per project; running it again only adds what is missing.
 
         Turns on the APIs every deployment needs, gives Cloud Build its
-        permissions, and marks the project. Nothing about CI.
+        permissions, makes the project's gapp bucket, and marks the
+        project. Nothing about CI.
         """
-        from gapp.admin.sdk import fleet
+        from gapp.admin.sdk import fleet, record
         from gapp.admin.sdk.definitions import Refused
         try:
             project_id = fleet.validate_project(project_id)
@@ -180,11 +200,21 @@ class GappSDK:
         for api in FOUNDATION_APIS:
             self.provider.enable_api(project_id, api)
         self.provider.ensure_build_permissions(project_id)
+        bucket = record.bucket(project_id)
+        if bucket not in self.provider.list_bucket_labels(project_id):
+            try:
+                self.provider.create_bucket(project_id, bucket)
+            except Exception as e:
+                raise Refused(
+                    f"The bucket {bucket} could not be made in {project_id}. gapp keeps each deployment's "
+                    f"Terraform state and deploy record there. If the name is taken by a bucket outside "
+                    f"this project, gapp cannot use this project. ({e})"
+                ) from e
         labels = dict(self.provider.get_project_labels(project_id) or {})
         marked = labels.get(HOSTED_LABEL) == HOSTED_VALUE
         if not marked:
             self.provider.set_project_labels(project_id, {**labels, HOSTED_LABEL: HOSTED_VALUE})
-        return {"project": project_id, "apis": list(FOUNDATION_APIS), "was_set_up": marked}
+        return {"project": project_id, "apis": list(FOUNDATION_APIS), "bucket": bucket, "was_set_up": marked}
 
     def _clone_of(self, definition: dict, name: str, cwd: Path) -> Path:
         """The clone a deploy builds from: the folder's git root, whose remote must be the definition's repo."""
@@ -257,9 +287,11 @@ class GappSDK:
         changed. `dry_run` reports what a deploy would do, including
         whether it would apply an upgrade, and refuses nothing about that.
         """
-        from gapp.admin.sdk import appjson, definitions, entryfile, settings as settings_mod
+        from gapp import __version__
+        from gapp.admin.sdk import appjson, definitions, entryfile, record, settings as settings_mod
         from gapp.admin.sdk.definitions import Refused
         from gapp.admin.sdk.start import start_method_of, missing
+        from gapp.admin.sdk.util import configured_account
 
         cwd = Path(cwd or Path.cwd())
         _, deployments = definitions._load()
@@ -289,9 +321,10 @@ class GappSDK:
 
         deployment_id, project = definition["id"], definition["project"]
         bucket = self.get_bucket_name(deployment_id, project)
-        has_bucket = self.provider.bucket_exists(project, bucket)
-        label = (self.provider.list_bucket_labels(project).get(bucket) or {}).get(VERSION_LABEL) if has_bucket else None
-        last = settings_mod.label_version(label)
+        buckets = self.provider.list_bucket_labels(project)
+        project_bucket = record.bucket(project) if record.bucket(project) in buckets else None
+        before = record.read_latest(self.provider, project, deployment_id) if project_bucket else None
+        last = (before or {}).get("gapp")
         if last is None:
             standing = "first"
         else:
@@ -322,46 +355,69 @@ class GappSDK:
             )
         if upgrade and standing != "upgrade":
             raise Refused(f"No upgrade is pending for '{name}'. Deploy it without --upgrade.")
-        if (self.provider.get_project_labels(project) or {}).get(HOSTED_LABEL) != HOSTED_VALUE:
+        if (self.provider.get_project_labels(project) or {}).get(HOSTED_LABEL) != HOSTED_VALUE or not project_bucket:
             raise Refused(f"{project} is not set up for gapp yet. Once per project: gapp project setup {project}")
 
         for api in (manifest.get("prerequisites") or {}).get("apis", []):
             self.provider.enable_api(project, api)
-        if not has_bucket:
-            self.provider.create_bucket(project, bucket)
         labels = {DEPLOYMENT_LABEL: deployment_id.lower(), VERSION_LABEL: settings_mod.version_label(definition["gapp"])}
 
-        state_prefix = "terraform/state"
-        self._check_domain_safety(deployment_id, project, get_domain(manifest), bucket, state_prefix, replace_domain)
-        self.provider.ensure_artifact_registry(project, REGION)
+        state_prefix = record.state_prefix(deployment_id)
+        self._check_domain_safety(deployment_id, project, get_domain(manifest), project_bucket, state_prefix,
+                                  replace_domain)
         short = sha[:12]
         image = f"{REGION}-docker.pkg.dev/{project}/gapp/{deployment_id}:{short}"
-        if rebuild or not self.provider.image_exists(project, REGION, deployment_id, short):
-            build_dir = _prepare_build_dir(root, image, start, ref="HEAD")
-            try:
-                self.provider.submit_build_sync(project, Path(build_dir), image)
-            finally:
-                shutil.rmtree(build_dir, ignore_errors=True)
-        from gapp.admin.sdk.secrets import validate_declared_secrets, materialize_generated_secrets
-        validate_declared_secrets(project, deployment_id, manifest)
-        materialize_generated_secrets(project, deployment_id, manifest)
-        tfvars = _build_tfvars(
-            deployment_id, project, image, get_service_config(manifest), root,
-            get_public(manifest), get_domain(manifest), bucket,
-            solution_name=deployment_id, labels=labels, manifest=manifest,
-        )
-        outputs = self.provider.apply_infrastructure(
-            staging_dir=_get_staging_dir(deployment_id), bucket_name=bucket,
-            state_prefix=state_prefix, auto_approve=True, tfvars=tfvars,
-        )
-        self.provider.set_bucket_labels(project, bucket, labels)        # only once the deploy has succeeded
-        return {**plan, "image": image, "service_url": outputs.get("service_url"),
-                "upgraded_from": last if standing == "upgrade" else None}
+        upgraded_from = last if standing == "upgrade" else None
+
+        def written_down(at, error=None):
+            return record.build(name=name, definition=definition, commit=sha, image=image, at=at,
+                                by=getattr(self.provider, "account", None) or configured_account(),
+                                installed=__version__, upgraded_from=upgraded_from, error=error)
+
+        try:
+            self.provider.ensure_artifact_registry(project, REGION)
+            if rebuild or not self.provider.image_exists(project, REGION, deployment_id, short):
+                build_dir = _prepare_build_dir(root, image, start, ref="HEAD")
+                try:
+                    self.provider.submit_build_sync(project, Path(build_dir), image)
+                finally:
+                    shutil.rmtree(build_dir, ignore_errors=True)
+            from gapp.admin.sdk.secrets import validate_declared_secrets, materialize_generated_secrets
+            validate_declared_secrets(project, deployment_id, manifest)
+            materialize_generated_secrets(project, deployment_id, manifest)
+            tfvars = _build_tfvars(
+                deployment_id, project, image, get_service_config(manifest), root,
+                get_public(manifest), get_domain(manifest), bucket,
+                solution_name=deployment_id, labels=labels, manifest=manifest,
+                adopt_data_bucket=bucket in buckets,
+            )
+            outputs = self.provider.apply_infrastructure(
+                staging_dir=_get_staging_dir(deployment_id), bucket_name=project_bucket,
+                state_prefix=state_prefix, auto_approve=True, tfvars=tfvars,
+            )
+        except Exception as e:
+            at = record.now()
+            failed = written_down(at, error=str(e).strip()[:2000] or type(e).__name__)
+            try:                                                  # the failure itself is what gets reported
+                self._write_record(project_bucket, deployment_id, failed, at, latest=False)
+            except Exception:
+                pass
+            raise
+        try:
+            at = record.now()
+            self._write_record(project_bucket, deployment_id, written_down(at), at, latest=True)
+        except CloudAccessError as e:
+            raise CloudAccessError(
+                f"'{name}' is deployed, but the record of this deploy could not be written to "
+                f"gs://{project_bucket}, so gapp still takes the deploy before it as the last one. "
+                f"Deploy again once that is fixed. ({e})"
+            ) from e
+        return {**plan, "image": image, "service_url": outputs.get("service_url"), "upgraded_from": upgraded_from}
 
     def status_definition(self, deployment: Optional[str] = None, *, cwd: Optional[Path] = None) -> dict:
         """What is live for a deployment of the fleet: its URL and health, the
         domain's state, which gapp last deployed it, and the next step."""
-        from gapp.admin.sdk import definitions, entryfile, settings as settings_mod
+        from gapp.admin.sdk import definitions, entryfile, record
 
         @definitions._guard
         def find():
@@ -374,20 +430,19 @@ class GappSDK:
 
         name, definition = find()
         deployment_id, project = definition["id"], definition["project"]
-        bucket = self.get_bucket_name(deployment_id, project)
         result = {"deployment": name, "project": project, "deployed": False, "url": None, "healthy": None,
                   "domain": None, "gapp": definition.get("gapp"), "last_deployed_by": None,
                   "upgrade_pending": False, "next_step": None}
         try:
-            has_bucket = self.provider.bucket_exists(project, bucket)
-            label = (self.provider.list_bucket_labels(project).get(bucket) or {}).get(VERSION_LABEL) if has_bucket else None
+            project_bucket = self._project_bucket(project)
+            before = record.read_latest(self.provider, project, deployment_id) if project_bucket else None
         except CloudAccessError:
             result["next_step"] = self._identity_hint(project)
             return result
-        last = settings_mod.label_version(label)
+        last = (before or {}).get("gapp")
         result["last_deployed_by"] = last
         outputs = self.provider.get_infrastructure_outputs(
-            _get_staging_dir(deployment_id), bucket, "terraform/state") if has_bucket else None
+            _get_staging_dir(deployment_id), project_bucket, record.state_prefix(deployment_id)) if project_bucket else None
         if outputs and (url := outputs.get("service_url")):
             result.update(deployed=True, url=url, healthy=self.provider.check_http_health(url))
         if outputs and (live := (outputs.get("custom_domain") or "").strip()):
@@ -486,7 +541,7 @@ def _prepare_build_dir(path, image, start, ref="HEAD"):
 
 
 def _build_tfvars(name, pid, img, cfg, repo_path, public, domain,
-                  bucket_name, solution_name=None, labels=None, manifest=None):
+                  bucket_name, solution_name=None, labels=None, manifest=None, adopt_data_bucket=False):
     # Every key returned here corresponds to a structurally-required tfvar in
     # modules/cloud-run-service/variables.tf. None of them have defaults, so
     # dropping a key fails terraform plan instead of silently mis-deploying.
@@ -513,6 +568,7 @@ def _build_tfvars(name, pid, img, cfg, repo_path, public, domain,
         "secrets": secrets_map,
         "public": bool(public), "custom_domain": custom_domain,
         "data_bucket": bucket_name,
+        "adopt_data_bucket": bool(adopt_data_bucket),
         "labels": dict(labels or {}),
     }
 
