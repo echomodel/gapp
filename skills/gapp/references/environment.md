@@ -57,6 +57,10 @@ pinned to the current gapp release, and move on:
 
 Then point gapp at the user's fleet. If they keep it in a git repo,
 `gapp fleet use <owner>/<repo>`; ask which repo when you do not know.
+When `GAPP_FLEET` is set, it already names the fleet (`gapp fleet` says
+so) and `gapp fleet use` is refused; leave it as it is. A fleet that
+cannot be read then means this machine has no access to that repo:
+get the access, never work around it with a local fleet.
 A new machine with no fleet set has an empty local one, which is not
 the user's: `gapp list` showing nothing on a machine they have not
 used before means "not connected to the fleet yet", not "nothing is

@@ -43,11 +43,14 @@ def test_each_local_change_keeps_the_copy_it_replaced(local_machine):
     fleetstore.write({"my-app": ENTRY})
     backup = fleetstore.write({"my-app": ENTRY, "other": {**ENTRY, "id": "other"}})
     where = fleetstore.location()
-    assert backup == where.backup_path and backup.name == "gapp.yaml.bak"
+    assert backup.parent == fleetstore.backups_dir() and fleetstore.latest_backup(where) == backup
     assert fleetstore.entryfile.parse(backup.read_text())["deployments"] == {"my-app": ENTRY}
     assert sorted(fleetstore.read()) == ["my-app", "other"]
-    fleetstore.write({})
-    assert sorted(fleetstore.entryfile.parse(backup.read_text())["deployments"]) == ["my-app", "other"]
+    later = fleetstore.write({})
+    assert later != backup and fleetstore.latest_backup(where) == later
+    assert sorted(fleetstore.entryfile.parse(later.read_text())["deployments"]) == ["my-app", "other"]
+    assert fleetstore.entryfile.parse(backup.read_text())["deployments"] == {"my-app": ENTRY}   # never overwritten
+    assert sorted(p.name for p in where.path.parent.iterdir()) == ["gapp.yaml"]               # nothing beside the fleet
 
 
 def test_each_profile_has_its_own_local_fleet(local_machine):
@@ -67,7 +70,7 @@ def test_a_local_file_that_is_not_a_fleet_is_an_error_naming_the_backup_never_an
     where.path.write_text("- not\n- a mapping\n")
     with pytest.raises(FleetUnavailable) as exc:
         fleetstore.read()
-    assert str(where.path) in str(exc.value) and str(where.backup_path) in str(exc.value)
+    assert str(where.path) in str(exc.value) and str(fleetstore.latest_backup(where)) in str(exc.value)
 
 
 def test_a_document_that_would_not_read_back_is_refused_and_the_fleet_is_untouched(local_machine):
@@ -75,7 +78,7 @@ def test_a_document_that_would_not_read_back_is_refused_and_the_fleet_is_untouch
     with pytest.raises(fleetstore.FleetRefusal):
         fleetstore.write({"my-app": "not an entry"})
     assert fleetstore.read() == {"my-app": ENTRY}
-    assert not fleetstore.location().backup_path.exists()
+    assert fleetstore.latest_backup(fleetstore.location()) is None
 
 
 def test_cli_fleet_says_where_a_local_fleet_is_and_what_it_holds(local_machine):
@@ -86,7 +89,7 @@ def test_cli_fleet_says_where_a_local_fleet_is_and_what_it_holds(local_machine):
     fleetstore.write({"my-app": ENTRY})
     out = CliRunner().invoke(main, ["fleet"]).output
     assert "It holds 1 deployment.\n" in out
-    assert f"The copy from before its last change: {fleetstore.location().backup_path}\n" in out
+    assert f"The copy from before its last change: {fleetstore.latest_backup(fleetstore.location())}\n" in out
 
 
 def test_the_mcp_tool_returns_the_same_description(local_machine):
@@ -115,7 +118,7 @@ def test_an_import_replaces_the_fleet_and_keeps_the_one_it_replaced_as_the_backu
     other = {**DEFINED, "id": "other"}
     result = fleetstore.import_text(yaml.safe_dump({"format": 1, "deployments": {"other": other}}), "copy.yaml")
     assert fleetstore.read() == {"other": other}
-    backup = fleetstore.location().backup_path
+    backup = fleetstore.latest_backup(fleetstore.location())
     assert result["backup"] == str(backup) and "my-app" in yaml.safe_load(backup.read_text())["deployments"]
 
 

@@ -13,6 +13,8 @@ def isolate_config(tmp_path, monkeypatch):
     config_dir = tmp_path / "gapp"
     config_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))   # fleet backups
+    monkeypatch.delenv("GAPP_FLEET", raising=False)                 # a fleet named in the shell never reaches a test
     
     # Initialize config.yaml with a default profile
     config_file = config_dir / "config.yaml"

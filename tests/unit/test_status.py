@@ -139,3 +139,15 @@ def test_status_on_a_runner_never_suggests_signing_in(cloud, monkeypatch):
     _no_identity(cloud, monkeypatch, "PERMISSION_DENIED")
     result = _status(cloud)
     assert result["next_step"].startswith("This is a CI run as ") and "gcloud auth login" not in result["next_step"]
+
+
+# -- a state that cannot be read is reported as that, never as "not deployed" --
+
+
+def test_a_state_that_cannot_be_read_is_not_reported_as_nothing_deployed(cloud):
+    cloud.unreadable_state.add((BUCKET, STATE))
+    result = _status(cloud)
+    assert result["deployed"] is None and result["url"] is None
+    assert "could not read my-app's Terraform state" in result["next_step"]
+    assert "not deployed yet" not in result["next_step"]
+    assert result["last_deployed_by"] == __version__          # the record was still read

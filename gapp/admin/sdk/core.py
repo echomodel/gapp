@@ -371,7 +371,7 @@ class GappSDK:
 
         def written_down(at, error=None):
             return record.build(name=name, definition=definition, commit=sha, image=image, at=at,
-                                by=getattr(self.provider, "account", None) or configured_account(),
+                                by=configured_account() or self.provider.active_account(),
                                 installed=__version__, upgraded_from=upgraded_from, error=error)
 
         try:
@@ -441,15 +441,26 @@ class GappSDK:
             return result
         last = (before or {}).get("gapp")
         result["last_deployed_by"] = last
-        outputs = self.provider.get_infrastructure_outputs(
-            _get_staging_dir(deployment_id), project_bucket, record.state_prefix(deployment_id)) if project_bucket else None
+        outputs, unreadable = None, None
+        if project_bucket:
+            try:
+                outputs = self.provider.get_infrastructure_outputs(
+                    _get_staging_dir(deployment_id), project_bucket, record.state_prefix(deployment_id), strict=True)
+            except CloudAccessError as e:
+                unreadable = str(e)
         if outputs and (url := outputs.get("service_url")):
             result.update(deployed=True, url=url, healthy=self.provider.check_http_health(url))
         if outputs and (live := (outputs.get("custom_domain") or "").strip()):
             result["domain"] = self._domain_status(project, live).model_dump()
         if last and definition.get("gapp"):
             result["upgrade_pending"] = entryfile.version_key(last) < entryfile.version_key(definition["gapp"])
-        if not result["deployed"]:
+        if unreadable:
+            # Not being able to read the state is not the state saying nothing is deployed.
+            result["deployed"] = None
+            result["next_step"] = (
+                f"gapp could not read {name}'s Terraform state, so it cannot say what is deployed. "
+                f"That is a failed read, not a missing deployment. ({unreadable})")
+        elif not result["deployed"]:
             result["next_step"] = f"It is not deployed yet. From a clone of its repo: gapp deploy --deployment {name}"
         elif result["upgrade_pending"]:
             result["next_step"] = (f"It was last deployed by gapp {last}, and its definition is on gapp "

@@ -3,8 +3,9 @@
 A profile is a separate fleet and a separate Google Cloud login on one
 machine. One is active at a time, and every command works in it. The file
 holds the active profile's name and, per profile, the login gapp runs
-gcloud as and the repo its fleet is kept in when it is not kept on this
-machine.
+gcloud as and where its fleet is kept when it is not the profile's own
+file: a repo (`fleet_repo`) or a file the operator named (`fleet_file`),
+never both.
 
 gapp is the only writer of the file. A key it does not know is left out
 of what it reads and of what it next writes.
@@ -19,7 +20,8 @@ from pathlib import Path
 import yaml
 
 DEFAULT_PROFILE = "default"
-PROFILE_KEYS = ("account", "fleet_repo")
+PROFILE_KEYS = ("account", "fleet_repo", "fleet_file")
+FLEET_ENV = "GAPP_FLEET"   # names the fleet for one process, over the profile (fleetstore.location)
 PROFILE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 
 
@@ -81,18 +83,16 @@ def get_active_config() -> dict:
     return config["profiles"][config["active"]]
 
 
-# --- the fleet repo of the active profile ---
+# --- where the active profile's fleet is kept ---
 
 
-def get_fleet_repo() -> str | None:
-    """The repo the active profile's fleet is kept in, or None when it is
-    kept on this machine. `gapp fleet use` is the only writer."""
-    return get_active_config().get("fleet_repo") or None
-
-
-def set_fleet_repo(repo: str | None) -> None:
+def set_fleet(repo: str | None = None, file: str | None = None) -> None:
+    """Record where the active profile's fleet is kept: a repo, a file the
+    operator named, or neither (the profile's own file). `gapp fleet use`
+    is the only writer; `fleetstore.location` the only reader."""
     config = load_config()
-    config["profiles"][config["active"]]["fleet_repo"] = repo
+    held = config["profiles"][config["active"]]
+    held["fleet_repo"], held["fleet_file"] = repo, file
     save_config(config)
 
 
@@ -141,9 +141,10 @@ def _fleet_dir(name: str) -> Path:
 def profiles() -> dict:
     """Every profile, with what it holds and which is active."""
     config = load_config()
-    return {"active": config["active"], "profiles": [
+    variable = (os.environ.get(FLEET_ENV) or "").strip() or None
+    return {"active": config["active"], "fleet_set_by_variable": variable, "profiles": [
         {"name": name, "active": name == config["active"], "account": held.get("account") or None,
-         "fleet_repo": held.get("fleet_repo") or None}
+         "fleet_repo": held.get("fleet_repo") or None, "fleet_file": held.get("fleet_file") or None}
         for name, held in sorted(config["profiles"].items())]}
 
 
@@ -175,7 +176,7 @@ def remove_profile(name: str) -> dict:
     name = _existing(config, name)
     if name == config["active"]:
         raise ConfigRefusal(f"'{name}' is the active profile. Switch to another first: gapp config profile use <name>")
-    if not config["profiles"][name].get("fleet_repo"):
+    if not (config["profiles"][name].get("fleet_repo") or config["profiles"][name].get("fleet_file")):
         local = fleetstore.Location("local", path=fleetstore.local_path(name))
         try:
             count = len(fleetstore.read(local))

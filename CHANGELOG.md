@@ -3,6 +3,42 @@
 Notable changes to gapp. Versions are git tags (`vX.Y.Z`); the version
 source is `gapp/__init__.py`.
 
+## 4.0.0rc15 (pre-release of 4.0.0)
+
+Added:
+
+- **`GAPP_FLEET`** names the fleet for one process, whatever the profile
+  says, in any form `gapp fleet use` takes. It replaces `GAPP_FLEET_FILE`,
+  which only runners set: after upgrading, run `gapp ci init` again in
+  the fleet repo so its installed `gapp-status.yml` sets the new name.
+- **`gapp fleet use` takes a fleet file**: a full path ending in `.yaml`
+  or `.yml`. A relative path is refused, in `fleet use` and `GAPP_FLEET`.
+
+Changed:
+
+- **Backups of a fleet kept in a file** go to
+  `~/.local/state/gapp/backups/` (`$XDG_STATE_HOME`), one per change,
+  named by the time and never overwritten, instead of `gapp.yaml.bak`
+  beside the fleet. Each starts with a comment naming the fleet it is a
+  copy of, and is a fleet file `gapp fleet import` takes as it is.
+
+Fixed:
+
+- **A deploy or status read stopped when Terraform's working folder on
+  the machine remembered another state location**, with "Backend
+  configuration changed". That happened after moving from an earlier
+  gapp, and would happen for the same deployment id in two projects. gapp
+  now always starts Terraform from the location it names, and never
+  moves state.
+- **`gapp status` said "It is not deployed yet" when it could not read
+  the Terraform state.** It now says the state could not be read, with
+  the reason, and reports `deployed` as unknown (`null` with `--json`).
+- **A deploy on a runner recorded no deployer.** The deploy record's
+  `deployed_by` is now the identity that deployed: the configured
+  account, or the one gcloud is acting as.
+- **A fleet change refused by a git hook showed only the hook's last
+  line.** It now shows what git and the hook said.
+
 ## 4.0.0rc14 (pre-release of 4.0.0)
 
 One fleet. Every deployment is defined once, in your fleet, and every

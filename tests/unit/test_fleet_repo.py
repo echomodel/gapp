@@ -2,13 +2,18 @@
 commits. Plain git, no CI. These tests use a real bare repo as the remote."""
 
 import subprocess
+from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
 
 from gapp.admin.cli.main import main
 from gapp.admin.sdk import definitions, entryfile, fleetrepo, fleetstore
-from gapp.admin.sdk.config import get_fleet_repo
+from gapp.admin.sdk.config import get_active_config
+
+
+def get_fleet_repo():
+    return get_active_config().get("fleet_repo")
 from gapp.admin.sdk.definitions import Refused
 from gapp.admin.sdk.fleet import FleetRefusal
 from gapp.admin.sdk.fleetstore import FleetUnavailable
@@ -70,7 +75,9 @@ def test_moving_to_a_repo_carries_the_fleet_as_one_file_and_nothing_else(remote)
     assert in_remote(remote).startswith("format: 1\ndeployments:\n  my-app:\n")
     assert git(remote, "ls-tree", "--name-only", "-r", "main").splitlines() == ["gapp.yaml"]
     assert log(remote) == ["gapp: the fleet moves here"]
-    assert not local_file.exists() and local_file.with_name("gapp.yaml.bak").exists()
+    assert not local_file.exists() and not local_file.with_name("gapp.yaml.bak").exists()
+    backup = Path(result["backup"])
+    assert backup.parent == fleetstore.backups_dir() and "my-app" in backup.read_text()
 
 
 def test_a_repo_with_no_commit_yet_is_an_empty_fleet(remote):
@@ -98,6 +105,22 @@ def test_remove_gives_the_git_command_that_shows_what_it_took_out(remote):
     assert command.startswith("git -C ") and " show " in command
     shown = subprocess.run(command.split(), capture_output=True, text=True).stdout
     assert "gapp: remove my-app" in shown and "-      public: true" in shown
+
+
+def test_a_change_a_git_hook_refuses_shows_everything_the_hook_said(remote, machine):
+    fleetstore.use(remote)
+    definitions.add("my-app", project="my-project", repo="acme/my-app")
+    hook = machine / "no-hooks" / "pre-commit"
+    hook.write_text("#!/bin/sh\necho '  [FAIL] Patterns'\necho '         gapp.yaml:4 [domain] app.example.test'\n"
+                    "echo 'FAILED: 1 check(s) found issues'\nexit 1\n")
+    hook.chmod(0o755)
+    with pytest.raises(Refused) as caught:
+        definitions.set_value("domain", "app.example.test", deployment="my-app")
+    said = caught.value.message
+    assert "Nothing was changed." in said
+    assert "gapp.yaml:4 [domain] app.example.test" in said and "FAILED: 1 check(s) found issues" in said
+    assert "domain" not in (fleetstore.read()["my-app"].get("settings") or {})
+    assert log(remote) == ["gapp: add my-app"]
 
 
 def test_a_change_that_changes_nothing_makes_no_commit(remote):

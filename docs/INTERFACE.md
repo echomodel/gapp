@@ -56,7 +56,7 @@ import`.
 ## The fleet file
 
 One YAML file, `gapp.yaml`: in the config directory for a local fleet, at
-the root of the repo for a GitHub fleet. The name says only that gapp
+the root of the repo for a fleet in a repo, or any `.yaml` file you name. The name says only that gapp
 starts here. Nobody edits it by hand; every change has a command.
 
 ```yaml
@@ -237,7 +237,7 @@ Each changes one definition and nothing else.
 | Command | Does | Needs |
 |---|---|---|
 | `gapp deploy [--dry-run] [--rebuild] [--replace-domain] [--upgrade]` | Builds the definition's ref from this clone and deploys it. Refused when the clone is not at that ref. Terraform makes the deployment's data bucket the first time. After a deploy succeeds, writes the record of it to the project's gapp bucket: the definition as deployed, the commit, the image, when, by whom and from where. Refused on a project whose gapp bucket is missing, with the `gapp project setup` command. `--dry-run` is the full preview: everything the deploy would use and do, including what the app's `app.json` adds and any variable it needs that is not set, with nothing built or changed | gcloud, Terraform, a clone |
-| `gapp status` | What is live: URL, revision, domain state | gcloud |
+| `gapp status` | What is live: URL, health, domain state, and which gapp deployed it. When the Terraform state cannot be read it says so, and never reports that as nothing deployed (`deployed` is `null` with `--json`) | gcloud |
 | `gapp secrets list` | The definition's secrets, whether each is generated, and its state in Secret Manager: set, not set, unlabelled, or another deployment's. What to do about each is listed under the table | gcloud |
 | `gapp secrets set <secret-name> [--from-stdin]` | Stores a value, typed at a prompt or piped | gcloud |
 | `gapp secrets get <secret-name> [--plaintext]` | Shows whether it is set; the value only with `--plaintext` | gcloud |
@@ -265,9 +265,19 @@ GitHub repo.
 | Command | Does |
 |---|---|
 | `gapp fleet` | Where the fleet lives |
-| `gapp fleet use <owner>/<repo> [--create]` | Moves the fleet to that repo. Installs nothing else there |
-| `gapp fleet use local` | Moves it to this machine |
+| `gapp fleet use <owner>/<repo> [--create]` | Moves the fleet to that repo (or any git host, address or full path to a repo). Installs nothing else there |
+| `gapp fleet use <path>.yaml` | Moves it to that file. The path is full, starting with `/` or `~`; a relative path is refused |
+| `gapp fleet use local` | Moves it to the profile's own file on this machine |
 | `gapp fleet export [<file>]` / `gapp fleet import <file>` | Copies the fleet out or in. Import keeps a backup first |
+
+`GAPP_FLEET`, when set, names the fleet for that process in any form
+`gapp fleet use` takes, whatever the profile says. A value gapp cannot
+use fails every command that reads the fleet; it never falls back to the
+profile. `gapp fleet use` is refused while it is set.
+
+A fleet kept in a file keeps the copy each change replaces as a backup in
+`$XDG_STATE_HOME/gapp/backups/` (default `~/.local/state/gapp/backups/`),
+one per change. Nothing is written beside the fleet file.
 
 ### This machine
 

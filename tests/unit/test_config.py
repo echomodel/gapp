@@ -44,10 +44,10 @@ def test_with_no_file_there_is_one_profile_and_it_is_active():
 
 def test_the_file_holds_only_what_is_set():
     config.account(LOGIN)
-    config.set_fleet_repo("acme/fleet")
+    config.set_fleet(repo="acme/fleet")
     assert yaml.safe_load(config.get_config_file().read_text()) == {
         "active": "default", "profiles": {"default": {"account": LOGIN, "fleet_repo": "acme/fleet"}}}
-    config.set_fleet_repo(None)
+    config.set_fleet(repo=None)
     assert yaml.safe_load(config.get_config_file().read_text())["profiles"] == {"default": {"account": LOGIN}}
 
 
@@ -145,7 +145,7 @@ def test_removing_a_profile_whose_fleet_is_in_a_repo_leaves_the_repo_alone(monke
     monkeypatch.setattr(fleetrepo, "read_text", lambda repo: pytest.fail("the fleet repo was read"))
     config.add_profile("work")
     config.use_profile("work")
-    config.set_fleet_repo("acme/fleet")
+    config.set_fleet(repo="acme/fleet")
     config.use_profile("default")
     assert config.remove_profile("work") == {"profile": "work", "changed": True}
     assert [p["name"] for p in config.profiles()["profiles"]] == ["default"]
@@ -192,5 +192,5 @@ def test_a_refusal_exits_2_and_json_carries_it():
     result = run("profile", "use", "nope", "--json")
     assert result.exit_code == 2 and json.loads(result.output)["refused"] is True
     listed = json.loads(run("profile", "list", "--json").output)
-    assert listed == {"active": "default", "profiles": [
-        {"name": "default", "active": True, "account": None, "fleet_repo": None}]}
+    assert listed == {"active": "default", "fleet_set_by_variable": None, "profiles": [
+        {"name": "default", "active": True, "account": None, "fleet_repo": None, "fleet_file": None}]}

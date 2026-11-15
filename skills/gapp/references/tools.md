@@ -13,8 +13,8 @@ command that fixes it.
 
 | Operation | CLI | MCP tool | Notes |
 |---|---|---|---|
-| Where the fleet lives | `gapp fleet` | `gapp_fleet()` | a file on this machine, or a git repo; how many deployments |
-| Move the fleet | `gapp fleet use <owner>/<repo> [--create]`, `gapp fleet use local` | `gapp_fleet_use(target, create=)` | any git host; refused when both places hold deployments |
+| Where the fleet lives | `gapp fleet` | `gapp_fleet()` | a file, or a git repo; how many deployments; `set_by` when `GAPP_FLEET` chose it |
+| Move the fleet | `gapp fleet use <owner>/<repo> [--create]`, `gapp fleet use /full/path/gapp.yaml`, `gapp fleet use local` | `gapp_fleet_use(target, create=)` | any git host; refused when both places hold deployments, and while `GAPP_FLEET` is set |
 | Copy it out or in | `gapp fleet export [<file>]`, `gapp fleet import <file>` | `gapp_fleet_export()`, `gapp_fleet_import(fleet)` | the tools take and return the document, not a path. Import replaces the whole fleet: get the user's yes |
 | Every definition | `gapp list` | `gapp_list()` | name, repo, project, ref, gapp version, "upgrade available" |
 | One definition | `gapp show` | `gapp_show(deployment=)` | `effective`: every setting a deploy would use and where it comes from; `settings`: the object `apply` takes |

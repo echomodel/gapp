@@ -361,6 +361,12 @@ class GCPProvider(CloudProvider):
 
     # -- Terraform --
 
+    # `terraform init` always gets -reconfigure. The staging folder is a
+    # cache on this machine, and the state it should use is the one gapp
+    # names now. Without the flag Terraform stops when the folder remembers
+    # another state location (an earlier gapp's, or the same deployment id
+    # in another project) and asks whether to move state, which gapp never
+    # wants: state is not moved by a deploy.
     def apply_infrastructure(self, staging_dir: Path, bucket_name: str, state_prefix: str, auto_approve: bool, tfvars: Dict) -> Dict:
         token = self.get_auth_token()
         env = os.environ.copy()
@@ -370,7 +376,7 @@ class GCPProvider(CloudProvider):
         _stage_terraform(staging_dir)
         (staging_dir / "terraform.tfvars.json").write_text(json.dumps(tfvars, indent=2))
 
-        subprocess.run(["terraform", "init", f"-backend-config=bucket={bucket_name}", f"-backend-config=prefix={state_prefix}", "-input=false", "-upgrade"], cwd=staging_dir, env=env, check=True)
+        subprocess.run(["terraform", "init", f"-backend-config=bucket={bucket_name}", f"-backend-config=prefix={state_prefix}", "-input=false", "-upgrade", "-reconfigure"], cwd=staging_dir, env=env, check=True)
         
         apply_cmd = ["terraform", "apply", "-input=false"]
         if auto_approve: apply_cmd.append("-auto-approve")
@@ -388,7 +394,7 @@ class GCPProvider(CloudProvider):
         if self.account: env["CLOUDSDK_CORE_ACCOUNT"] = self.account
 
         _stage_terraform(staging_dir)
-        res = subprocess.run(["terraform", "init", f"-backend-config=bucket={bucket_name}", f"-backend-config=prefix={state_prefix}", "-input=false", "-upgrade"], cwd=staging_dir, env=env, capture_output=True, text=True)
+        res = subprocess.run(["terraform", "init", f"-backend-config=bucket={bucket_name}", f"-backend-config=prefix={state_prefix}", "-input=false", "-upgrade", "-reconfigure"], cwd=staging_dir, env=env, capture_output=True, text=True)
         if res.returncode != 0:
             if strict:
                 raise CloudAccessError(f"terraform init against gs://{bucket_name}/{state_prefix} failed: {(res.stderr or '').strip()[-600:]}")
@@ -403,6 +409,11 @@ class GCPProvider(CloudProvider):
         return {k: v.get("value") for k, v in raw.items()}
 
     # -- Miscellaneous --
+
+    def active_account(self) -> Optional[str]:
+        res = self._run_gcloud(["config", "get-value", "account"], capture_output=True, text=True)
+        account = (res.stdout or "").strip() if res.returncode == 0 else ""
+        return account if account and account != "(unset)" else None
 
     def get_auth_token(self) -> str:
         res = self._run_gcloud(["auth", "print-access-token"], capture_output=True, text=True)

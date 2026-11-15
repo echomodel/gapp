@@ -28,6 +28,7 @@ class DummyCloudProvider(CloudProvider):
         self.label_writes = []  # ("project", target, labels) in call order
         self.objects = {}  # (bucket, path) -> text
         self.apply_fails = None  # a message: the next applies fail with it
+        self.account = None  # the identity gcloud reports as active
 
 
     # -- GCP Foundation --
@@ -118,6 +119,9 @@ class DummyCloudProvider(CloudProvider):
         return self.tf_outputs.get((bucket_name, state_prefix))
 
     # -- Miscellaneous --
+
+    def active_account(self) -> Optional[str]:
+        return self.account
 
     def get_auth_token(self) -> str:
         return "mock-token"

@@ -1,7 +1,7 @@
 # Why a fleet can live in a git repo
 
-A fleet is kept in one of two places: a file on one machine, or a git
-repo (`gapp fleet use <owner>/<repo>`), as `gapp.yaml` at its root. This
+A fleet is kept in a file on one machine, or in a git repo (`gapp fleet
+use <owner>/<repo>`), as `gapp.yaml` at its root. This
 page records why the second is a git repo, why gapp makes the commits
 itself, and why none of it has anything to do with CI. It is here so the
 question is not worked through again.

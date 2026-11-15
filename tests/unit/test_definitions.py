@@ -201,7 +201,7 @@ def test_remove_says_what_stays_and_gives_no_teardown_commands(my_app):
     assert "gapp has no command to take them down yet." in out
     assert "  gapp add my-app --project my-project --repo acme/my-app\n" in out
     assert "does not bring back its settings" in out
-    assert f"  cat {fleetstore.location().backup_path}\n" in out
+    assert f"  cat {fleetstore.latest_backup(fleetstore.location())}\n" in out
     assert "gcloud" not in out and "terraform" not in out and "--id" not in out
 
 

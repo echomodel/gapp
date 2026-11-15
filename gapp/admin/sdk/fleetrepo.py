@@ -55,14 +55,24 @@ def cache_dir(repo: str) -> Path:
     return base / "gapp" / "fleets" / re.sub(r"[^A-Za-z0-9._-]+", "_", repo).strip("_")
 
 
+KEPT_LINES = 60      # of a failed git command's output, from the end
+
+
 def _git(args: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess:
     return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
 
 
 def _fail(repo: str, doing: str, result: subprocess.CompletedProcess) -> FleetRepoError:
-    detail = (result.stderr or result.stdout or "").strip().splitlines()
-    why = detail[-1] if detail else "git gave no reason"
-    return FleetRepoError(f"Your fleet is kept in {repo}, and {doing} failed: {why}")
+    # All of what git and its hooks said, not the last line: a hook's reason
+    # is in the lines above its closing summary.
+    said = "\n".join(part.strip() for part in (result.stdout, result.stderr) if part and part.strip())
+    lines = said.splitlines()[-KEPT_LINES:]
+    if not lines:
+        return FleetRepoError(f"Your fleet is kept in {repo}, and {doing} failed: git gave no reason")
+    if len(lines) == 1:
+        return FleetRepoError(f"Your fleet is kept in {repo}, and {doing} failed: {lines[0]}")
+    return FleetRepoError(f"Your fleet is kept in {repo}, and {doing} failed. Nothing was changed. "
+                          f"git said:\n" + "\n".join(f"  {line}" for line in lines))
 
 
 def _branch(clone: Path) -> str | None:
