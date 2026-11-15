@@ -3,6 +3,58 @@
 Notable changes to gapp. Versions are git tags (`vX.Y.Z`); the version
 source is `gapp/__init__.py`.
 
+## 4.0.0rc17 (pre-release of 4.0.0)
+
+Changed:
+
+- **One rule for which gapp versions work together.** Each release names
+  `COMPATIBLE_FROM` (the oldest definition, infrastructure and workflows
+  it works with as they are) and `UPGRADES_FROM` (the oldest `gapp
+  upgrade` and `--upgrade` can bring up). Both are 4.0.0rc15 and
+  4.0.0rc13 for this release. They replace three separate rules: a
+  definition is no longer refused for being on an older but compatible
+  gapp (`set`, `env`, `status` and the rest work on it), the workflows'
+  minimum is `COMPATIBLE_FROM`, and `gapp upgrade`'s floor is
+  `UPGRADES_FROM`.
+- **The infrastructure's version is checked too.** `deploy`, `status`,
+  `secrets` and the runner commands refuse a deployment whose last deploy
+  was by a gapp outside that range, even when its definition is in it.
+- **`gapp list` and `gapp show`** say "upgrade required" or "too old for
+  this gapp" as well as "upgrade available".
+- **Runners check the workflows that started them.** The workflows pass
+  their gapp version (`GAPP_WORKFLOWS_VERSION`), and the gapp on the
+  runner refuses workflows older than its `COMPATIBLE_FROM`. Run `gapp ci
+  init` after upgrading to install workflows that pass it.
+
+- **What to do when Google Cloud refuses names the account.** Every
+  command says which account gapp acted as and which case applies: no
+  account signed in, no login on this machine for the account `gapp
+  config account` names, an expired or revoked login, or a signed-in
+  account that can't reach the project. `gapp deployments scan` that
+  finds no project says whose login searched, and `gapp deployments
+  list` explains unreadable deploy records once, under the list.
+
+Unchanged: every version move is still `gapp upgrade` and then a deploy
+with `--upgrade`, and a deploy builds only with the definition's version.
+
+Added:
+
+- **`gapp deployments list`**: every deployment in the fleet with the gapp
+  of its definition and of its last deploy, and where it stands against
+  this gapp. Filters (`--name`, `--repo`, `--project`, `--below`) narrow
+  the fleet before anything is read; `--limit` caps the reads.
+  `--below <version>` shows what a newer gapp would leave behind.
+- **`gapp deployments scan`**: every deployment gapp has a deploy record
+  for in its projects, found without naming them, and the commands that
+  add back the ones the fleet does not hold.
+
+Fixed:
+
+- **A machine without gcloud got a Python traceback** from every command
+  that calls Google Cloud. It now gets: "gapp needs the Google Cloud CLI
+  (gcloud), and it isn't installed on this machine", with how to install
+  it and that `gapp ci deploy` deploys without it.
+
 ## 4.0.0rc16 (pre-release of 4.0.0)
 
 Added:

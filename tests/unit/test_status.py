@@ -129,7 +129,7 @@ def test_status_without_a_usable_login_names_the_sign_in(cloud, monkeypatch):
     _no_identity(cloud, monkeypatch, "UNAUTHENTICATED")
     result = _status(cloud)
     assert result["deployed"] is False
-    assert "No Google Cloud identity this machine can use" in result["next_step"]
+    assert result["next_step"].startswith("No Google Cloud account is signed in on this machine.")
     assert "gcloud auth login" in result["next_step"] and "UNAUTHENTICATED" not in result["next_step"]
     assert "not deployed yet" not in result["next_step"]
 

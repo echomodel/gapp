@@ -10,6 +10,7 @@ from click.testing import CliRunner
 
 from gapp import __version__
 from gapp.admin.cli.main import main
+from gapp.admin.sdk import versions
 from gapp.admin.sdk import definitions, entryfile, fleetstore
 from gapp.admin.sdk.definitions import Refused
 
@@ -354,7 +355,7 @@ def test_upgrade_with_nothing_to_upgrade_is_refused(my_app):
 
 def test_upgrade_moves_an_older_definition_to_this_gapp_and_nothing_else(my_app, monkeypatch):
     definitions.set_value("public", "true", deployment="my-app")
-    for module in (entryfile, definitions):
+    for module in (entryfile, definitions, versions):
         monkeypatch.setattr(module, "__version__", "4.0.1")
     result = definitions.upgrade("my-app")
     assert result["changes"] == [{"key": "gapp", "before": __version__, "after": "4.0.1"}]
@@ -368,7 +369,7 @@ def test_upgrade_moves_an_older_definition_to_this_gapp_and_nothing_else(my_app,
                                "if an earlier gapp deployed it, and leave it out if none has.\n"),
 ])
 def test_upgrade_says_whether_the_next_deploy_needs_upgrade_from_the_deploy_record(my_app, monkeypatch, on_record, says):
-    for module in (entryfile, definitions):
+    for module in (entryfile, definitions, versions):
         monkeypatch.setattr(module, "__version__", "4.0.1")
     asked = []
 
@@ -386,12 +387,22 @@ def test_upgrade_says_whether_the_next_deploy_needs_upgrade_from_the_deploy_reco
     assert definitions.upgrade("my-app")["deploy_needs_upgrade"] is expected
 
 
-def test_an_older_definition_is_shown_but_not_changed_until_upgraded(my_app, monkeypatch):
-    for module in (entryfile, definitions):
+def test_an_older_compatible_definition_is_shown_and_changed_without_an_upgrade(my_app, monkeypatch):
+    for module in (entryfile, definitions, versions):
         monkeypatch.setattr(module, "__version__", "4.0.1")
     assert definitions.show("my-app")["upgrade"] == "available"
+    definitions.set_value("public", "true", deployment="my-app")
+    assert fleet()["my-app"]["settings"] == {"public": True} and fleet()["my-app"]["gapp"] == __version__
+
+
+def test_a_definition_below_compatible_from_is_shown_but_not_changed_until_upgraded(my_app, monkeypatch):
+    for module in (entryfile, definitions, versions):
+        monkeypatch.setattr(module, "__version__", "4.0.1")
+    monkeypatch.setattr(versions, "COMPATIBLE_FROM", "4.0.1")
+    assert definitions.show("my-app")["upgrade"] == "required"
     message = refused(definitions.set_value, "public", "true", deployment="my-app")
-    assert message.endswith("gapp upgrade --deployment my-app")
+    assert f"is on gapp {__version__}, and gapp 4.0.1 works as-is only with 4.0.1 or later" in message
+    assert "gapp upgrade --deployment my-app" in message
 
 
 def test_a_definition_from_a_newer_gapp_is_neither_shown_changed_nor_upgraded(my_app):
@@ -405,7 +416,7 @@ def test_a_definition_from_a_newer_gapp_is_neither_shown_changed_nor_upgraded(my
 def test_a_definition_too_old_to_upgrade_names_the_gapp_to_install_first(my_app):
     write_version("my-app", "3.9.0")
     message = refused(definitions.upgrade, "my-app")
-    assert "cannot upgrade from" in message and f"Install gapp {definitions.UPGRADES_FROM}" in message
+    assert "cannot upgrade from" in message and f"Install gapp {versions.UPGRADES_FROM}" in message
 
 
 def test_a_change_to_one_definition_leaves_a_newer_one_beside_it_untouched(my_app):

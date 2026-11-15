@@ -23,7 +23,11 @@ def run_gcloud(args: list[str], **kwargs) -> subprocess.CompletedProcess:
         env = kwargs.get("env") or os.environ.copy()
         env["CLOUDSDK_CORE_ACCOUNT"] = account
         kwargs["env"] = env
-    return subprocess.run(["gcloud"] + args, **kwargs)
+    try:
+        return subprocess.run(["gcloud"] + args, **kwargs)
+    except FileNotFoundError:
+        from gapp.admin.sdk.cloud.base import GcloudNotInstalled
+        raise GcloudNotInstalled() from None
 
 
 def require_gcloud_account() -> str | None:

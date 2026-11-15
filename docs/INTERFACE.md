@@ -138,18 +138,24 @@ wrote it. `gapp add` writes the version of the gapp that ran it.
 on the machine that asked. So a gapp upgrade on a workstation changes
 nothing by itself. There is no fleet-wide version.
 
-**A newer gapp and an older definition.** Within the range the newer gapp
-supports:
+**Which versions a gapp works with.** Each release names two versions:
+`COMPATIBLE_FROM`, the oldest it works with as it is, and `UPGRADES_FROM`,
+the oldest `gapp upgrade` and `--upgrade` can bring up to it. A deployment
+has two versions: its definition's, and its infrastructure's (the gapp
+of its last successful deploy, from the deploy record). Every command
+checks the version of what it touches:
 
-| Action | Allowed |
-|---|---|
-| Read it, show it, start a runner deploy | Yes |
-| Change a setting the definition's version knows | Yes |
-| Use a setting it does not know | No: `gapp upgrade` first |
-| Deploy from this machine | No: `gapp upgrade` first |
+| A version that is | Read it, show it, change it | Status, secrets, a runner deploy |
+|---|---|---|
+| This gapp's | Yes | Yes |
+| From `COMPATIBLE_FROM` up to this gapp | Yes, except a setting newer than the definition's version | Yes |
+| From `UPGRADES_FROM` up to `COMPATIBLE_FROM` | Show only; `gapp upgrade` first | No: upgrade first |
+| Older than `UPGRADES_FROM` | Show only; the refusal names a gapp to install first | No |
+| Newer than this gapp | No: install that gapp or later | No |
 
-So an upgrade can be available without being required. `gapp list` and
-`gapp show` say which.
+A deploy from this machine builds only with the definition's version: a
+runner installs exactly that one, and this machine's gapp must be it.
+`gapp list` and `gapp show` say where each definition stands.
 
 **Upgrading is two deliberate steps.**
 
@@ -158,17 +164,14 @@ So an upgrade can be available without being required. `gapp list` and
    deploy will change in the cloud, and anything to do by hand before or
    after. It never goes down, and only the gapp being upgraded to knows
    the way there, so it takes no version.
-2. The next deploy applies it. A deploy that would apply an upgrade is
+2. The next deploy applies it to the infrastructure. A deploy that would
+   apply an upgrade (the definition is newer than the infrastructure) is
    refused without `--upgrade`, and `--upgrade` is refused when no upgrade
-   is pending. `gapp show` and `gapp deploy --dry-run` say in advance
-   which it is.
+   is pending. `gapp show`, `gapp status` and `gapp deploy --dry-run` say
+   in advance which it is.
 
-Which earlier versions a gapp can upgrade from is that release's choice,
-and may be none. When a definition is too old, the refusal names a gapp
-to install first: install it, upgrade, and repeat.
-
-What this depends on: the way a workflow starts a gapp on a runner stays
-the same across releases, and a test holds it there.
+What this depends on: what the workflows hand gapp on a runner is part of
+what `COMPATIBLE_FROM` covers, and a test holds it there.
 
 ## Which deployment a command means
 
@@ -242,6 +245,16 @@ Each changes one definition and nothing else.
 | `gapp secrets set <secret-name> [--from-stdin]` | Stores a value, typed at a prompt or piped | gcloud |
 | `gapp secrets get <secret-name> [--plaintext]` | Shows whether it is set; the value only with `--plaintext` | gcloud |
 
+### Deployments
+
+What is deployed, read from Google Cloud: each deployment's deploy record
+in its project's gapp bucket. Nothing is changed.
+
+| Command | Does | Needs |
+|---|---|---|
+| `gapp deployments list [--name <pattern>] [--repo <owner/repo>] [--project <project>] [--below <version>] [--limit <n>]` | Every deployment in the fleet with the gapp of its definition and of its last deploy, and where it stands against this gapp: current, upgrade available, upgrade pending, upgrade required, too old for this gapp, or install a newer gapp. The filters narrow the fleet before anything is read; each deployment left costs one small read, at most `--limit`, in name order. `--below` keeps those on an older gapp than the version given, so `--below` a new gapp's `COMPATIBLE_FROM` shows what it would leave behind. A record that cannot be read is reported on its row | gcloud, read access to the projects |
+| `gapp deployments scan [--project <project>]` | Every deployment gapp has a deploy record for, in one project or in every project set up for gapp that the login can see, and whether the fleet holds it. For one it does not hold, the commands that add it back. The projects are found by one search Google Cloud filters on its side, so the cost follows the number of gapp projects, not every project the login can see; more than 50 is refused, with `--project` to narrow | gcloud, read access to the projects |
+
 ### GitHub Actions (optional)
 
 Everything about GitHub Actions is under `gapp ci`, and nothing else knows
@@ -298,7 +311,7 @@ deployment is always the `deployment` argument.
 `gapp_project_setup`, `gapp_add`, `gapp_upgrade`, `gapp_rename`, `gapp_remove`, `gapp_list`, `gapp_show`,
 `gapp_set`, `gapp_unset`, `gapp_apis`, `gapp_env_set`, `gapp_env_unset`,
 `gapp_apply`, `gapp_deploy`, `gapp_status`, `gapp_secrets_list`,
-`gapp_secrets_get`, `gapp_ci_init`, `gapp_ci_projects`,
+`gapp_secrets_get`, `gapp_deployments_list`, `gapp_deployments_scan`, `gapp_ci_init`, `gapp_ci_projects`,
 `gapp_ci_deploy`, `gapp_ci_status`,
 `gapp_ci_sources`, `gapp_fleet`, `gapp_fleet_use`,
 `gapp_fleet_export`, `gapp_fleet_import`.
@@ -308,13 +321,11 @@ no tool for `gapp secrets set`: a value is typed at its prompt or piped in.
 
 ## Not in 4.0.0, and addable without a break
 
-- Removing a definition (`gapp remove <name>`).
 - Several services in one deployment (reserved above).
 - Fleet changes by pull request.
 - Secrets from a machine with no gcloud.
 - A shortcut for choosing among several deployments of one repo.
 - Reading more of a repo, such as a Compose file.
-- Rebuilding a lost fleet from what is deployed (`gapp fleet recover`).
 - Disconnecting a project from the runners (`gapp ci projects disconnect`).
 - A command that describes gapp to an agent (`gapp guide`).
 - A gapp version chosen per deployment ahead of an upgrade, and upgrading

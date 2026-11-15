@@ -29,6 +29,7 @@ class DummyCloudProvider(CloudProvider):
         self.objects = {}  # (bucket, path) -> text
         self.apply_fails = None  # a message: the next applies fail with it
         self.account = None  # the identity gcloud reports as active
+        self.unreadable_projects = set()  # projects whose buckets cannot be read
 
 
     # -- GCP Foundation --
@@ -49,6 +50,9 @@ class DummyCloudProvider(CloudProvider):
         self.label_writes.append(("project", project_id, dict(labels)))
         self.project_labels[project_id] = labels
 
+    def search_projects_by_label(self, key: str, value: str) -> List[str]:
+        return sorted(p for p, labels in self.project_labels.items() if labels.get(key) == value)
+
 
     # -- Deployment labels on buckets and services --
 
@@ -59,7 +63,17 @@ class DummyCloudProvider(CloudProvider):
     # -- Objects in a bucket --
 
     def read_object(self, bucket_name: str, path: str) -> Optional[str]:
+        if (self.buckets.get(bucket_name) or {}).get("project") in self.unreadable_projects:
+            raise CloudAccessError(f"Could not read gs://{bucket_name}/{path}: permission denied")
         return self.objects.get((bucket_name, path))
+
+    def list_object_paths(self, bucket_name: str, pattern: str) -> List[str]:
+        import fnmatch
+        if (self.buckets.get(bucket_name) or {}).get("project") in self.unreadable_projects:
+            raise CloudAccessError(f"Could not list gs://{bucket_name}/{pattern}: permission denied")
+        return sorted(path for (bucket, path) in self.objects
+                      if bucket == bucket_name and fnmatch.fnmatchcase(path, pattern)
+                      and path.count("/") == pattern.count("/"))
 
     def write_object(self, bucket_name: str, path: str, text: str) -> None:
         if bucket_name not in self.buckets:

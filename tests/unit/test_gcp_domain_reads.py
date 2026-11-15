@@ -68,3 +68,44 @@ def test_the_active_account_is_read_from_gcloud_and_unset_reads_as_none(provider
         assert provider.active_account() == "deployer@example.test"
     with patch.object(provider, "_run_gcloud", return_value=_done(0, "(unset)\n")):
         assert provider.active_account() is None
+
+
+# -- finding gapp's projects and their deploy records --
+
+
+def test_the_project_search_asks_for_the_label_and_follows_pages(provider, monkeypatch):
+    import json
+    monkeypatch.setattr(provider, "get_auth_token", lambda: "t")
+    pages = iter([
+        json.dumps({"projects": [{"projectId": "b-proj", "state": "ACTIVE"},
+                                 {"projectId": "gone", "state": "DELETE_REQUESTED"}], "nextPageToken": "p2"}) + "\n200",
+        json.dumps({"projects": [{"projectId": "a-proj", "state": "ACTIVE"}]}) + "\n200",
+    ])
+    urls = []
+
+    def run(cmd, **kwargs):
+        urls.append(cmd[-1])
+        return _done(0, stdout=next(pages))
+    monkeypatch.setattr(subprocess, "run", run)
+    assert provider.search_projects_by_label("gapp", "hosted") == ["a-proj", "b-proj"]
+    assert urls[0].endswith("/v3/projects:search?query=labels.gapp%3Ahosted")
+    assert urls[1].endswith("&pageToken=p2")
+
+
+def test_a_failed_project_search_raises_and_is_never_no_projects(provider, monkeypatch):
+    monkeypatch.setattr(provider, "get_auth_token", lambda: "t")
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: _done(0, stdout='{"error": {"message": "denied"}}\n403'))
+    with pytest.raises(CloudAccessError, match="HTTP 403"):
+        provider.search_projects_by_label("gapp", "hosted")
+
+
+def test_object_listing_returns_paths_and_nothing_for_no_match(provider):
+    listed = "gs://gapp-p/deployments/a/deployed.yaml\ngs://gapp-p/deployments/b/deployed.yaml\n"
+    with patch.object(provider, "_run_gcloud", return_value=_done(0, stdout=listed)):
+        assert provider.list_object_paths("gapp-p", "deployments/*/deployed.yaml") == [
+            "deployments/a/deployed.yaml", "deployments/b/deployed.yaml"]
+    with patch.object(provider, "_run_gcloud", return_value=_done(1, stderr="ERROR: One or more URLs matched no objects.")):
+        assert provider.list_object_paths("gapp-p", "deployments/*/deployed.yaml") == []
+    with patch.object(provider, "_run_gcloud", return_value=_done(1, stderr="ERROR: 403 denied")):
+        with pytest.raises(CloudAccessError):
+            provider.list_object_paths("gapp-p", "deployments/*/deployed.yaml")

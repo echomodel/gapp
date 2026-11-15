@@ -73,16 +73,6 @@ DEPLOY_WORKFLOW_PATH = f"{WORKFLOWS_DIR}/{DEPLOY_WORKFLOW}"
 STATUS_WORKFLOW_PATH = f"{WORKFLOWS_DIR}/{STATUS_WORKFLOW}"
 GAPP_WORKFLOWS = (DEPLOY_WORKFLOW, STATUS_WORKFLOW)
 
-# The gapp versions that changed the runner hand-off (what the workflows
-# give `gapp ci runner`: its commands, GAPP_FLEET, the app checkout as the
-# working folder) without keeping the old form too. Workflows from one of
-# these versions on cannot run a gapp older than it, and a gapp from one of
-# them on cannot be run by older workflows. A release that changes the
-# hand-off either keeps the old form as well or adds itself here; the
-# CHANGELOG says which. See CONTRIBUTING, "The runner hand-off".
-RUNNER_HANDOFF_CHANGES = ("4.0.0rc15",)
-RUNNER_MIN_GAPP = RUNNER_HANDOFF_CHANGES[-1]
-
 # A repo on GitHub, as a definition and the profile record it.
 GITHUB_REPO_RE = re.compile(r"^[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+$")
 
@@ -389,8 +379,9 @@ def _write_environment_record(fleet_repo: str, project_id: str, wif_provider: st
 
 def _render_template(name: str, gapp_repo: str, gapp_ref: str) -> str:
     text = resources.files("gapp").joinpath("templates", "ci", name).read_text()
+    import gapp
     return (text.replace("__GAPP_REPO__", gapp_repo).replace("__GAPP_REF__", gapp_ref)
-            .replace("__GAPP_RUNNER_MIN__", RUNNER_MIN_GAPP))
+            .replace("__GAPP_COMPATIBLE_FROM__", gapp.COMPATIBLE_FROM).replace("__GAPP_VERSION__", gapp.__version__))
 
 
 def _workflow_files(gapp_repo: str, gapp_ref: str) -> dict[str, str]:
@@ -461,33 +452,35 @@ def _workflow_stop(fleet_repo: str, path: str) -> dict | None:
 
 def _handoff_stop(fleet_repo: str, name: str, version: str | None) -> dict | None:
     """The refusal when the workflows in the fleet repo and the gapp the
-    definition names do not take the same runner hand-off, or None.
+    definition names do not work together, or None.
 
-    The workflows' gapp version is the tag their deploy workflow calls.
-    When it is not a release (a dev build) or cannot be read, nothing is
-    refused here; the run still checks its own minimum.
+    The workflows say the oldest definition they run (`minimum=`, their
+    gapp's COMPATIBLE_FROM) and are their gapp's version (the tag their
+    deploy workflow calls). A definition on this gapp's version also needs
+    workflows from this gapp's COMPATIBLE_FROM on. Anything that cannot be
+    read here is left to the run, which checks both sides itself.
     """
+    import gapp
     from gapp.admin.sdk.entryfile import EntryFileRefusal, version_key
     read = _read_file(fleet_repo, DEPLOY_WORKFLOW_PATH)
-    found = re.search(r"/deploy\.yml@v(\S+)", read.content or "") if read.present else None
+    text = (read.content or "") if read.present else ""
+    minimum = re.search(r'minimum="([^"]+)"', text)
+    tag = re.search(r"/deploy\.yml@v(\S+)", text)
     try:
-        theirs, defined = version_key(found.group(1)) if found else None, version_key(version)
+        defined = version_key(version)
+        if minimum and defined < version_key(minimum.group(1)):
+            return _refusal("upgrade", (
+                f"'{name}' is defined with gapp {version}, and the workflows in {fleet_repo} work with "
+                f"{minimum.group(1)} or later. Upgrade it first: gapp upgrade --deployment {name}, then "
+                f"gapp ci deploy --deployment {name} --upgrade"))
+        if (tag and version == gapp.__version__
+                and version_key(tag.group(1)) < version_key(gapp.COMPATIBLE_FROM)):
+            return _refusal("ci init", (
+                f"'{name}' is defined with gapp {version}, and the workflows in {fleet_repo} are gapp "
+                f"{tag.group(1)}'s, older than it works with ({gapp.COMPATIBLE_FROM} or later). "
+                f"Bring them up to date: gapp ci init"))
     except EntryFileRefusal:
         return None
-    if theirs is None:
-        return None
-    workflows, upgrade = found.group(1), f"gapp upgrade --deployment {name}"
-    minimum = max((c for c in RUNNER_HANDOFF_CHANGES if version_key(c) <= theirs), key=version_key, default=None)
-    if minimum and defined < version_key(minimum):
-        return _refusal("upgrade", (
-            f"'{name}' is defined with gapp {version}, and the workflows in {fleet_repo} (gapp {workflows}'s) "
-            f"need {minimum} or later. Upgrade it first: {upgrade}, then "
-            f"gapp ci deploy --deployment {name} --upgrade"))
-    newer = [c for c in RUNNER_HANDOFF_CHANGES if theirs < version_key(c) <= defined]
-    if newer:
-        return _refusal("ci init", (
-            f"'{name}' is defined with gapp {version}, and the workflows in {fleet_repo} are gapp {workflows}'s, "
-            f"which cannot run it: gapp {newer[-1]} changed what they hand it. Bring them up to date: gapp ci init"))
     return None
 
 

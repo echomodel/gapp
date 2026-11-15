@@ -166,7 +166,10 @@ deploy: a setting takes effect at the next deploy.
 gets them by copying to the same bucket path from a logged-in machine:
 `gsutil -m rsync -r <folder> gs://gapp-<id>-<project-id>/data/<sub>`.
 
-**A newer gapp.** `gapp list` and `gapp show` say "upgrade available".
+**A newer gapp.** `gapp list` and `gapp show` say "upgrade available"
+(it works with the deployment as it is; upgrading is the user's choice),
+"upgrade required" (it works with it only after `gapp upgrade`), or "too
+old for this gapp" (the refusal names a gapp to install first).
 Nothing changes until the user asks: `gapp upgrade --deployment <name>`
 prints what will change and updates the definition, and says whether the
 next deploy must be given `--upgrade` (yes when an earlier gapp deployed

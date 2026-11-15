@@ -5,11 +5,13 @@ import os
 import shutil
 import subprocess
 import time
+from urllib.parse import quote
 from pathlib import Path
 from typing import Optional, List, Dict
 
 from gapp.admin.sdk.cloud.base import (
-    CloudProvider, CloudAccessError, ProjectNotFoundError, ci_identity_hint, on_ci_runner,
+    CloudProvider, CloudAccessError, GcloudNotInstalled, ProjectNotFoundError, access_hint,
+    ci_identity_hint, expired_login_hint, on_ci_runner,
 )
 
 
@@ -60,14 +62,48 @@ class GCPProvider(CloudProvider):
 
     def __init__(self, account: Optional[str] = None):
         self.account = account
+        self._login = None
 
     def _run_gcloud(self, args: List[str], **kwargs) -> subprocess.CompletedProcess:
-        """Helper to run gcloud with optional account forcing."""
+        """Helper to run gcloud with optional account forcing. A machine
+        without gcloud gets GcloudNotInstalled, never a traceback."""
         cmd = ["gcloud"] + args
         env = kwargs.pop("env", os.environ.copy())
         if self.account:
             env["CLOUDSDK_CORE_ACCOUNT"] = self.account
-        return subprocess.run(cmd, env=env, **kwargs)
+        try:
+            return subprocess.run(cmd, env=env, **kwargs)
+        except FileNotFoundError:
+            raise GcloudNotInstalled() from None
+
+    def _login_state(self) -> tuple:
+        """(the account gapp acts as, whether gcloud holds a login for it).
+
+        Read once per provider, and only when something has already failed,
+        so a working command never pays for it."""
+        if self._login is None:
+            res = self._run_gcloud(["auth", "list", "--format", "json"], capture_output=True, text=True)
+            try:
+                logins = json.loads(res.stdout or "[]") if res.returncode == 0 else []
+            except json.JSONDecodeError:
+                logins = []
+            held = {(entry.get("account") or "").lower() for entry in logins}
+            active = next((entry.get("account") for entry in logins if entry.get("status") == "ACTIVE"), None)
+            account = self.account or active
+            self._login = (account, bool(account) and account.lower() in held)
+        return self._login
+
+    @staticmethod
+    def _gcloud_installed() -> bool:
+        return shutil.which("gcloud") is not None
+
+    def identity_hint(self, project_id: Optional[str] = None) -> str:
+        if not self._gcloud_installed():
+            return GcloudNotInstalled().args[0]
+        account, signed_in = self._login_state()
+        if on_ci_runner():
+            return ci_identity_hint(account, project_id)
+        return access_hint(account, signed_in, project_id, configured=bool(self.account))
 
     # -- GCP Foundation --
 
@@ -110,14 +146,7 @@ class GCPProvider(CloudProvider):
             ], capture_output=True)
 
     def _identity_hint(self, project_id: Optional[str] = None) -> str:
-        if on_ci_runner():
-            return f"  {ci_identity_hint(self.account, project_id)}"
-        who = f" as {self.account}" if self.account else ""
-        return (
-            f"  gapp is calling Google Cloud{who}. Check `gcloud auth list`, and run "
-            f"`gcloud auth login` (or `gapp config account <email>`) if the login "
-            f"is missing, expired, or the wrong account."
-        )
+        return f"  {self.identity_hint(project_id)}"
 
     def _crm_request(self, project_id: str, args: List[str]) -> tuple[str, str]:
         """Run one Cloud Resource Manager call with curl.
@@ -174,6 +203,28 @@ class GCPProvider(CloudProvider):
             self._raise_crm_error(project_id, "write labels of", code, body)
 
 
+    def search_projects_by_label(self, key: str, value: str) -> List[str]:
+        """Resource Manager's project search, with the label as its query, so
+        Google Cloud returns only the matching projects, a page at a time."""
+        found, page = [], ""
+        while True:
+            url = f"{_CRM_PROJECTS}:search?query=" + quote(f"labels.{key}:{value}") + (f"&pageToken={quote(page)}" if page else "")
+            token = self.get_auth_token()
+            res = subprocess.run(["curl", "-s", "-w", "\n%{http_code}", "-H", f"Authorization: Bearer {token}", url],
+                                 capture_output=True, text=True)
+            if res.returncode != 0:
+                raise CloudAccessError(f"Could not reach Cloud Resource Manager to find gapp's projects "
+                                       f"(curl exit {res.returncode}): {(res.stderr or '').strip()}")
+            body, _, code = res.stdout.rpartition("\n")
+            if code.strip() != "200":
+                raise CloudAccessError(f"Could not search for gapp's projects (HTTP {code.strip()}): "
+                                       f"{_api_error_message(body)}\n{self._identity_hint()}")
+            data = json.loads(body or "{}")
+            found += [p["projectId"] for p in data.get("projects", []) if p.get("state", "ACTIVE") == "ACTIVE"]
+            page = data.get("nextPageToken") or ""
+            if not page:
+                return sorted(found)
+
     # -- Deployment labels on buckets and services --
 
     def list_bucket_labels(self, project_id: str) -> Dict[str, Dict[str, str]]:
@@ -206,6 +257,18 @@ class GCPProvider(CloudProvider):
             f"Could not read gs://{bucket_name}/{path} (gcloud exit {res.returncode}): "
             f"{(res.stderr or '').strip()}\n{self._identity_hint()}"
         )
+
+    def list_object_paths(self, bucket_name: str, pattern: str) -> List[str]:
+        res = self._run_gcloud(["storage", "ls", f"gs://{bucket_name}/{pattern}"], capture_output=True, text=True)
+        if res.returncode != 0:
+            said = (res.stderr or "").lower()
+            if _says_not_found(said) or "matched no objects" in said or "404" in said:
+                return []
+            raise CloudAccessError(
+                f"Could not list gs://{bucket_name}/{pattern} (gcloud exit {res.returncode}): "
+                f"{(res.stderr or '').strip()}\n{self._identity_hint()}")
+        prefix = f"gs://{bucket_name}/"
+        return sorted(line.strip()[len(prefix):] for line in res.stdout.splitlines() if line.strip().startswith(prefix))
 
     def write_object(self, bucket_name: str, path: str, text: str) -> None:
         res = self._run_gcloud(["storage", "cp", "-", f"gs://{bucket_name}/{path}"],
@@ -418,9 +481,12 @@ class GCPProvider(CloudProvider):
     def get_auth_token(self) -> str:
         res = self._run_gcloud(["auth", "print-access-token"], capture_output=True, text=True)
         if res.returncode != 0 or not res.stdout.strip():
+            account, signed_in = self._login_state()
+            hint = (f"  {expired_login_hint(account)}" if signed_in and not on_ci_runner()
+                    else self._identity_hint())
             raise CloudAccessError(
                 f"gcloud could not produce an access token: "
-                f"{(res.stderr or '').strip() or 'empty token'}\n{self._identity_hint()}"
+                f"{(res.stderr or '').strip() or 'empty token'}\n{hint}"
             )
         return res.stdout.strip()
 

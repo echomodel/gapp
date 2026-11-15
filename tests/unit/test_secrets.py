@@ -123,7 +123,8 @@ def test_validate_declared_secrets_fast_fails_on_missing_non_generate():
             {"name": "API_TOKEN", "secret": {"name": "api-token"}},
         ]
     }
-    with patch("gapp.admin.sdk.secrets.list_secrets_by_label", return_value=[]):
+    with patch("gapp.admin.sdk.secrets.list_secrets_by_label", return_value=[]), \
+            patch("gapp.admin.sdk.secrets._classify_unlabeled", return_value={"kind": "missing", "owner": None}):
         with pytest.raises(RuntimeError) as exc:
             validate_declared_secrets("proj", "my-app", manifest)
     msg = str(exc.value)
@@ -151,7 +152,8 @@ def test_validate_declared_secrets_reports_all_missing():
             {"name": "APP_KEY", "secret": {"name": "app-key", "generate": True}},
         ]
     }
-    with patch("gapp.admin.sdk.secrets.list_secrets_by_label", return_value=[]):
+    with patch("gapp.admin.sdk.secrets.list_secrets_by_label", return_value=[]), \
+            patch("gapp.admin.sdk.secrets._classify_unlabeled", return_value={"kind": "missing", "owner": None}):
         with pytest.raises(RuntimeError) as exc:
             validate_declared_secrets("proj", "my-app", manifest)
     msg = str(exc.value)

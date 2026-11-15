@@ -83,33 +83,6 @@ def test_a_release_candidate_comes_before_its_release_and_after_the_one_before()
         key("latest")
 
 
-def test_standing_compares_the_definitions_version_to_this_gapp(monkeypatch):
-    monkeypatch.setattr(entryfile, "__version__", "4.1.0")
-    assert entryfile.standing({"gapp": "4.1.0"}, "a") == "current"
-    assert entryfile.standing({"gapp": "4.0.0"}, "a") == "older"
-    assert entryfile.standing({"gapp": "4.2.0"}, "a") == "newer"
-    with pytest.raises(EntryFileRefusal) as caught:
-        entryfile.standing({}, "a")
-    assert caught.value.code == "no-version"
-
-
-def test_an_older_definition_is_refused_with_the_upgrade_command(monkeypatch):
-    monkeypatch.setattr(entryfile, "__version__", "4.1.0")
-    entryfile.require_current({"gapp": "4.1.0"}, "my-app", "deploy it from this machine")
-    with pytest.raises(EntryFileRefusal) as caught:
-        entryfile.require_current({"gapp": "4.0.0"}, "my-app", "deploy it from this machine")
-    assert caught.value.code == "older-definition"
-    assert caught.value.message.endswith("gapp upgrade --deployment my-app")
-
-
-def test_a_newer_definition_is_refused_and_names_the_gapp_to_install(monkeypatch):
-    monkeypatch.setattr(entryfile, "__version__", "4.1.0")
-    with pytest.raises(EntryFileRefusal) as caught:
-        entryfile.require_current({"gapp": "4.2.0"}, "my-app", "change it")
-    assert caught.value.code == "newer-definition"
-    assert "Install gapp 4.2.0 or later to change it" in caught.value.message
-
-
 def test_the_local_fleet_is_kept_in_the_entry_files_shape(local_machine):
     fleetstore.write({"my-app": {"id": "my-app", "project": "my-proj"}})
     text = fleetstore.location().path.read_text()

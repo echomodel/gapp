@@ -12,6 +12,7 @@ from gapp import __version__
 from gapp.admin.cli.main import main
 import yaml
 
+from gapp.admin.sdk import versions
 from gapp.admin.sdk import definitions, entryfile, fleetstore, record, secrets, settings
 from gapp.admin.sdk.cloud.dummy import DummyCloudProvider
 from gapp.admin.sdk.core import GappSDK
@@ -286,7 +287,7 @@ def test_a_project_that_is_not_set_up_names_the_command(sdk, cloud):
 
 
 def as_gapp(monkeypatch, version):
-    for module in (entryfile, definitions):
+    for module in (entryfile, definitions, versions):
         monkeypatch.setattr(module, "__version__", version)
 
 
@@ -300,7 +301,7 @@ def test_a_second_deploy_by_the_same_gapp_is_an_ordinary_deploy(sdk, cloud):
 def test_an_upgrade_is_applied_only_when_the_deploy_says_so(sdk, cloud, monkeypatch):
     sdk.deploy_definition()
     as_gapp(monkeypatch, "4.0.1")
-    assert refused(sdk.deploy_definition).endswith("gapp upgrade --deployment my-app")
+    assert "gapp upgrade --deployment my-app, then deploy it with --upgrade" in refused(sdk.deploy_definition)
     definitions.upgrade("my-app")
     cloud.last_tfvars = None
     message = refused(sdk.deploy_definition)
@@ -324,7 +325,8 @@ def test_a_dry_run_says_an_upgrade_is_pending_and_changes_nothing(sdk, cloud, mo
 
 def test_a_deployment_last_deployed_by_a_newer_gapp_than_its_definition_is_refused(sdk, cloud):
     last_deployed_by(cloud, "9.0.0")
-    assert "A deployment does not go back" in refused(sdk.deploy_definition)
+    assert "was last deployed by gapp 9.0.0" in refused(sdk.deploy_definition)
+    assert "Install gapp 9.0.0 or later to deploy it" in refused(sdk.deploy_definition)
     assert cloud.last_tfvars is None and history(cloud) == []
 
 
@@ -668,3 +670,60 @@ def test_the_list_command_names_the_fleet_and_each_deployment(sdk, monkeypatch):
     assert f"  my-app  acme/my-app  on my-project  builds the default branch  gapp {__version__}\n" in out
     listed = json.loads(CliRunner().invoke(main, ["list", "--json"]).output)
     assert listed["deployments"][0]["deployment"] == "my-app"
+
+
+# --- the commands that touch a deployment's infrastructure ---
+# CONTRIBUTING, "Commands that touch a deployment's infrastructure", lists
+# them; each gets its deployment through loading.load_deployment (or its
+# two steps) and so refuses infrastructure this gapp does not work with.
+
+
+def _runner(fn):
+    def run(sdk):
+        out = []
+        code = fn("my-app", out=out.append)
+        if code == 2:
+            raise Refused(out[0].split("refused=", 1)[1])
+        return out
+    return run
+
+
+INFRASTRUCTURE_COMMANDS = {
+    "gapp deploy": lambda sdk: sdk.deploy_definition(),
+    "gapp status": lambda sdk: sdk.status_definition("my-app"),
+    "gapp secrets list": lambda sdk: secrets.list_secrets("my-app"),
+    "gapp secrets set": lambda sdk: secrets.set_secret("API_KEY", "x", deployment="my-app"),
+    "gapp secrets get": lambda sdk: secrets.get_secret("API_KEY", deployment="my-app"),
+    "gapp ci runner deploy": _runner(lambda name, out: __import__("gapp.admin.sdk.ci_runner", fromlist=["x"]).runner_deploy(name, out=out)),
+    "gapp ci runner status": _runner(lambda name, out: __import__("gapp.admin.sdk.ci_runner", fromlist=["x"]).runner_status(name, out=out)),
+}
+
+
+@pytest.fixture
+def infrastructure(sdk, cloud, monkeypatch):
+    """my-app with a secret, and every infrastructure command reading `cloud`."""
+    definitions.env_set("API_KEY", secret="", deployment="my-app")
+    monkeypatch.setattr(secrets, "_provider", lambda: cloud)
+    monkeypatch.setattr("gapp.admin.sdk.core.get_provider", lambda: cloud, raising=False)
+    monkeypatch.setattr(GappSDK, "__init__", lambda self, provider=None: setattr(self, "provider", cloud))
+    return sdk
+
+
+@pytest.mark.parametrize("command", sorted(INFRASTRUCTURE_COMMANDS))
+def test_every_infrastructure_command_refuses_infrastructure_below_compatible_from(infrastructure, cloud, command):
+    last_deployed_by(cloud, "4.0.0rc13")
+    message = refused(INFRASTRUCTURE_COMMANDS[command], infrastructure)
+    assert "'my-app' was last deployed by gapp 4.0.0rc13" in message
+    assert cloud.last_tfvars is None
+
+
+@pytest.mark.parametrize("command", sorted(INFRASTRUCTURE_COMMANDS))
+def test_every_infrastructure_command_refuses_infrastructure_from_a_newer_gapp(infrastructure, cloud, command):
+    last_deployed_by(cloud, "9.0.0")
+    assert "Install gapp 9.0.0 or later" in refused(INFRASTRUCTURE_COMMANDS[command], infrastructure)
+
+
+def test_a_deploy_with_upgrade_carries_infrastructure_from_upgrades_from(sdk, cloud):
+    last_deployed_by(cloud, "4.0.0rc13")
+    result = sdk.deploy_definition(upgrade=True)
+    assert result["upgraded_from"] == "4.0.0rc13" and recorded(cloud)["gapp"] == __version__

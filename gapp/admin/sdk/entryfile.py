@@ -131,36 +131,3 @@ def version_key(version) -> tuple:
     return int(major), int(minor), int(patch), int(rc) if rc is not None else float("inf")
 
 
-def standing(definition: dict, name: str) -> str:
-    """How a definition's version stands against this gapp.
-
-    "current": written by this version.
-    "older":   written by an earlier one; `gapp upgrade` brings it here.
-    "newer":   written by a later one; this gapp must not change or deploy it.
-    """
-    recorded = definition.get("gapp")
-    if recorded is None:
-        raise EntryFileRefusal(
-            "no-version",
-            f"Deployment '{name}' does not record the gapp version that wrote it, so this gapp "
-            f"cannot tell how to treat it. Nothing was changed.",
-        )
-    theirs, mine = version_key(recorded), version_key(__version__)
-    return "current" if theirs == mine else ("older" if theirs < mine else "newer")
-
-
-def require_current(definition: dict, name: str, to_do: str) -> None:
-    """Refuse `to_do` unless the definition was written by this gapp's version."""
-    where = standing(definition, name)
-    if where == "newer":
-        raise EntryFileRefusal(
-            "newer-definition",
-            f"Deployment '{name}' was written by gapp {definition['gapp']}; this is gapp {__version__}. "
-            f"Install gapp {definition['gapp']} or later to {to_do}. Nothing was changed.",
-        )
-    if where == "older":
-        raise EntryFileRefusal(
-            "older-definition",
-            f"Deployment '{name}' was written by gapp {definition['gapp']}; this is gapp {__version__}. "
-            f"Bring it up to this version first, then {to_do}: gapp upgrade --deployment {name}",
-        )
