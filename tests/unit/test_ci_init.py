@@ -36,10 +36,8 @@ def test_init_installs_the_two_workflows_and_nothing_else(bare):
     assert "uses: example-org/gapp/.github/workflows/deploy.yml@v4.0.0" in deploy and "__GAPP" not in deploy
 
 
-def test_init_names_allowing_an_owner_next_then_connecting_a_project(bare):
-    assert ci_mod.init_workflows()["next_step"] == {"action": "ci sources add", "hint": "gapp ci sources add <owner>"}
-    bare.variables[(FLEET, "GAPP_ALLOWED_SOURCES")] = "me"
-    assert ci_mod.init_workflows()["next_step"]["hint"] == "gapp ci projects connect <project>"
+def test_init_names_connecting_a_project_next(bare):
+    assert ci_mod.init_workflows()["next_step"] == {"action": "ci projects connect", "hint": "gapp ci projects connect <project>"}
 
 
 def test_init_again_writes_nothing_when_the_workflows_are_this_gapps(bare):

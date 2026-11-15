@@ -60,7 +60,6 @@ jobs:
         env:
           DEPLOYMENT: ${{ inputs.deployment }}
           APP_ID: ${{ vars.HOSTING_GITHUB_APP_ID }}
-          ALLOWED_SOURCES: ${{ vars.GAPP_ALLOWED_SOURCES }}
           GH_TOKEN: ${{ github.token }}
           FLEET_FILE: gapp.yaml
         run: |
@@ -111,14 +110,6 @@ jobs:
           }
           if [[ "$(vkey "$version")" < "$(vkey "$minimum")" ]]; then
             echo "gapp-deploy: '$DEPLOYMENT' is defined with gapp $version, and these workflows need $minimum or later, so nothing was deployed. Upgrade it first: gapp upgrade --deployment $DEPLOYMENT, then gapp ci deploy --deployment $DEPLOYMENT --upgrade"
-            exit 1
-          fi
-          # The owner is checked against the repository variable, which a
-          # commit to the fleet file cannot change.
-          owner="${repo%%/*}"
-          allowed=",$(printf '%s' "$ALLOWED_SOURCES" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]'),"
-          if [[ "$allowed" != *",$(printf '%s' "$owner" | tr '[:upper:]' '[:lower:]'),"* ]]; then
-            echo "gapp-deploy: Apps owned by $owner aren't allowed in this fleet, so '$DEPLOYMENT' ($repo) was not deployed. Allow the owner with: gapp ci sources add $owner"
             exit 1
           fi
           # The deploy job runs in the Environment named after the project;

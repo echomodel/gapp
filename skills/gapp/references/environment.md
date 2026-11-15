@@ -16,7 +16,6 @@ machine can do.
 | `status` | yes | read access | yes | no | any time |
 | `deploy` | yes | deploy rights | yes | a clone of the app's repo | any time |
 | `ci init` | yes | no | no | `gh` as an admin of the fleet repo | once, and after installing another gapp |
-| `ci sources` | yes | no | no | `gh` with write access to the fleet repo | once per owner |
 | `ci projects connect` | yes | an Owner of the project | no | `gh` as an admin of the fleet repo | once per project |
 | `ci deploy`, `ci status --live` | yes | no | no | `gh` that can start workflows | any time |
 | `ci status`, `ci projects list` | yes | no | no | `gh` | any time |

@@ -758,8 +758,6 @@ are in [docs/CI.md](docs/CI.md). The rules to keep:
 - **Only `gapp ci projects connect` touches Google Cloud**, because it
   creates the trust a runner needs to sign in at all. Preparing a project
   for deployments is `gapp project setup`; the two do not overlap.
-- **The allowed sources are a repository variable**, so a commit to the
-  fleet file cannot widen whose code a runner deploys.
 - **A run is tied to the request that started it** by an id at the end
   of its name. gapp never reports another run's result as its own.
 - **Workflows pass inputs through the environment**, never into a
@@ -956,6 +954,16 @@ For development, use an editable install: `pipx install -e .`
   has lost updates and stale reads, with or without git.
 - **The fleet in GitHub variables.** No history, last write wins, small
   size limits.
+- **A list of repo owners runners may deploy** (the repository variable
+  `GAPP_ALLOWED_SOURCES`, checked by the deploy workflow). It guarded a
+  workflow that wrote definitions with a token that could not change
+  workflows. Without that workflow, whoever can change a definition can
+  also push a changed deploy workflow to a branch and run it, because
+  Google Cloud trusts any run from the fleet repo. The list stopped no
+  one, and it added a setup step that a machine with narrow GitHub access
+  cannot do. Should a writer appear that can commit definitions and start
+  runs but not change workflows (a hosted service, say), the list can
+  return as a limit checked only when it is set, which breaks nothing.
 - **Changing the fleet through workflow runs.** It ties the fleet to one
   CI system and makes every change wait for a runner.
 - **A `--ref` on deploy.** See "What a deploy builds".

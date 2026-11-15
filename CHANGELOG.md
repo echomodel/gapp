@@ -5,6 +5,18 @@ source is `gapp/__init__.py`.
 
 ## Unreleased
 
+Removed:
+
+- **`gapp ci sources add|remove|list` and the `gapp_ci_sources` MCP tool**,
+  with the deploy workflow's check of the repository variable
+  `GAPP_ALLOWED_SOURCES`. A runner now deploys whatever repo a definition
+  names. The list stopped no one: whoever can change a definition can
+  also push a changed workflow and run it. `gapp ci init` now names
+  `gapp ci projects connect` as the next step. A fleet repo keeps
+  checking the list until `gapp ci init` installs the new workflows; after
+  that the variable is unused, and can be deleted with
+  `gh variable delete GAPP_ALLOWED_SOURCES --repo <fleet-repo>`.
+
 Fixed:
 
 - **`gapp ci deploy` and `gapp ci status --live` never ran from a machine

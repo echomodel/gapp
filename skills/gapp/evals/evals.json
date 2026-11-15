@@ -39,7 +39,7 @@
     {
       "id": 3,
       "prompt": "i want to be able to deploy this from my phone or from an agent session later without touching my laptop every time. what do i need to set up and where do i run it?",
-      "expected_output": "Explains deploying on GitHub Actions runners: keep the fleet in a GitHub repo (gapp fleet use), install the workflows (gapp ci init), allow the app repo's owner (gapp ci sources add), and once per project run gapp project setup and gapp ci projects connect as an Owner; after that gapp ci deploy works from any machine with gh. Probes this machine, finds no Google Cloud login, and says the two Owner steps run where gcloud is signed in.",
+      "expected_output": "Explains deploying on GitHub Actions runners: keep the fleet in a GitHub repo (gapp fleet use), install the workflows (gapp ci init), and once per project run gapp project setup and gapp ci projects connect as an Owner; after that gapp ci deploy works from any machine with gh. Probes this machine, finds no Google Cloud login, and says the two Owner steps run where gcloud is signed in.",
       "files": [
         "evals/files/sample-app-startable"
       ],
@@ -47,8 +47,8 @@
         "The answer describes deploys on GitHub Actions runners, signing in with Workload Identity Federation and no stored key, as the way to deploy without the laptop",
         "The answer says the fleet must be kept in a GitHub repo and names `gapp fleet use <owner>/<repo>`",
         "The answer says `gapp project setup <project>` and `gapp ci projects connect <project>` are once per project and need an Owner's gcloud login",
-        "The answer names only real commands (gapp fleet use, gapp ci init, gapp ci sources add, gapp project setup, gapp ci projects connect, gapp ci deploy, gapp ci status, or their gapp_* tools) and invents none",
-        "The answer says what is once per fleet repo (the workflows, the allowed owners) and what is once per project (project setup, connecting it)",
+        "The answer names only real commands (gapp fleet use, gapp ci init, gapp project setup, gapp ci projects connect, gapp ci deploy, gapp ci status, or their gapp_* tools) and invents none",
+        "The answer says what is once per fleet repo (the workflows) and what is once per project (project setup, connecting it)",
         "The answer says setting a secret's value still needs a machine with gcloud",
         "The agent checks this machine for a Google Cloud login and gapp, and says which steps to run on the machine that has them"
       ]
