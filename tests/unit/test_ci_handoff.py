@@ -60,7 +60,8 @@ def test_workflows_older_than_this_gapps_compatible_from_are_refused_with_ci_ini
     ("v99.0.0", None),                   # newer workflows, same floor
     (None, "4.0.0rc15"),                 # an older definition, within the floor
 ])
-def test_versions_within_the_floor_are_started(ci, fake_gh, workflows, definition):
+def test_versions_within_the_floor_are_started(ci, fake_gh, workflows, definition, monkeypatch):
+    monkeypatch.setattr(gapp, "COMPATIBLE_FROM", "4.0.0rc15")
     _workflows(fake_gh, workflows or f"v{gapp.__version__}")
     _on(fake_gh, definition or gapp.__version__)
     assert ci_mod.deploy("my-app")["dispatched"] is True

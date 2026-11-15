@@ -33,6 +33,11 @@ on:
         required: false
         default: false
         type: boolean
+      replace_domain:
+        description: Let the deploy replace or remove the live custom domain (the old one stops serving)
+        required: false
+        default: false
+        type: boolean
 
 permissions: {}
 
@@ -147,12 +152,12 @@ jobs:
     with:
       deployment: ${{ inputs.deployment }}
       upgrade: ${{ inputs.upgrade }}
+      replace-domain: ${{ inputs.replace_domain }}
       app-repo: ${{ needs.resolve.outputs.repo }}
       ref: ${{ needs.resolve.outputs.ref }}
       environment: ${{ needs.resolve.outputs.project }}
       gapp-repo: __GAPP_REPO__
       gapp-ref: ${{ needs.resolve.outputs.gapp_ref }}
       app-repo-app-id: ${{ needs.resolve.outputs.app_id }}
-      workflows-version: __GAPP_VERSION__
     secrets:
       app-repo-key: ${{ secrets.HOSTING_GITHUB_APP_PRIVATE_KEY }}

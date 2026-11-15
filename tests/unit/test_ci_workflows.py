@@ -50,9 +50,9 @@ def test_init_installs_exactly_the_deploy_and_status_workflows():
     assert all("__GAPP_" not in text for text in files.values())
 
 
-def test_the_deploy_workflow_is_started_with_a_name_and_whether_to_upgrade():
+def test_the_deploy_workflow_is_started_with_a_name_and_whether_to_upgrade_or_replace_the_domain():
     doc = _rendered(ci_mod.DEPLOY_WORKFLOW)
-    assert set(doc[True]["workflow_dispatch"]["inputs"]) == {"request_id", "deployment", "upgrade"}
+    assert set(doc[True]["workflow_dispatch"]["inputs"]) == {"request_id", "deployment", "upgrade", "replace_domain"}
     assert doc["run-name"] == "Deploy ${{ inputs.deployment }} ${{ inputs.request_id }}"
     assert doc["permissions"] == {}
 
@@ -66,10 +66,10 @@ def test_the_deploy_workflow_passes_the_definition_to_the_reusable_workflow():
     assert deploy["uses"] == f"{GAPP_REPO}/.github/workflows/deploy.yml@{GAPP_REF}"
     assert deploy["with"] == {
         "deployment": "${{ inputs.deployment }}", "upgrade": "${{ inputs.upgrade }}",
+        "replace-domain": "${{ inputs.replace_domain }}",
         "app-repo": "${{ needs.resolve.outputs.repo }}", "ref": "${{ needs.resolve.outputs.ref }}",
         "environment": "${{ needs.resolve.outputs.project }}", "gapp-repo": GAPP_REPO,
         "gapp-ref": "${{ needs.resolve.outputs.gapp_ref }}", "app-repo-app-id": "${{ needs.resolve.outputs.app_id }}",
-        "workflows-version": gapp.__version__,
     }
     assert deploy["secrets"] == {"app-repo-key": "${{ secrets.HOSTING_GITHUB_APP_PRIVATE_KEY }}"}
     assert set(deploy["with"]) == set(_reusable()[True]["workflow_call"]["inputs"])
@@ -86,11 +86,12 @@ def test_the_reusable_workflow_runs_gapp_with_the_deployments_name_and_nothing_e
     install, run = job["steps"][-2], job["steps"][-1]
     assert install["run"] == PIP.format(repo="${GAPP_REPO}")
     assert install["env"] == {"GAPP_REPO": "${{ inputs.gapp-repo }}", "GAPP_REF": "${{ inputs.gapp-ref }}"}
-    assert run["run"] == 'gapp ci runner deploy "$DEPLOYMENT" $UPGRADE_FLAG' and run["working-directory"] == "app"
+    assert 'gapp deploy --deployment "$DEPLOYMENT" --json $UPGRADE_FLAG $REPLACE_FLAG' in run["run"]
+    assert run["working-directory"] == "app"
     assert run["env"] == {"GAPP_FLEET": "${{ github.workspace }}/fleet/gapp.yaml",
-                          "GAPP_WORKFLOWS_VERSION": "${{ inputs.workflows-version }}",
                           "DEPLOYMENT": "${{ inputs.deployment }}",
-                          "UPGRADE_FLAG": "${{ inputs.upgrade && '--upgrade' || '' }}"}
+                          "UPGRADE_FLAG": "${{ inputs.upgrade && '--upgrade' || '' }}",
+                          "REPLACE_FLAG": "${{ inputs.replace-domain && '--replace-domain' || '' }}"}
 
 
 def test_the_reusable_workflow_checks_out_the_definitions_ref_of_the_app_beside_the_fleet():
@@ -138,9 +139,8 @@ def test_the_status_workflow_is_read_only_and_asks_the_project_as_the_deploy_ide
     install, ask = status["steps"][-2], status["steps"][-1]
     assert install["run"] == PIP.format(repo=GAPP_REPO)
     assert install["env"] == {"GAPP_REF": "${{ needs.resolve.outputs.gapp_ref }}"}
-    assert ask["run"] == 'gapp ci runner status "$DEPLOYMENT"'
-    assert ask["env"] == {"GAPP_FLEET": "${{ github.workspace }}/fleet/gapp.yaml",
-                          "GAPP_WORKFLOWS_VERSION": gapp.__version__, "DEPLOYMENT": "${{ inputs.deployment }}"}
+    assert 'gapp status --deployment "$DEPLOYMENT" --json' in ask["run"]
+    assert ask["env"] == {"GAPP_FLEET": "${{ github.workspace }}/fleet/gapp.yaml", "DEPLOYMENT": "${{ inputs.deployment }}"}
 
 
 def test_no_script_interpolates_an_input_and_none_writes_to_github():
@@ -229,7 +229,8 @@ class _Runner:
 
 
 @needs_yq
-def test_deploy_reads_the_repo_ref_project_and_gapp_version_from_the_definition(tmp_path):
+def test_deploy_reads_the_repo_ref_project_and_gapp_version_from_the_definition(tmp_path, monkeypatch):
+    monkeypatch.setattr(gapp, "COMPATIBLE_FROM", "4.0.0rc15")
     runner = _Runner(tmp_path).fleet({"my-app": {**DEFINITION, "ref": "v1.4.0", "gapp": "4.0.0rc15"}})
     ok, log = runner.resolve()
     assert ok, log
@@ -365,15 +366,25 @@ HANDOFF = {
         "status": {"reads": {"GAPP_FLEET"}, "run": 'gapp ci runner status "$DEPLOYMENT"',
                    "working-directory": None},
     },
+    "4.0.0rc20": {
+        "deploy": {"reads": {"GAPP_FLEET"},
+                   "run": 'gapp deploy --deployment "$DEPLOYMENT" --json $UPGRADE_FLAG $REPLACE_FLAG '
+                          '> "$RUNNER_TEMP/gapp.json" 2> "$RUNNER_TEMP/gapp.err"',
+                   "working-directory": "app"},
+        "status": {"reads": {"GAPP_FLEET"},
+                   "run": 'gapp status --deployment "$DEPLOYMENT" --json > "$RUNNER_TEMP/gapp.json" 2> "$RUNNER_TEMP/gapp.err"',
+                   "working-directory": None},
+    },
 }
-SHELL_ONLY = {"DEPLOYMENT", "UPGRADE_FLAG"}   # build the command line; gapp never reads them
+SHELL_ONLY = {"DEPLOYMENT", "UPGRADE_FLAG", "REPLACE_FLAG"}   # build the command line; gapp never reads them
 
 
 def _handoff_step(steps, command):
-    found = [s for s in steps if "gapp ci runner " + command in (s.get("run") or "")]
+    found = [s for s in steps if f"gapp {command} --deployment" in (s.get("run") or "")]
     assert len(found) == 1
     step = found[0]
-    return {"reads": set(step.get("env") or {}) - SHELL_ONLY, "run": step["run"].strip(),
+    run = next(line.strip() for line in step["run"].splitlines() if line.strip().startswith("gapp "))
+    return {"reads": set(step.get("env") or {}) - SHELL_ONLY, "run": run,
             "working-directory": step.get("working-directory")}
 
 
@@ -415,6 +426,40 @@ def test_a_definition_on_a_gapp_older_than_the_minimum_is_refused_before_anythin
 @needs_yq
 @pytest.mark.parametrize("workflow", [ci_mod.DEPLOY_WORKFLOW, ci_mod.STATUS_WORKFLOW])
 @pytest.mark.parametrize("version", ["4.0.0rc15", "4.0.0", "4.0.10", "4.1.0rc2", "10.0.0"])
-def test_the_minimum_and_anything_later_is_run(tmp_path, workflow, version):
+def test_the_minimum_and_anything_later_is_run(tmp_path, workflow, version, monkeypatch):
+    monkeypatch.setattr(gapp, "COMPATIBLE_FROM", "4.0.0rc15")
     ok, log = _with_gapp(tmp_path, workflow, version).resolve()
     assert ok, log
+
+
+
+# --- the line a run's log carries, made from gapp's --json output ---
+
+
+def _step_script(load, job, name):
+    return next(s for s in load()["jobs"][job]["steps"] if s.get("name") == name)["run"]
+
+
+@pytest.mark.parametrize("load, job, name, prefix", [
+    (_reusable, "deploy", "Deploy", "gapp-deploy:"),
+    (lambda: _rendered(ci_mod.STATUS_WORKFLOW), "status", "Ask gapp", "gapp-status:"),
+])
+@pytest.mark.parametrize("code, stdout, stderr, line", [
+    (0, '{\n  "service_url": "https://x",\n  "commit": "abc"\n}\n', "build output\n",
+     'result={"service_url":"https://x","commit":"abc"}'),
+    (2, '{\n  "refused": true,\n  "message": "No upgrade is pending\\nfor it."\n}\n', "", "refused=No upgrade is pending for it."),
+    (1, "", "Step 3/9\n  Error: Terraform could not apply the change: denied\n", "error=Terraform could not apply the change: denied"),
+])
+def test_the_run_prints_gapps_result_as_the_line_gapp_ci_reads(tmp_path, load, job, name, prefix, code, stdout, stderr, line):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (tmp_path / "out").write_text(stdout)
+    (tmp_path / "err").write_text(stderr)
+    gapp_stub = bin_dir / "gapp"
+    gapp_stub.write_text(f"#!/bin/sh\ncat {tmp_path / 'out'}\ncat {tmp_path / 'err'} >&2\nexit {code}\n")
+    gapp_stub.chmod(0o755)
+    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "RUNNER_TEMP": str(tmp_path),
+           "DEPLOYMENT": "my-app", "UPGRADE_FLAG": "", "REPLACE_FLAG": ""}
+    res = subprocess.run(["bash", "-e", "-c", _step_script(load, job, name)], env=env, capture_output=True, text=True)
+    assert res.returncode == code
+    assert f"{prefix} {line}" in res.stdout.splitlines()

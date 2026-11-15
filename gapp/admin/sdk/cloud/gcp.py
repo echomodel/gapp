@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import time
 from urllib.parse import quote
 from pathlib import Path
@@ -441,9 +442,15 @@ class GCPProvider(CloudProvider):
 
         subprocess.run(["terraform", "init", f"-backend-config=bucket={bucket_name}", f"-backend-config=prefix={state_prefix}", "-input=false", "-upgrade", "-reconfigure"], cwd=staging_dir, env=env, check=True)
         
-        apply_cmd = ["terraform", "apply", "-input=false"]
+        apply_cmd = ["terraform", "apply", "-input=false", "-no-color"]
         if auto_approve: apply_cmd.append("-auto-approve")
-        subprocess.run(apply_cmd, cwd=staging_dir, env=env, check=True)
+        # Terraform's errors go to stderr: keep them for the message, and
+        # still show them where they would have appeared.
+        applied = subprocess.run(apply_cmd, cwd=staging_dir, env=env, stderr=subprocess.PIPE, text=True)
+        if applied.stderr:
+            sys.stderr.write(applied.stderr)
+        if applied.returncode != 0:
+            raise RuntimeError(f"Terraform could not apply the change: {terraform_error(applied.stderr)}")
 
         res = subprocess.run(["terraform", "output", "-json"], cwd=staging_dir, env=env, capture_output=True, text=True)
         outputs = json.loads(res.stdout) if res.returncode == 0 else {}
@@ -493,3 +500,17 @@ class GCPProvider(CloudProvider):
     def check_http_health(self, url: str) -> bool:
         res = subprocess.run(["curl", "-sf", "-o", "/dev/null", "-w", "%{http_code}", f"{url}/health"], capture_output=True, text=True, timeout=10)
         return res.stdout.strip() == "200"
+
+
+def terraform_error(stderr: str | None) -> str:
+    """The first error Terraform reported, in its own words, or a pointer to the output."""
+    lines = [line.strip().lstrip("│").strip() for line in (stderr or "").splitlines()]
+    for i, line in enumerate(lines):
+        if line.startswith("Error: "):
+            words = [line[len("Error: "):]]
+            for more in lines[i + 1:]:
+                if not more or more.startswith(("with ", "on ")):
+                    break
+                words.append(more)
+            return " ".join(words)[:1000]
+    return "it exited with an error and named none; see its output above."

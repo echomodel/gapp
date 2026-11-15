@@ -66,7 +66,8 @@ def fleet(cloud):
     return cloud
 
 
-def test_list_shows_both_versions_and_where_each_stands(fleet):
+def test_list_shows_both_versions_and_where_each_stands(fleet, monkeypatch):
+    monkeypatch.setattr(versions, "COMPATIBLE_FROM", "4.0.0rc15")
     on("gamma", "4.0.0rc15")
     result = rows(deployments.list_deployments(fleet))
     assert (result["alpha"]["definition"], result["alpha"]["deployed"], result["alpha"]["stands"]) == (
@@ -75,7 +76,8 @@ def test_list_shows_both_versions_and_where_each_stands(fleet):
     assert result["gamma"]["stands"] == "upgrade available"
 
 
-def test_a_definition_upgraded_and_not_deployed_is_an_upgrade_pending(fleet):
+def test_a_definition_upgraded_and_not_deployed_is_an_upgrade_pending(fleet, monkeypatch):
+    monkeypatch.setattr(versions, "COMPATIBLE_FROM", "4.0.0rc15")
     result = rows(deployments.list_deployments(fleet))
     assert (result["gamma"]["definition"], result["gamma"]["deployed"], result["gamma"]["stands"]) == (
         __version__, "4.0.0rc15", "upgrade pending")

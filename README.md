@@ -282,7 +282,7 @@ gapp ci status --deployment my-app --live
 | `gapp ci init` | Installs two workflows in the fleet repo, as one commit | git push access to the fleet repo that can change workflows; `gh` |
 | `gapp ci projects connect <project>` | Lets the fleet repo's runners sign in to the project. Once per project, after `gapp project setup` | gcloud as an Owner; `gh` as an admin |
 | `gapp ci projects list` | The projects runners can deploy to | `gh` |
-| `gapp ci deploy [--upgrade] [--no-watch]` | Deploys on a runner and reports what the run said | `gh` |
+| `gapp ci deploy [--upgrade] [--replace-domain] [--no-watch]` | Deploys on a runner and reports what the run said | `gh` |
 | `gapp ci status [--live]` | The last deploy run. `--live` asks the project what is running | `gh` |
 
 Details, private app repos and the security model: [CI](docs/CI.md).
