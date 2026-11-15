@@ -93,10 +93,6 @@ class GCPProvider(CloudProvider):
             return
         raise RuntimeError(f"Failed to enable API {api}: {stderr}")
 
-    def bucket_exists(self, project_id: str, bucket_name: str) -> bool:
-        res = self._run_gcloud(["storage", "buckets", "describe", f"gs://{bucket_name}", "--project", project_id], capture_output=True)
-        return res.returncode == 0
-
     def create_bucket(self, project_id: str, bucket_name: str) -> None:
         self._run_gcloud(["storage", "buckets", "create", f"gs://{bucket_name}", "--project", project_id, "--location", "us", "--uniform-bucket-level-access"], capture_output=True, check=True)
 
@@ -197,16 +193,27 @@ class GCPProvider(CloudProvider):
                 out[name] = dict(item.get("labels") or {})
         return out
 
-    def set_bucket_labels(self, project_id: str, bucket_name: str, labels: Dict[str, str]) -> None:
-        pairs = ",".join(f"{k}={v}" for k, v in sorted(labels.items()))
-        res = self._run_gcloud(
-            ["storage", "buckets", "update", f"gs://{bucket_name}", f"--update-labels={pairs}"],
-            capture_output=True, text=True,
+    # -- Objects in a bucket --
+
+    def read_object(self, bucket_name: str, path: str) -> Optional[str]:
+        res = self._run_gcloud(["storage", "cat", f"gs://{bucket_name}/{path}"], capture_output=True, text=True)
+        if res.returncode == 0:
+            return res.stdout
+        said = (res.stderr or "").lower()
+        if _says_not_found(said) or "matched no objects" in said or "404" in said:
+            return None
+        raise CloudAccessError(
+            f"Could not read gs://{bucket_name}/{path} (gcloud exit {res.returncode}): "
+            f"{(res.stderr or '').strip()}\n{self._identity_hint()}"
         )
+
+    def write_object(self, bucket_name: str, path: str, text: str) -> None:
+        res = self._run_gcloud(["storage", "cp", "-", f"gs://{bucket_name}/{path}"],
+                               input=text, capture_output=True, text=True)
         if res.returncode != 0:
             raise CloudAccessError(
-                f"Could not label bucket {bucket_name} (gcloud exit {res.returncode}): "
-                f"{(res.stderr or '').strip()}\n{self._identity_hint(project_id)}"
+                f"Could not write gs://{bucket_name}/{path} (gcloud exit {res.returncode}): "
+                f"{(res.stderr or '').strip()}\n{self._identity_hint()}"
             )
 
 

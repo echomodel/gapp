@@ -230,14 +230,3 @@ def as_manifest(id: str, settings) -> dict:
 def version_label(version: str) -> str:
     """A gapp version as a label value: labels take no dots."""
     return version.replace(".", "-")
-
-
-def label_version(label: str | None) -> str | None:
-    """The gapp version a label value names, or None when it names none.
-    A bare major number, which earlier 4.0 release candidates wrote, reads
-    as the first release candidate of that major."""
-    if not label:
-        return None
-    if label.isdigit():
-        return f"{label}.0.0rc0"
-    return label.replace("-", ".")

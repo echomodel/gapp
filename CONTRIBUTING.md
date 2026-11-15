@@ -37,12 +37,22 @@ project without changing it.
 
 **Deployments are independent.** Deployments in one project do not know
 about each other. Each has its own Terraform state, secrets, service
-account and bucket.
+account and data bucket.
 
-**State is in the cloud.** Terraform state lives in the deployment's
-bucket, not on a workstation, so any authorized machine or runner can
-deploy and pick up the same state. The running container mounts the same
-bucket limited to its `data/` folder, so the app cannot reach the state.
+**State is in the cloud, out of the app's reach.** Terraform state and
+the record of each deploy live in the project's own gapp bucket, not on
+a workstation, so any authorized machine or runner can deploy and pick
+up the same state. No app's service account is granted anything on that
+bucket.
+
+**A command never claims more than it does.** Output that reads as "this
+is everything" must be everything. Where gapp cannot do the whole job
+(taking a deployment's resources down, restoring removed settings) it
+says so and stops, and prints no partial recipe.
+
+**The operator never needs an id or a path.** A deployment's id and
+where the fleet is stored are gapp's business. No command takes either
+as input.
 
 **Each added capability is opt-in.** A fleet in a git repo, CI and
 profiles are each something an operator turns on. Someone who uses none
@@ -107,10 +117,14 @@ over. Top-level keys a gapp does not know are kept when it writes.
 ### A deployment's identity
 
 - **The id is fixed; the name is not.** Every cloud resource is keyed by
-  the id: the service, its account, the bucket, the secrets, the state.
-  `gapp rename` changes the name only. The id defaults to the name when
-  the deployment is defined, and two definitions on one project never
-  share one.
+  the id: the service, its account, the data bucket, the secrets, the
+  state. `gapp rename` changes the name only.
+- **gapp picks the id**, when the deployment is added: the name, or the
+  name with a number when that id is taken on the project. No command
+  takes one. A flag for it would put a word in the operator's hands that
+  they otherwise never need, and the one case that needs a chosen id
+  (definitions for resources that already exist) arrives through `gapp
+  fleet import`, where the file carries it.
 - **A deployment is one app on one project.** Test and production are
   two deployments of one repo. There are no environments: a deployment
   and its project carry the same information.
@@ -214,14 +228,89 @@ the labels and the project mark, the bucket's name and layout, how
 secrets are named, the Terraform state's path, and the fleet file's
 format.
 
+### What gapp keeps in a project
+
+`gapp project setup` makes one bucket per project, `gapp-<project>`:
+
+```
+deployments/<id>/terraform/     the deployment's Terraform state
+deployments/<id>/deployed.yaml  the last deploy that succeeded
+deployments/<id>/history/       one file per deploy, failed ones included
+```
+
+- **Why not the deployment's own bucket.** The app's service account can
+  write to its data bucket. With state there, an app could rewrite the
+  state its own next deploy trusts, and a record there could only ever
+  be a claim to review.
+- **Why a record at all.** Nothing else in Google Cloud says which repo,
+  ref and settings a running service came from. The record holds the
+  definition as deployed, the full commit, the image, when, by whom,
+  and from where (a machine, or a runner with its run). It is what a
+  later search for deployments the fleet does not hold can rebuild a
+  definition from, and it is what says which gapp last deployed a
+  deployment.
+- **The record is a snapshot, never an authority.** No command reads a
+  definition from it. The fleet stays the one record of what is meant to
+  run; two authorities is the design this one replaced.
+- **Latest and history are separate**, so the folder a person opens
+  holds three things, and "what is running" never has to be worked out
+  from a list. A failed deploy is written to the history only, so
+  `deployed.yaml` always describes a deploy that succeeded.
+- **The data bucket is Terraform's.** Everything a deployment has is in
+  its state, so nothing is made outside it. A data bucket that exists
+  before Terraform has it (a deploy that failed part way, a lost state)
+  is taken into state as it is, never created over.
+- **No secret's value** is in a definition, so none is in the record.
+
+### Removing a deployment
+
+`gapp remove` changes the fleet and nothing else.
+
+- **It is not an archive.** A definition kept but marked removed keeps
+  its name and id taken, gives `gapp add` a second meaning (bring it
+  back), and makes every command learn to skip it, for something that is
+  only "still there but ignored".
+- **It writes no file and offers no recovery of its own.** The settings
+  it removed are in the fleet repo's history, or in the local fleet's
+  one-step copy, and its output gives the command that shows them.
+  Finding and rebuilding what is deployed belongs to a lost or stale
+  fleet, which is a different moment from a removal, and is designed for
+  that case (see Open questions).
+- **It prints no teardown commands.** A list that misses one resource
+  reads as complete.
+- **It says what a later `gapp add` means.** The id comes from the name,
+  so a deployment of the same name on the same project uses the
+  resources that were left, data included. The output says so.
+
+## Properties kept on purpose
+
+Each of these is deliberate. A change that would break one needs a
+reason recorded here, not a quiet exception.
+
+| Property | Why | What would break it |
+|---|---|---|
+| A fresh machine can run `gapp add` with nothing set up | Cognitive load. The first command must not be configuration | A required config file, profile step or path |
+| Words appear only with need | Someone with one fleet and one login never meets "profile", "fleet repo" or "CI" | Output or help that names an optional capability to someone who has not turned it on |
+| No command takes an id or a storage path | They are gapp's business | A flag such as `--id`, or an instruction to open the fleet file |
+| The fleet is the only record commands read | Two authorities drift | Reading a definition from the deploy record, a label, or the app's repo |
+| Nothing in an app's repo names gapp, a project or Google Cloud | Anyone can deploy the same repo to their own project | A gapp-specific file or key in the repo; an extension to `app.json` |
+| The definition wins over the app's `app.json` | The operator, not the app, decides what a deployment gets | Importing or saving `app.json` values into the definition |
+| A refusal changes nothing and exits 2 | Scripts and agents branch on it | A refusal after a write, or a failure reported as a refusal |
+| Output never claims more than was done | A partial recipe reads as complete | Teardown or recovery steps that cover only some resources |
+| A command that changes the fleet touches no cloud, and the reverse | Each can run where the other's access is missing | A cloud lookup inside `gapp add`, `set` or `remove` |
+| An app cannot reach Terraform state or the deploy record | An app must not be able to change what its next deploy does | Granting an app's service account anything on the project's gapp bucket, or moving state back to the data bucket |
+| Every variable the Terraform module needs has no default | A dropped one fails at plan instead of deploying without it | An optional or empty-default variable for something structural |
+| The CLI matches `docs/interface.yaml` exactly | The interface is a contract | A command, flag or tool added in code only (`tests/unit/test_interface.py`) |
+| No product's names in this repo | gapp is not tied to any app or framework | See "Avoiding Product Coupling" |
+
 ## Static Terraform and generated tfvars
 
 Apps never own Terraform files:
 
 - **Static HCL** lives in this repo at `gapp/terraform/`.
 - **One module**, `gapp/modules/cloud-run-service/`, makes the Cloud Run
-  service, its service account, its access, its variables and secret
-  references, its volume and its domain mapping.
+  service, its service account, its data bucket, its access, its
+  variables and secret references, its volume and its domain mapping.
 - **At deploy time** gapp stages those files under `~/.cache/gapp/`,
   generates only `terraform.tfvars.json` from the definition, and runs
   `terraform init` and `apply`.
@@ -635,6 +724,12 @@ For development, use an editable install: `pipx install -e .`
   ahead of the rest.
 - **A hosted service for the fleet.** gapp has no server and should not
   need one.
+- **An `--id` on `gapp add`.** See "A deployment's identity".
+- **Archiving instead of removing, and `gapp remove` saving what it
+  removed to a file.** See "Removing a deployment".
+- **The deploy record in the deployment's own bucket, or as labels and
+  annotations.** The app can write the first, and the second is too
+  small for a definition. See "What gapp keeps in a project".
 
 ## Accepted limits
 
@@ -644,23 +739,25 @@ For development, use an editable install: `pipx install -e .`
 - Moving the fleet to another repo means `gapp ci projects connect`
   again for each project, because the trust names the repo.
 - A session with no gcloud login cannot set a secret's value.
-- Nothing takes a deployment's resources down. `gapp remove` changes the
-  fleet only and prints no teardown commands, because a partial list
-  would read as a complete one. A deployment added later under the same
-  id on that project uses what was left, data included.
-- The operator never chooses a deployment's id. gapp picks it at `gapp
-  add`, so the id stays out of the commands people type.
+- Nothing takes a deployment's resources down.
+- After `gapp remove`, a different app added under the same name on the
+  same project deploys onto what the removed one left, data included.
+  `gapp remove` says so; nothing refuses it yet.
+- A project set up before the project bucket existed needs `gapp project
+  setup` again; a deploy to it is refused with that command.
+- Deployments made before the deploy record existed have none until
+  their next deploy.
 
 ## Open questions
 
-- One state bucket per project, made by project setup, with Terraform
-  creating each deployment's data bucket. It would end the bucket made
-  outside Terraform and keep state out of the app's reach.
-- The app's service account is granted the whole bucket, state included,
-  though its mount is limited to `data/`.
+- A deploy that refuses when the record under its id names another
+  repo. It would close the reused-name case above, but a repo that has
+  moved owners looks the same, so it needs a deliberate way through.
 - A deeper `status` that asks Google Cloud about every resource in the
   state.
 - `status` calls a fixed `/health` path without credentials, so an app
   with no such route, or one that is not public, reads as unhealthy.
-- Removing a definition, and taking a deployment down.
-- Rebuilding a lost fleet from what is deployed.
+- Taking a deployment's resources down.
+- Finding deployments the fleet does not hold and rebuilding their
+  definitions from the deploy record: one command to search, one to
+  rebuild, shown for review before anything is written.

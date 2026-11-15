@@ -166,7 +166,8 @@ def test_remove_takes_the_definition_out_and_says_what_it_left(my_app):
     result = definitions.remove("my-app")
     assert fleet() == {}
     assert result["left"] == {"project": "my-project", "service": "my-app",
-                              "bucket": "gapp-my-app-my-project", "secrets": ["my-app-api-key"]}
+                              "bucket": "gapp-my-app-my-project", "secrets": ["my-app-api-key"],
+                              "state": "gs://gapp-my-project/deployments/my-app/"}
     assert result["add_again"] == ["gapp add my-app --project my-project --repo acme/my-app --ref v1.2.0"]
     assert result["removed"]["settings"]["env"]["API_KEY"] == {"secret": "api-key"}
 

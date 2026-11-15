@@ -33,11 +33,34 @@ def test_bucket_labels_are_listed_by_bucket_name(provider):
     assert run.call_args[0][0][:5] == ["storage", "buckets", "list", "--project", "p"]
 
 
-def test_bucket_labels_are_updated_not_replaced(provider):
+def test_an_object_is_read_as_text(provider):
+    with patch.object(provider, "_run_gcloud", return_value=_done(0, "gapp: 4.0.0\n")) as run:
+        assert provider.read_object("gapp-p", "deployments/a/deployed.yaml") == "gapp: 4.0.0\n"
+    assert run.call_args[0][0] == ["storage", "cat", "gs://gapp-p/deployments/a/deployed.yaml"]
+
+
+@pytest.mark.parametrize("said", [
+    "ERROR: (gcloud.storage.cat) The following URLs matched no objects or files:\ngs://gapp-p/x",
+    "ERROR: (gcloud.storage.cat) gs://gapp-p not found: 404.",
+])
+def test_an_object_or_bucket_that_is_not_there_reads_as_none(provider, said):
+    with patch.object(provider, "_run_gcloud", return_value=_done(1, stderr=said)):
+        assert provider.read_object("gapp-p", "x") is None
+
+
+def test_an_object_that_cannot_be_read_is_not_taken_for_a_missing_one(provider):
+    with patch.object(provider, "_run_gcloud", return_value=_done(1, stderr="ERROR: 403 denied")):
+        with pytest.raises(CloudAccessError, match="Could not read gs://gapp-p/x"):
+            provider.read_object("gapp-p", "x")
+
+
+def test_an_object_is_written_from_stdin_and_a_refusal_raises(provider):
     with patch.object(provider, "_run_gcloud", return_value=_done(0)) as run:
-        provider.set_bucket_labels("p", "gapp-a-p", {"gapp-version": "4", "gapp-deployment": "a"})
-    assert run.call_args[0][0] == ["storage", "buckets", "update", "gs://gapp-a-p",
-                                   "--update-labels=gapp-deployment=a,gapp-version=4"]
+        provider.write_object("gapp-p", "x", "text")
+    assert run.call_args[0][0] == ["storage", "cp", "-", "gs://gapp-p/x"] and run.call_args[1]["input"] == "text"
+    with patch.object(provider, "_run_gcloud", return_value=_done(1, stderr="ERROR: 403 denied")):
+        with pytest.raises(CloudAccessError, match="Could not write gs://gapp-p/x"):
+            provider.write_object("gapp-p", "x", "text")
 
 
 def test_a_refused_bucket_listing_raises(provider):

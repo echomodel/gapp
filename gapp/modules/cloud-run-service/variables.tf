@@ -63,7 +63,7 @@ variable "public" {
 # storage. tfvars wired through `_build_tfvars` for structurally-required
 # infrastructure must follow this same shape.
 variable "data_bucket" {
-  description = "GCS bucket for solution data (FUSE mounted at /mnt/data, scoped to data/ prefix)"
+  description = "The deployment's data bucket, made by this module (FUSE mounted at /mnt/data, scoped to data/ prefix)"
   type        = string
 }
 

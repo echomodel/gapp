@@ -1,4 +1,5 @@
 terraform {
+  required_version = ">= 1.7"
   required_providers {
     google = {
       source  = "hashicorp/google"
@@ -21,6 +22,17 @@ module "service" {
   data_bucket   = var.data_bucket
   public        = var.public
   labels        = var.labels
+}
+
+# A data bucket that exists before Terraform has it in state is taken
+# over as it is, never created over or replaced. That is the case after a
+# deploy that made the bucket and then failed, and for a deployment
+# whose state was lost. gapp sets the flag when it finds the bucket in
+# the project; for a bucket already in state the block does nothing.
+import {
+  for_each = var.adopt_data_bucket ? toset([var.data_bucket]) : toset([])
+  to       = module.service.google_storage_bucket.data
+  id       = "${var.project_id}/${each.value}"
 }
 
 resource "google_cloud_run_domain_mapping" "custom" {

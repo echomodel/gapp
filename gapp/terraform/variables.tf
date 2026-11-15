@@ -50,9 +50,15 @@ variable "public" {
 }
 
 variable "data_bucket" {
-  description = "GCS bucket for solution data (always mounted when non-empty)"
+  description = "The deployment's data bucket, mounted in the container"
   type        = string
-  default     = ""
+}
+
+# Required, like data_bucket: a deploy that stopped saying whether the
+# bucket exists would try to create one that is already there.
+variable "adopt_data_bucket" {
+  description = "The data bucket exists in the project already, so take it into state instead of creating it"
+  type        = bool
 }
 
 variable "custom_domain" {

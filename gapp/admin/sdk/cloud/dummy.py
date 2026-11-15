@@ -25,16 +25,15 @@ class DummyCloudProvider(CloudProvider):
         self.domain_mappings = {} # (project_id, domain) -> mapping resource dict
         self.unreadable_state = set()  # (bucket, prefix) whose Terraform state cannot be read
         self.services = {}  # (project_id, service_name) -> labels
-        self.label_writes = []  # ("project" | "bucket", target, labels) in call order
+        self.label_writes = []  # ("project", target, labels) in call order
+        self.objects = {}  # (bucket, path) -> text
+        self.apply_fails = None  # a message: the next applies fail with it
 
 
     # -- GCP Foundation --
 
     def enable_api(self, project_id: str, api: str) -> None:
         self.apis_enabled.add((project_id, api))
-
-    def bucket_exists(self, project_id: str, bucket_name: str) -> bool:
-        return bucket_name in self.buckets
 
     def create_bucket(self, project_id: str, bucket_name: str) -> None:
         self.buckets[bucket_name] = {"project": project_id, "labels": {}}
@@ -56,10 +55,15 @@ class DummyCloudProvider(CloudProvider):
         return {name: dict(meta.get("labels") or {}) for name, meta in self.buckets.items()
                 if meta.get("project") == project_id}
 
-    def set_bucket_labels(self, project_id: str, bucket_name: str, labels: Dict[str, str]) -> None:
-        self.label_writes.append(("bucket", bucket_name, dict(labels)))
-        meta = self.buckets.setdefault(bucket_name, {"project": project_id, "labels": {}})
-        meta.setdefault("labels", {}).update(labels)
+    # -- Objects in a bucket --
+
+    def read_object(self, bucket_name: str, path: str) -> Optional[str]:
+        return self.objects.get((bucket_name, path))
+
+    def write_object(self, bucket_name: str, path: str, text: str) -> None:
+        if bucket_name not in self.buckets:
+            raise CloudAccessError(f"Could not write gs://{bucket_name}/{path}: the bucket does not exist")
+        self.objects[(bucket_name, path)] = text
 
 
     # -- Custom domains --
@@ -93,6 +97,10 @@ class DummyCloudProvider(CloudProvider):
 
     def apply_infrastructure(self, staging_dir: Path, bucket_name: str, state_prefix: str, auto_approve: bool, tfvars: Dict) -> Dict:
         self.last_tfvars = tfvars
+        if self.apply_fails:
+            raise RuntimeError(self.apply_fails)
+        self.buckets.setdefault(tfvars["data_bucket"], {"project": tfvars["project_id"], "labels": {}})["labels"] = dict(
+            tfvars.get("labels") or {})
         self.services[(tfvars["project_id"], tfvars["service_name"])] = dict(tfvars.get("labels") or {})
         outputs = {
             "service_url": f"https://{tfvars['service_name']}.a.run.app",
