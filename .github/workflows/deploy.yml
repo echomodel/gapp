@@ -166,7 +166,7 @@ jobs:
       - name: Deploy
         working-directory: app
         env:
-          GAPP_FLEET_FILE: ${{ github.workspace }}/fleet/gapp.yaml
+          GAPP_FLEET: ${{ github.workspace }}/fleet/gapp.yaml
           DEPLOYMENT: ${{ inputs.deployment }}
           UPGRADE_FLAG: ${{ inputs.upgrade && '--upgrade' || '' }}
         run: gapp ci runner deploy "$DEPLOYMENT" $UPGRADE_FLAG

@@ -4,7 +4,7 @@ A workflow checks out the fleet repo and the app's repo, installs the gapp
 version the deployment's definition names, signs in to Google Cloud as the
 project's deploy identity, and then runs one of these with the
 deployment's name and nothing else. Everything else comes from the
-definition, read from the fleet file the workflow names in GAPP_FLEET_FILE.
+definition, read from the fleet file the workflow names in GAPP_FLEET.
 
 Each prints one line a person can read and `gapp ci` can find in the run's
 log: `<prefix> result=<json>`, `<prefix> refused=<why>` or `<prefix>

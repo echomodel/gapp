@@ -93,7 +93,9 @@ def config_profile_group():
 def config_profile_list(json_out):
     """Every profile, the active one marked."""
     _config_end(lambda c: c.profiles(), json_out, lambda r: [
-        f"{'*' if p['active'] else ' '} {p['name']}" for p in r["profiles"]])
+        f"{'*' if p['active'] else ' '} {p['name']}" for p in r["profiles"]] + (
+        [f"GAPP_FLEET is set to {r['fleet_set_by_variable']}: it names the fleet, whatever the active profile says."]
+        if r["fleet_set_by_variable"] else []))
 
 
 @config_profile_group.command("use")
@@ -512,7 +514,7 @@ def ci_runner_group():
 @click.argument("deployment")
 @click.option("--upgrade", is_flag=True, help="Apply a pending gapp upgrade.")
 def ci_runner_deploy_cmd(deployment, upgrade):
-    """Deploy DEPLOYMENT from the app checkout the run stands in; the fleet file is named by GAPP_FLEET_FILE."""
+    """Deploy DEPLOYMENT from the app checkout the run stands in; the fleet file is named by GAPP_FLEET."""
     from gapp.admin.sdk.ci_runner import runner_deploy
     raise SystemExit(runner_deploy(deployment, upgrade=upgrade))
 
@@ -534,8 +536,9 @@ def fleet_group(ctx, json_out):
     \b
     Your fleet is the record of your deployments: for each, its name, the
     repo it runs, its project and its settings. It lives in one place: a
-    file on this machine, or a repo once you choose one with
-    `gapp fleet use`. There is never a second copy.
+    file on this machine, or where you put it with `gapp fleet use`. There
+    is never a second copy. The GAPP_FLEET environment variable, when set,
+    names the fleet for that process, in any form `gapp fleet use` takes.
     """
     if ctx.invoked_subcommand is not None:
         return
@@ -564,11 +567,14 @@ def fleet_use_cmd(target, create, json_out):
 
     \b
     gapp fleet use owner/my-fleet     keep it in that repo, as gapp.yaml at its root
-    gapp fleet use local              keep it in a file on this machine
-    TARGET is owner/repo on GitHub, host/path on another git host, or a git
-    address. The fleet is carried across when the place it is going holds
-    none. Each later change is one commit to that file. Nothing else is
-    put in the repo, and no CI is set up.
+    gapp fleet use ~/ops/gapp.yaml    keep it in that file
+    gapp fleet use local              keep it in this profile's own file
+    TARGET is owner/repo on GitHub, host/path on another git host, a git
+    address, the full path of a repo, or the full path of a fleet file
+    (ending in .yaml or .yml). The fleet is carried across when the place
+    it is going holds none. In a repo each later change is one commit;
+    nothing else is put in the repo, and no CI is set up. Refused while
+    GAPP_FLEET is set.
     """
     from gapp.admin.sdk import fleetstore
     from gapp.admin.sdk.fleet import FleetRefusal
@@ -597,7 +603,7 @@ def fleet_use_cmd(target, create, json_out):
                else f"It holds {count} deployment{'' if count == 1 else 's'}"
                     + (", carried across." if result.get("carried") else "."))
     if result.get("backup"):
-        click.echo(f"The file it was in is kept as {result['backup']}.")
+        click.echo(f"The file it was in is gone; a copy is kept as {result['backup']}.")
 
 
 def _fleet_end(fn, json_out, say):
@@ -660,8 +666,9 @@ def fleet_import_cmd(file, json_out):
 
     FILE is a whole fleet file, as `gapp fleet export` writes one. Every
     definition in it is checked first. The fleet it replaces is kept: a
-    fleet on this machine as a backup file beside it, a fleet in a repo
-    as the commit before this one. Touches no cloud.
+    fleet in a file as a backup (in ~/.local/state/gapp/backups), a fleet
+    in a repo as the commit before this one. A backup is itself a fleet
+    file this command takes. Touches no cloud.
     """
     from gapp.admin.sdk.fleet import FleetRefusal
 
@@ -799,7 +806,7 @@ def remove_cmd(name, json_out):
     click.echo("That does not bring back its settings. Set them again before you deploy.")
     if result["see_removed"]:
         kept = ("The change that removed it" if result["see_removed"].startswith("git ")
-                else "Your fleet as it was, until its next change")
+                else "Your fleet as it was")
         click.echo(f"{kept}, with its settings:")
         click.echo(f"  {result['see_removed']}")
 

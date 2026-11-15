@@ -56,7 +56,7 @@ import`.
 ## The fleet file
 
 One YAML file, `gapp.yaml`: in the config directory for a local fleet, at
-the root of the repo for a GitHub fleet. The name says only that gapp
+the root of the repo for a fleet in a repo, or any `.yaml` file you name. The name says only that gapp
 starts here. Nobody edits it by hand; every change has a command.
 
 ```yaml
@@ -265,9 +265,19 @@ GitHub repo.
 | Command | Does |
 |---|---|
 | `gapp fleet` | Where the fleet lives |
-| `gapp fleet use <owner>/<repo> [--create]` | Moves the fleet to that repo. Installs nothing else there |
-| `gapp fleet use local` | Moves it to this machine |
+| `gapp fleet use <owner>/<repo> [--create]` | Moves the fleet to that repo (or any git host, address or full path to a repo). Installs nothing else there |
+| `gapp fleet use <path>.yaml` | Moves it to that file. The path is full, starting with `/` or `~`; a relative path is refused |
+| `gapp fleet use local` | Moves it to the profile's own file on this machine |
 | `gapp fleet export [<file>]` / `gapp fleet import <file>` | Copies the fleet out or in. Import keeps a backup first |
+
+`GAPP_FLEET`, when set, names the fleet for that process in any form
+`gapp fleet use` takes, whatever the profile says. A value gapp cannot
+use fails every command that reads the fleet; it never falls back to the
+profile. `gapp fleet use` is refused while it is set.
+
+A fleet kept in a file keeps the copy each change replaces as a backup in
+`$XDG_STATE_HOME/gapp/backups/` (default `~/.local/state/gapp/backups/`),
+one per change. Nothing is written beside the fleet file.
 
 ### This machine
 

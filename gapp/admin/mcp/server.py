@@ -314,13 +314,14 @@ def gapp_list() -> dict:
 
 @_tool()
 def gapp_fleet() -> dict:
-    """Where the fleet lives: a file on this machine (`kind: local`, `path`)
-    or a GitHub repo (`kind: github`, `repo`), and how many deployments it
-    holds. The fleet is the record of the deployments (each one's name,
-    repo, project and settings) and lives in exactly one place. `problem`
+    """Where the fleet lives: a file (`kind: local`, `path`) or a git repo
+    (`kind: github`, `repo`), and how many deployments it holds. The fleet
+    is the record of the deployments (each one's name, repo, project and
+    settings) and lives in exactly one place. `set_by` is "GAPP_FLEET" when
+    that environment variable chose it rather than the profile. `problem`
     is set, and `deployments` is null, when it could not be read: an
-    unreadable fleet is never reported as empty. `backup` is the copy a
-    local fleet keeps from before its last change.
+    unreadable fleet is never reported as empty. `backup` is the newest
+    copy a fleet kept in a file has from before a change.
     """
     from gapp.admin.sdk.fleetstore import describe_fleet
     return describe_fleet()
@@ -328,11 +329,13 @@ def gapp_fleet() -> dict:
 
 @_tool()
 def gapp_fleet_use(target: str, create: bool = False) -> dict:
-    """Move the fleet to a git repo, or back to this machine. `target` is
-    `owner/repo` on GitHub, `host/path` on another git host, a git address,
-    or "local". In a repo the fleet is one file, `gapp.yaml` at its root,
-    and each later change is one commit to it; nothing else is put in the
-    repo and no CI is set up. The fleet is carried across when the place
+    """Move the fleet to a git repo, to a file, or back to this profile's
+    own file. `target` is `owner/repo` on GitHub, `host/path` on another
+    git host, a git address, the full path of a repo or of a fleet file
+    (starting with / or ~ and ending in .yaml or .yml), or "local". In a
+    repo the fleet is one file, `gapp.yaml` at its root, and each later
+    change is one commit to it; nothing else is put in the repo and no CI
+    is set up. Refused while the GAPP_FLEET environment variable is set. The fleet is carried across when the place
     it is going holds none; when both hold deployments the move is refused.
     `create` makes the repo on GitHub first, private, when it is not there.
     """
@@ -376,8 +379,8 @@ def gapp_fleet_import(fleet: dict) -> dict:
     not is dropped from the fleet, so start from an export and get the
     user's yes before calling this. Every definition is checked first and
     one that is wrong refuses the whole import. The fleet it replaces is
-    kept: a fleet on this machine as a backup file (`backup`), a fleet in
-    a repo as the commit before this one. Touches no cloud: a deployment
+    kept: a fleet in a file as a backup in gapp's state folder (`backup`),
+    a fleet in a repo as the commit before this one. Touches no cloud: a deployment
     that is dropped keeps running until it is taken down in the cloud.
     """
     import yaml

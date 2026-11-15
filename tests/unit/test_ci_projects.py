@@ -108,7 +108,7 @@ def test_connect_refuses_what_is_not_a_project_id(machine, monkeypatch, project)
 
 def test_connect_is_refused_when_the_fleet_is_not_in_a_github_repo(machine, monkeypatch):
     _nothing_ran(monkeypatch)
-    config_mod.set_fleet_repo(None)
+    config_mod.set_fleet(repo=None)
     res = ci_mod.connect_project("my-proj")
     assert res["refused"] is True and res["next_step"]["action"] == "fleet use"
 
