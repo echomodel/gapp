@@ -1,4 +1,4 @@
-__version__ = "4.0.0rc20"
+__version__ = "4.0.0"
 
 # The two version numbers every release sets (gapp/admin/sdk/versions.py
 # applies them; CONTRIBUTING, "gapp versions", says when each moves).

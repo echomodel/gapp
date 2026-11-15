@@ -3,6 +3,14 @@
 Notable changes to gapp. Versions are git tags (`vX.Y.Z`); the version
 source is `gapp/__init__.py`.
 
+## 4.0.0
+
+The release of 4.0.0rc20, unchanged. The 4.0.0rc entries below are what
+4.0.0 changes from 3.x. A definition or deployment on an earlier 4.0.0
+release candidate is brought up with `gapp upgrade --deployment <name>`
+and one deploy with `--upgrade`; run `gapp ci init` first on a fleet that
+deploys on GitHub Actions.
+
 ## 4.0.0rc20 (pre-release of 4.0.0)
 
 Changed:
