@@ -8,6 +8,7 @@ from click.testing import CliRunner
 
 from gapp import __version__
 from gapp.admin.cli.main import main
+from gapp.admin.sdk import versions
 from gapp.admin.sdk import definitions, entryfile, secrets, settings
 from gapp.admin.sdk.cloud.dummy import DummyCloudProvider
 from gapp.admin.sdk.core import GappSDK
@@ -24,6 +25,7 @@ def fleet(monkeypatch, tmp_path):
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     monkeypatch.chdir(elsewhere)
+    monkeypatch.setattr(secrets, "_provider", DummyCloudProvider)   # the deploy record: none yet
     definitions.add("my-app", project=PROJECT, repo="acme/my-app")
     definitions.env_set("API_KEY", secret="", deployment="my-app")
     definitions.env_set("APP_KEY", secret="", generate=True, deployment="my-app")
@@ -190,7 +192,7 @@ def test_a_live_deployment_reports_its_url_health_and_who_deployed_it(cloud):
 
 def test_status_says_when_the_next_deploy_would_apply_an_upgrade(cloud, monkeypatch):
     deployed(cloud)
-    for module in (entryfile, definitions):
+    for module in (entryfile, definitions, versions):
         monkeypatch.setattr(module, "__version__", "4.0.1")
     definitions.upgrade("my-app")
     result = GappSDK(provider=cloud).status_definition("my-app")

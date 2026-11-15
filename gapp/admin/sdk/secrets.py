@@ -47,20 +47,23 @@ def set_secret(name: str, value: str, deployment: str | None = None) -> dict:
     }
 
 
+def _provider():
+    """The cloud provider the secrets commands read the deploy record with."""
+    from gapp.admin.sdk.cloud import get_provider
+    return get_provider()
+
+
 def _deployment_context(deployment: str | None, command: str) -> dict:
     """The deployment a secrets command means, from the fleet: its name,
     id, project and the variables its definition declares."""
-    from gapp.admin.sdk import definitions, entryfile, settings as settings_mod
+    from gapp.admin.sdk import definitions, loading, settings as settings_mod
 
     @definitions._guard
     def read():
-        _, deployments = definitions._load()
-        name = definitions.which(deployments, deployment, None, command)
-        definition = deployments[name]
-        if entryfile.standing(definition, name) == "newer":
-            entryfile.require_current(definition, name, "work with its secrets")
+        loaded = loading.load_deployment(_provider(), deployment, None, command, "work with its secrets")
+        definition = loaded.definition
         manifest = settings_mod.as_manifest(definition["id"], definition.get("settings"))
-        return {"name": name, "id": definition["id"], "project": definition["project"],
+        return {"name": loaded.name, "id": definition["id"], "project": definition["project"],
                 "env": manifest.get("env", [])}
 
     return read()

@@ -288,20 +288,23 @@ class GappSDK:
         whether it would apply an upgrade, and refuses nothing about that.
         """
         from gapp import __version__
-        from gapp.admin.sdk import appjson, definitions, entryfile, record, settings as settings_mod
+        from gapp.admin.sdk import appjson, definitions, entryfile, loading, record, settings as settings_mod, versions
         from gapp.admin.sdk.definitions import Refused
         from gapp.admin.sdk.start import start_method_of, missing
         from gapp.admin.sdk.util import configured_account
 
         cwd = Path(cwd or Path.cwd())
-        _, deployments = definitions._load()
-        name = definitions.which(deployments, deployment, cwd, "gapp deploy")
-        definition = deployments[name]
-        try:
-            entryfile.require_current(definition, name, "deploy it from this machine")
-            settings_mod.validate(definition.get("settings"))
-        except (entryfile.EntryFileRefusal, settings_mod.SettingsRefusal) as e:
-            raise Refused(e.message) from e
+        to_do = "deploy it"
+
+        @definitions._guard
+        def load():
+            loaded = loading.load_definition(deployment, cwd, "gapp deploy", to_do)
+            versions.check_deploys(loaded.definition, loaded.name)
+            settings_mod.validate(loaded.definition.get("settings"))
+            return loaded
+
+        loaded = load()
+        name, definition = loaded.name, loaded.definition
         root = self._clone_of(definition, name, cwd)
         sha = self._check_at_ref(root, definition, name)
         # The definition wins; the app's own app.json, at the commit being
@@ -321,15 +324,13 @@ class GappSDK:
 
         deployment_id, project = definition["id"], definition["project"]
         bucket = self.get_bucket_name(deployment_id, project)
-        buckets = self.provider.list_bucket_labels(project)
-        project_bucket = record.bucket(project) if record.bucket(project) in buckets else None
-        before = record.read_latest(self.provider, project, deployment_id) if project_bucket else None
-        last = (before or {}).get("gapp")
+        deployed = definitions._guard(loading.with_infrastructure)(self.provider, loaded, to_do, upgrading=upgrade)
+        buckets, project_bucket, last = deployed.buckets, deployed.project_bucket, deployed.last_deployed_by
         if last is None:
             standing = "first"
         else:
             theirs, mine = entryfile.version_key(last), entryfile.version_key(definition["gapp"])
-            standing = "same" if theirs == mine else ("upgrade" if theirs < mine else "ahead")
+            standing = "same" if theirs == mine else "upgrade"   # a newer one was refused by the load
         plan = {
             "deployment": name, "id": deployment_id, "project": project, "repo": definition.get("repo"),
             "ref": definition.get("ref"), "commit": sha[:12], "gapp": definition["gapp"],
@@ -343,11 +344,6 @@ class GappSDK:
             return {**plan, "dry_run": True}
         if filled["missing"]:
             raise Refused(appjson.missing_text(name, filled["missing"]))
-        if standing == "ahead":
-            raise Refused(
-                f"'{name}' was last deployed by gapp {last}, and its definition names gapp {definition['gapp']}. "
-                f"A deployment does not go back. Nothing was changed."
-            )
         if standing == "upgrade" and not upgrade:
             raise Refused(
                 f"'{name}' was last deployed by gapp {last}, and its definition is on gapp {definition['gapp']}. "
@@ -417,29 +413,21 @@ class GappSDK:
     def status_definition(self, deployment: Optional[str] = None, *, cwd: Optional[Path] = None) -> dict:
         """What is live for a deployment of the fleet: its URL and health, the
         domain's state, which gapp last deployed it, and the next step."""
-        from gapp.admin.sdk import definitions, entryfile, record
+        from gapp.admin.sdk import definitions, loading, record
 
-        @definitions._guard
-        def find():
-            _, deployments = definitions._load()
-            name = definitions.which(deployments, deployment, cwd, "gapp status")
-            definition = deployments[name]
-            if entryfile.standing(definition, name) == "newer":
-                entryfile.require_current(definition, name, "read its status")
-            return name, definition
-
-        name, definition = find()
+        to_do = "read its status"
+        loaded = definitions._guard(loading.load_definition)(deployment, cwd, "gapp status", to_do)
+        name, definition = loaded.name, loaded.definition
         deployment_id, project = definition["id"], definition["project"]
         result = {"deployment": name, "project": project, "deployed": False, "url": None, "healthy": None,
                   "domain": None, "gapp": definition.get("gapp"), "last_deployed_by": None,
                   "upgrade_pending": False, "next_step": None}
         try:
-            project_bucket = self._project_bucket(project)
-            before = record.read_latest(self.provider, project, deployment_id) if project_bucket else None
+            deployed = definitions._guard(loading.with_infrastructure)(self.provider, loaded, to_do)
         except CloudAccessError:
             result["next_step"] = self._identity_hint(project)
             return result
-        last = (before or {}).get("gapp")
+        project_bucket, last = deployed.project_bucket, deployed.last_deployed_by
         result["last_deployed_by"] = last
         outputs, unreadable = None, None
         if project_bucket:
@@ -452,8 +440,7 @@ class GappSDK:
             result.update(deployed=True, url=url, healthy=self.provider.check_http_health(url))
         if outputs and (live := (outputs.get("custom_domain") or "").strip()):
             result["domain"] = self._domain_status(project, live).model_dump()
-        if last and definition.get("gapp"):
-            result["upgrade_pending"] = entryfile.version_key(last) < entryfile.version_key(definition["gapp"])
+        result["upgrade_pending"] = deployed.upgrade_pending
         if unreadable:
             # Not being able to read the state is not the state saying nothing is deployed.
             result["deployed"] = None
@@ -469,7 +456,7 @@ class GappSDK:
 
     def list_definitions(self) -> dict:
         """Every definition in the fleet, with how its version stands against this gapp."""
-        from gapp.admin.sdk import definitions, entryfile, fleetstore
+        from gapp.admin.sdk import definitions, entryfile, fleetstore, versions
         where = fleetstore.location()
         try:
             deployments = fleetstore.read(where)
@@ -479,12 +466,11 @@ class GappSDK:
         for name in sorted(deployments):
             d = deployments[name]
             try:
-                stands = entryfile.standing(d, name)
-            except entryfile.EntryFileRefusal:
+                stands = versions.standing(d["gapp"])
+            except (KeyError, entryfile.EntryFileRefusal):
                 stands = "unknown"
             rows.append({"deployment": name, "repo": d.get("repo"), "project": d.get("project"),
-                         "ref": d.get("ref"), "gapp": d.get("gapp"),
-                         "upgrade": {"older": "available", "newer": "install a newer gapp"}.get(stands)})
+                         "ref": d.get("ref"), "gapp": d.get("gapp"), "upgrade": versions.UPGRADE_WORDS.get(stands)})
         return {"fleet": where.describe(), "deployments": rows}
 
 

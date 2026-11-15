@@ -6,6 +6,10 @@ import sys
 import click
 
 from gapp import __version__
+
+# How `gapp list` and `gapp show` word a definition's version against this gapp (versions.UPGRADE_WORDS).
+UPGRADE_NOTES = {"available": "upgrade available", "required": "upgrade required",
+                 "too old for this gapp": "too old for this gapp", "install a newer gapp": "install a newer gapp"}
 from gapp.admin.sdk.core import (
     GappSDK,
 )
@@ -263,7 +267,7 @@ def list_cmd(sdk: GappSDK, json_out):
         return
     width = max(len(r["deployment"]) for r in rows)
     for r in rows:
-        note = f"  ({'upgrade available' if r['upgrade'] == 'available' else r['upgrade']})" if r["upgrade"] else ""
+        note = f"  ({UPGRADE_NOTES[r['upgrade']]})" if r["upgrade"] else ""
         click.echo(f"  {r['deployment']:<{width}}  {r['repo'] or 'no repo'}  on {r['project']}  "
                    f"builds {r['ref'] or 'the default branch'}  gapp {r['gapp']}{note}")
 
@@ -833,8 +837,8 @@ def show_cmd(deployment, json_out):
     click.echo(f"  project  {result['project']}")
     click.echo(f"  builds   {result['ref'] or 'the default branch'}")
     click.echo(f"  gapp     {result['gapp']}" + (
-        f"  (this is gapp {result['this_gapp']}; upgrade available: gapp upgrade --deployment {result['deployment']})"
-        if result["upgrade"] else ""))
+        f"  (this is gapp {result['this_gapp']}; {UPGRADE_NOTES[result['upgrade']]}: "
+        f"gapp upgrade --deployment {result['deployment']})" if result["upgrade"] else ""))
     click.echo("  settings")
     for row in result["effective"]:
         click.echo(f"    {row['key']}: {row['value']}  ({row['from']})")

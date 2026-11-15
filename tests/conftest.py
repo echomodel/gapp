@@ -15,6 +15,7 @@ def isolate_config(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))   # fleet backups
     monkeypatch.delenv("GAPP_FLEET", raising=False)                 # a fleet named in the shell never reaches a test
+    monkeypatch.delenv("GAPP_WORKFLOWS_VERSION", raising=False)     # nor a runner's workflows version
     
     # Initialize config.yaml with a default profile
     config_file = config_dir / "config.yaml"

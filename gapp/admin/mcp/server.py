@@ -444,7 +444,9 @@ def gapp_show(deployment: str | None = None) -> dict:
     from the definition or a default (`effective`). `settings` is the
     definition's settings object, exactly what `gapp_apply` takes.
     `upgrade` is "available" when this gapp is newer than the
-    definition. `deployment` may be left out only
+    definition and works with it as it is, "required" when it works with
+    it only after `gapp_upgrade`, and "too old for this gapp" when an
+    older gapp must upgrade it first. `deployment` may be left out only
     when the server runs inside a clone of the app's repo.
     """
     return _definition_tool("show", deployment)
