@@ -323,6 +323,15 @@ Isolate with temp dirs and environment variables.
   for real with yq.
 - **Integration tests (`tests/integration/`)** only when asked for.
 
+**Principles tests (`tests/unit/principles/`)** are different from the
+rest. Each holds one property gapp has on purpose, and its docstring
+states the commitment, the reason and where it is written down. Other
+tests change as the design changes; these do not. A failure there means
+the work in hand breaks a commitment, so the answer is to stop and raise
+it with the owner, never to edit the test. Why a separate folder: a
+change to a commitment then shows as a change to that folder, in the
+diff and in review, instead of looking like routine test upkeep.
+
 Test names say the scenario and the outcome:
 `test_replacing_a_live_domain_is_refused_before_anything_is_built`.
 
