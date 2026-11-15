@@ -3,7 +3,7 @@
 Notable changes to gapp. Versions are git tags (`vX.Y.Z`); the version
 source is `gapp/__init__.py`.
 
-## Unreleased
+## 4.0.0rc14 (pre-release of 4.0.0)
 
 One fleet. Every deployment is defined once, in your fleet, and every
 command works from that definition. `docs/INTERFACE.md` lists every
