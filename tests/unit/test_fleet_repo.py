@@ -216,6 +216,45 @@ def test_a_change_made_elsewhere_while_this_ran_is_refused_and_can_be_run_again(
     assert "public: true" in in_remote(remote) and "someone else" in log(remote)
 
 
+def test_other_files_are_written_as_one_commit_beside_the_fleet(remote):
+    fleetstore.use(remote)
+    files = {".github/workflows/a.yml": "a\n", ".github/workflows/b.yml": "b\n"}
+    assert fleetrepo.write_files(remote, files, "gapp: install the workflows") == {p: "created" for p in files}
+    assert log(remote)[0] == "gapp: install the workflows"
+    assert git(remote, "show", "--name-only", "--format=", "main").splitlines() == sorted(files)
+    assert fleetrepo.write_files(remote, files, "again") == {p: "unchanged" for p in files}
+    assert log(remote)[0] == "gapp: install the workflows"
+    changed = fleetrepo.write_files(remote, {**files, ".github/workflows/a.yml": "a2\n"}, "update")
+    assert changed == {".github/workflows/a.yml": "updated", ".github/workflows/b.yml": "unchanged"}
+
+
+def test_no_file_is_written_to_a_repo_whose_fleet_is_in_another_format(remote, machine):
+    work = machine / "work"
+    subprocess.run(["git", "clone", "-q", remote, str(work)], check=True, capture_output=True)
+    (work / "gapp.yaml").write_text("format: 2\ndeployments: {}\n")
+    git(work, "add", "gapp.yaml")
+    git(work, "commit", "-q", "-m", "a newer gapp's fleet")
+    git(work, "push", "-q", "origin", "HEAD:main")
+    with pytest.raises(entryfile.EntryFileRefusal) as caught:
+        fleetrepo.write_files(remote, {".github/workflows/a.yml": "a\n"}, "install")
+    assert "is in format 2" in caught.value.message
+    assert log(remote) == ["a newer gapp's fleet"]
+
+
+def test_a_push_the_repo_refuses_leaves_gapps_clone_as_the_repo_is(remote, machine):
+    fleetstore.use(remote)
+    hooks = machine / "remote-hooks"
+    hooks.mkdir()
+    (hooks / "pre-receive").write_text("#!/bin/sh\necho 'protected branch hook declined' >&2\nexit 1\n")
+    (hooks / "pre-receive").chmod(0o755)
+    git(remote, "config", "core.hooksPath", str(hooks))
+    with pytest.raises(fleetrepo.FleetRepoError) as caught:
+        fleetrepo.write_files(remote, {".github/workflows/a.yml": "a\n"}, "install")
+    assert "protected branch hook declined" in str(caught.value) and "changed while this ran" not in str(caught.value)
+    clone = fleetrepo.cache_dir(remote)
+    assert git(clone, "status", "--porcelain") == "" and not (clone / ".github/workflows/a.yml").exists()
+
+
 # --- the commands ---
 
 

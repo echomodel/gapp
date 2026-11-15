@@ -22,7 +22,7 @@ gapp ci status --deployment my-app --live
 | Step | Does | How often | Needs |
 |---|---|---|---|
 | `gapp fleet use` | Keeps the fleet in the repo | Once | git access to it |
-| `gapp ci init` | Installs the deploy and status workflows in the fleet repo | Once, and again after installing another gapp | `gh` as an admin of the fleet repo |
+| `gapp ci init` | Installs the deploy and status workflows in the fleet repo | Once, and again after installing another gapp | git push access to the fleet repo that can change workflows (for a token, the `workflow` scope); `gh` |
 | `gapp project setup <project>` | Prepares the project for deployments | Once per project | gcloud as an Owner |
 | `gapp ci projects connect <project>` | Lets the fleet repo's runners sign in to the project | Once per project | gcloud as an Owner; `gh` as an admin |
 | `gapp ci deploy` | Deploys on a runner | Each deploy | `gh` |
@@ -50,7 +50,7 @@ Google Cloud login.
 | `gapp add`, `set`, `env`, `upgrade`, `rename`, `remove` (each a commit to the fleet repo) | `gapp project setup`, `gapp ci projects connect` (once per project, as an Owner) |
 | `gapp list`, `gapp show` | `gapp secrets set` (a value someone supplies; generated secrets need nothing) |
 | `gapp ci deploy`, `gapp ci status --live` | `gapp deployments list`, `gapp deployments scan` |
-| `gapp ci init` (as an admin of the fleet repo) | `gapp deploy`, `gapp status` (they act from this machine) |
+| `gapp ci init` | `gapp deploy`, `gapp status` (they act from this machine) |
 
 ## What a run does
 

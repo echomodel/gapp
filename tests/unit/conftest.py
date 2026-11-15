@@ -65,6 +65,8 @@ class FakeGitHub:
         # altogether (`unreadable`), or fail with any status (`fail_with`).
         self.api_writes = True
         self.actions_api = True
+        self.git_push_refusal = None    # what git says when a push to a fleet repo is refused
+        self.commits = []               # (repo, message, [paths]) for every fleet-repo commit gapp makes
         self.unreadable = set()     # repos every read of which is refused with 403
         self.fail_with = {}         # endpoint substring -> stderr for GET reads
         # What a dispatched deploy run reports: a callable taking the inputs
@@ -452,6 +454,23 @@ def fleet_repo(monkeypatch, fake_gh, tmp_path):
         fake_gh.files[(repo, entryfile.FILE_NAME)] = text
         return True
     monkeypatch.setattr(fleetrepo, "write_text", write_text)
+
+    def write_files(repo, files, message):
+        # As fleetrepo.write_files: the fleet file's format first, then one
+        # commit of the files that change, or none.
+        entryfile.parse(fake_gh.files.get((repo, entryfile.FILE_NAME)), f"{entryfile.FILE_NAME} in {repo}")
+        status = {path: "unchanged" if fake_gh.files.get((repo, path)) == text
+                  else "updated" if (repo, path) in fake_gh.files else "created" for path, text in files.items()}
+        changed = [path for path, state in status.items() if state != "unchanged"]
+        if changed and fake_gh.git_push_refusal:
+            raise fleetrepo.FleetRepoError(fake_gh.git_push_refusal)
+        for path in changed:
+            fake_gh.files[(repo, path)] = files[path]
+            fake_gh.puts.append((repo, path, files[path]))
+        if changed:
+            fake_gh.commits.append((repo, message, changed))
+        return status
+    monkeypatch.setattr(fleetrepo, "write_files", write_files)
     config_mod.set_fleet(repo="acme/fleet")
     fake_gh.install("acme/fleet")
     return "acme/fleet"

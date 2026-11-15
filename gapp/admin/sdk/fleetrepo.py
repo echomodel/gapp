@@ -120,29 +120,51 @@ def read_text(repo: str) -> str | None:
 def write_text(repo: str, text: str, message: str) -> bool:
     """Replace the fleet file with `text` as one commit, pushed. Returns
     False when the file already held exactly that."""
+    return write_files(repo, {FILE_NAME: text}, message)[FILE_NAME] != "unchanged"
+
+
+def write_files(repo: str, files: dict[str, str], message: str) -> dict[str, str]:
+    """Write files in the fleet repo as one commit, pushed. Every change
+    gapp makes to the repo goes through here.
+
+    The fleet file is read first: a repo whose `gapp.yaml` is in a format
+    this gapp does not read is refused (EntryFileRefusal) and nothing is
+    written. A repo with no fleet file yet is an empty fleet.
+
+    Returns each path -> "created", "updated" or "unchanged". When every
+    file already holds its text, no commit is made.
+    """
     clone, branch = sync(repo)
-    file = clone / FILE_NAME
-    if file.is_file() and file.read_text() == text:
-        return False
+    fleet_file = clone / FILE_NAME
+    entryfile.parse(fleet_file.read_text() if fleet_file.is_file() else None, f"{FILE_NAME} in {repo}")
+    status = {}
+    for path, text in files.items():
+        target = clone / path
+        status[path] = ("unchanged" if target.is_file() and target.read_text() == text
+                        else "updated" if target.is_file() else "created")
+    changed = [path for path, state in status.items() if state != "unchanged"]
+    if not changed:
+        return status
     if branch is None:
         branch = "main"
         _git(["checkout", "--quiet", "-B", branch], clone)
-    file.write_text(text)
-    for step, doing in ((["add", FILE_NAME], "recording the change"),
-                        (["commit", "--quiet", "-m", message, "--", FILE_NAME], "recording the change")):
+    for path in changed:
+        (clone / path).parent.mkdir(parents=True, exist_ok=True)
+        (clone / path).write_text(files[path])
+    for step in (["add", "--", *changed], ["commit", "--quiet", "-m", message, "--", *changed]):
         done = _git(step, clone)
         if done.returncode != 0:
-            _undo(clone, branch)
-            raise _fail(repo, doing, done)
+            _undo(clone, branch, changed)
+            raise _fail(repo, "recording the change", done)
     pushed = _git(["push", "--quiet", "origin", f"HEAD:refs/heads/{branch}"], clone)
     if pushed.returncode != 0:
-        _undo(clone, branch)
-        if "fetch first" in pushed.stderr or "non-fast-forward" in pushed.stderr or "rejected" in pushed.stderr:
+        _undo(clone, branch, changed)
+        if "fetch first" in pushed.stderr or "non-fast-forward" in pushed.stderr:
             raise FleetRepoError(
                 f"Your fleet in {repo} changed while this ran, so nothing was changed. Run it again."
             )
         raise _fail(repo, "sending the change", pushed)
-    return True
+    return status
 
 
 def show_last_change(repo: str) -> str | None:
@@ -154,11 +176,12 @@ def show_last_change(repo: str) -> str | None:
     return f"git -C {clone} show {head.stdout.strip()}"
 
 
-def _undo(clone: Path, branch: str) -> None:
+def _undo(clone: Path, branch: str, paths: list[str]) -> None:
     """Put gapp's clone back to what the repo holds."""
     if _git(["rev-parse", "--verify", "-q", f"origin/{branch}"], clone).returncode == 0:
         _git(["reset", "--quiet", "--hard", f"origin/{branch}"], clone)
     else:
         _git(["update-ref", "-d", f"refs/heads/{branch}"], clone)
-        _git(["rm", "--quiet", "--cached", "-f", FILE_NAME], clone)
-        (clone / FILE_NAME).unlink(missing_ok=True)
+        _git(["rm", "--quiet", "--cached", "-f", "--ignore-unmatch", "--", *paths], clone)
+        for path in paths:
+            (clone / path).unlink(missing_ok=True)

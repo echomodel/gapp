@@ -5,6 +5,19 @@ source is `gapp/__init__.py`.
 
 ## Unreleased
 
+Changed:
+
+- **`gapp ci init` writes the workflows with git**, as one commit, the way
+  fleet changes are made, instead of through GitHub's file API (one commit
+  per file). It now works where those API writes are refused, such as a
+  cloud agent session. It needs git push access to the fleet repo that can
+  change workflows (for a token, the `workflow` scope) rather than `gh` as
+  an admin, follows the repo's hooks and branch rules, and refuses a fleet
+  repo whose `gapp.yaml` is in a format it does not read, writing nothing.
+- A fleet change whose push the repo refuses (a hook or a branch rule)
+  now reports git's reason, instead of saying the fleet changed while the
+  command ran.
+
 Removed:
 
 - **`gapp ci sources add|remove|list` and the `gapp_ci_sources` MCP tool**,
