@@ -129,7 +129,8 @@ def gapp_ci_init() -> dict:
     This tool takes no arguments. It writes
     .github/workflows/gapp-deploy.yml and gapp-status.yml in the fleet repo
     and nothing else; calling it again brings the two files up to the
-    installed gapp's. It needs `gh` signed in as an admin of the fleet repo.
+    installed gapp's, as one git commit. It needs git push access to the
+    fleet repo that can change workflows (for a token, the `workflow` scope).
 
     Every gapp_ci_* tool returns `ok`. When it is true, `lines` is what to
     tell the user and `next_step.hint` is the next command, when there is

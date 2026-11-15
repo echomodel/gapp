@@ -250,28 +250,6 @@ def _read_file(repo: str, path: str, ref: str | None = None) -> Read:
     return _read_path(repo, path, f"{path} in {repo}", ref)
 
 
-def _write_file(repo: str, path: str, content: str, message: str) -> str:
-    """Create or update a gapp-owned file in the fleet repo via the Contents API.
-
-    A workflow is a file gapp generates, so it is written through GitHub's
-    API, which makes the commit itself. An identical file is "unchanged".
-    Returns "created", "updated" or "unchanged"; raises RuntimeError with
-    GitHub's words when the write is refused or the current file unreadable.
-    """
-    current = _read_file(repo, path)
-    if current.unchecked:
-        raise RuntimeError(current.note)
-    if current.present and current.content == content:
-        return "unchanged"
-    payload = {"message": message, "content": base64.b64encode(content.encode()).decode()}
-    if current.sha:
-        payload["sha"] = current.sha
-    rc, _, err = _gh_api(["-X", "PUT", f"repos/{repo}/contents/{path}"], payload)
-    if rc != 0:
-        raise RuntimeError(f"{path} in {repo} could not be written: {_refused(err)}")
-    return "updated" if current.sha else "created"
-
-
 def _repo_permission(fleet_repo: str) -> tuple[bool | None, str]:
     """Whether the gh login is an admin of the fleet repo: (admin, why unknown)."""
     rc, out, err = _gh_api([f"repos/{fleet_repo}", "--jq", ".permissions.admin"])
@@ -381,13 +359,17 @@ def _workflow_files(gapp_repo: str, gapp_ref: str) -> dict[str, str]:
 def _install_workflows(fleet_repo: str) -> dict[str, str]:
     """Install the workflows in the fleet repo, or bring them up to this gapp's.
 
-    A file is written only when its rendered content differs from what the
-    repo holds. Returns path -> "created" | "updated" | "unchanged".
+    The files are written with git, as one commit, the way every change to
+    the fleet repo is made. A file is written only when its rendered
+    content differs from what the repo holds. Returns path -> "created" |
+    "updated" | "unchanged".
     """
+    import gapp
+    from gapp.admin.sdk import fleetrepo
     gapp_repo = _get_gapp_repo()
     gapp_ref = _resolve_gapp_ref(gapp_repo)
-    return {path: _write_file(fleet_repo, path, content, f"Install gapp workflow {path.rsplit('/', 1)[-1]}")
-            for path, content in _workflow_files(gapp_repo, gapp_ref).items()}
+    return fleetrepo.write_files(fleet_repo, _workflow_files(gapp_repo, gapp_ref),
+                                 f"gapp: install the workflows of gapp {gapp.__version__}")
 
 
 # --- the fleet repo, and the definition a command means ---
@@ -503,12 +485,17 @@ def init_workflows() -> dict:
     fleet_repo, stop = _fleet_repo(result)
     if stop:
         return stop
+    from gapp.admin.sdk import fleetrepo
+    from gapp.admin.sdk.entryfile import EntryFileRefusal
     try:
         result["files"] = _install_workflows(fleet_repo)
-    except RuntimeError as e:
+    except EntryFileRefusal as e:
+        return {**result, **_refusal("install a newer gapp", e.message)}
+    except (fleetrepo.FleetRepoError, RuntimeError) as e:
         return {**result, **_outcome("install the workflows", (
             f"The workflows could not be installed in {fleet_repo}: {str(e).rstrip('.')}. `gapp ci init` needs "
-            f"`gh` signed in as an admin of {fleet_repo}. Then run it again: gapp ci init"
+            f"git push access to {fleet_repo} that can change workflow files (for a token, the `workflow` "
+            f"scope). Then run it again: gapp ci init"
         ))}
     statuses = set(result["files"].values())
     if "created" in statuses:

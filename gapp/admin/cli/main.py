@@ -485,7 +485,8 @@ def ci_init_cmd(json_out):
 
     Writes .github/workflows/gapp-deploy.yml and gapp-status.yml there and
     nothing else. Run it again after installing another gapp to bring the
-    two files up to it. Needs `gh` signed in as an admin of the fleet repo.
+    two files up to it, as one git commit. Needs git push access to the
+    fleet repo that can change workflows (for a token, the `workflow` scope).
     Refused when the fleet is not kept in a GitHub repo.
     """
     from gapp.admin.sdk import ci

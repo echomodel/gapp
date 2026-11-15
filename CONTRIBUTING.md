@@ -754,7 +754,16 @@ are in [docs/CI.md](docs/CI.md). The rules to keep:
 - **A runner runs the same deploy.** The workflow checks out the fleet
   and the app, installs the gapp the definition names, and runs `gapp ci
   runner deploy <name>`. No deploy logic lives in a workflow.
-- **`gapp ci` uses GitHub's REST API only**, through `gh api`.
+- **`gapp ci` reads GitHub and starts runs through `gh api`, and writes
+  to the fleet repo only with git.** Every change gapp makes to the fleet
+  repo, the fleet file or the workflows, is one commit through
+  `fleetrepo.write_files`, which reads the fleet's `format` first and
+  writes nothing to a repo in a format it does not read. Git reaches a
+  repo where GitHub's API writes are refused (an agent session's proxy),
+  and the repo's own rules (hooks, branch protection) apply to every
+  change. Should something need to write through the API instead (a
+  hosted service with no clone), that is a second way of doing what
+  `write_files` does, not a second path beside it.
 - **Only `gapp ci projects connect` touches Google Cloud**, because it
   creates the trust a runner needs to sign in at all. Preparing a project
   for deployments is `gapp project setup`; the two do not overlap.
