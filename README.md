@@ -24,7 +24,7 @@ adds what that command leaves to you:
 | Secrets that are checked before a deploy | A deployment names the secrets it reads. gapp makes generated ones, and refuses to deploy while one has no value |
 | A domain that is not taken down by accident | A deploy that would replace or remove a live custom domain stops before anything is built |
 | One record of everything you run | Your fleet: each deployment's repo, project, ref and settings, in one file |
-| Deploys from a machine with no Google Cloud login | `gapp ci` runs the same deploy on a GitHub Actions runner |
+| A GitHub-only machine runs everything after setup | Once a project Owner has set up a project, a machine with only GitHub access (a teammate's laptop, a cloud agent session) adds, changes, upgrades, deploys and checks deployments: `gapp ci` runs the deploy on a GitHub Actions runner |
 | The same commands for an agent | Every command is also an MCP tool |
 
 An app's repo never names gapp, a project or Google Cloud, so anyone can

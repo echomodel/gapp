@@ -61,6 +61,18 @@ What that keeps true:
 A convenience that looks something up in the cloud during `gapp add`, or
 calls a host's API to help a push along, breaks it.
 
+**After one-time setup, GitHub access is enough.** Once a project Owner
+has set up a project (`gapp project setup`) and connected it to the fleet
+repo (`gapp ci projects connect`), a machine with only GitHub access,
+such as a cloud agent session, can run a deployment's whole life: `add`,
+`set`, `env`, `upgrade`, `rename`, `remove`, `gapp ci deploy` and `gapp ci
+status --live`. Those two Owner steps are the only ones that need a
+Google Cloud login. Today's exceptions are listed under Accepted limits:
+setting a secret's value, and `gapp deployments list` and `scan`, which
+read Google Cloud directly (`gapp list` and `gapp ci status --live` serve
+a GitHub-only machine instead). A change that makes a GitHub-only machine
+need a Google Cloud login for anything else breaks this goal.
+
 **Each added capability is opt-in.** A fleet in a git repo, CI and
 profiles are each something an operator turns on. Someone who uses none
 of them never meets their words.
@@ -936,6 +948,7 @@ For development, use an editable install: `pipx install -e .`
 - Moving the fleet to another repo means `gapp ci projects connect`
   again for each project, because the trust names the repo.
 - A session with no gcloud login cannot set a secret's value.
+- `gapp deployments list` and `scan` need a Google Cloud login.
 - Nothing takes a deployment's resources down.
 - After `gapp remove`, a different app added under the same name on the
   same project deploys onto what the removed one left, data included.
