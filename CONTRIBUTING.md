@@ -45,6 +45,22 @@ a workstation, so any authorized machine or runner can deploy and pick
 up the same state. No app's service account is granted anything on that
 bucket.
 
+**A change to the fleet is a git commit and nothing else.** A command
+that defines or changes a deployment fetches the fleet, rewrites the
+file, commits and pushes. It calls no Google Cloud API and no git host's
+API, starts no workflow and needs no CI. A local fleet is a file write.
+What that keeps true:
+
+- The fleet works on any git host.
+- Defining what should run needs no cloud login.
+- The operator's own git process applies to it: hooks, review, branch
+  rules.
+- Changes can later go to a branch and be merged on the operator's
+  schedule, without a break.
+
+A convenience that looks something up in the cloud during `gapp add`, or
+calls a host's API to help a push along, breaks it.
+
 **Each added capability is opt-in.** A fleet in a git repo, CI and
 profiles are each something an operator turns on. Someone who uses none
 of them never meets their words.
