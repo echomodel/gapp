@@ -61,17 +61,21 @@ What that keeps true:
 A convenience that looks something up in the cloud during `gapp add`, or
 calls a host's API to help a push along, breaks it.
 
-**After one-time setup, GitHub access is enough.** Once a project Owner
-has set up a project (`gapp project setup`) and connected it to the fleet
-repo (`gapp ci projects connect`), a machine with only GitHub access,
-such as a cloud agent session, can run a deployment's whole life: `add`,
-`set`, `env`, `upgrade`, `rename`, `remove`, `gapp ci deploy` and `gapp ci
-status --live`. Those two Owner steps are the only ones that need a
-Google Cloud login. Today's exceptions are listed under Accepted limits:
-setting a secret's value, and `gapp deployments list` and `scan`, which
-read Google Cloud directly (`gapp list` and `gapp ci status --live` serve
-a GitHub-only machine instead). A change that makes a GitHub-only machine
-need a Google Cloud login for anything else breaks this goal.
+**After one-time setup, a cloud agent session is enough.** gapp is
+built to be run from a cloud agent session: a machine with no
+Google Cloud login, whose GitHub access is git (clone and push, workflow
+files included), starting workflow runs, and reads. GitHub's API writes, Actions variables
+and Environments may be refused there. Every routine command works in
+such a session: `add`, `set`, `env`, `upgrade`, `rename`, `remove`, `gapp
+ci init`, `gapp ci deploy` and `gapp ci status --live`. Only two steps
+need more, and they are rare: `gapp project setup` and `gapp ci projects
+connect`, once per project, run by a project Owner on a machine kept for
+that. An agent never acts on Google Cloud itself; a runner does, as the
+project's deploy identity. Today's exceptions are listed under Accepted
+limits: setting a secret's value, and `gapp deployments list` and `scan`,
+which read Google Cloud directly (`gapp list` and `gapp ci status --live`
+serve a session instead). A change that makes a routine command need a
+Google Cloud login, or a GitHub API write, breaks this goal.
 The same goes for GitHub access itself: a machine may reach only some of
 GitHub's API (an agent's proxy, a narrowly scoped token). A check made
 before starting a run, which the runner makes again anyway, stops the
