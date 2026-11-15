@@ -796,6 +796,11 @@ def remove_cmd(name, json_out):
     for command in result["add_again"]:
         click.echo(f"  {command}")
     click.echo("That does not bring back its settings. Set them again before you deploy.")
+    if result["see_removed"]:
+        kept = ("The change that removed it" if result["see_removed"].startswith("git ")
+                else "Your fleet as it was, until its next change")
+        click.echo(f"{kept}, with its settings:")
+        click.echo(f"  {result['see_removed']}")
 
 
 @main.command("show")

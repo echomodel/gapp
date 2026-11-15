@@ -135,6 +135,15 @@ def write_text(repo: str, text: str, message: str) -> bool:
     return True
 
 
+def show_last_change(repo: str) -> str | None:
+    """The git command that shows the last change gapp's clone of the fleet repo holds."""
+    clone = cache_dir(repo)
+    head = _git(["rev-parse", "--short", "HEAD"], clone) if clone.is_dir() else None
+    if head is None or head.returncode != 0 or not head.stdout.strip():
+        return None
+    return f"git -C {clone} show {head.stdout.strip()}"
+
+
 def _undo(clone: Path, branch: str) -> None:
     """Put gapp's clone back to what the repo holds."""
     if _git(["rev-parse", "--verify", "-q", f"origin/{branch}"], clone).returncode == 0:

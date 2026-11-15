@@ -90,6 +90,16 @@ def test_each_change_is_one_commit_that_says_what_changed(remote):
     assert fleetstore.read()["prod"]["settings"] == {"public": True, "env": {"MAX_USERS": {"value": "25"}}}
 
 
+def test_remove_gives_the_git_command_that_shows_what_it_took_out(remote):
+    fleetstore.use(remote)
+    definitions.add("my-app", project="my-project", repo="acme/my-app")
+    definitions.set_value("public", "true", deployment="my-app")
+    command = definitions.remove("my-app")["see_removed"]
+    assert command.startswith("git -C ") and " show " in command
+    shown = subprocess.run(command.split(), capture_output=True, text=True).stdout
+    assert "gapp: remove my-app" in shown and "-      public: true" in shown
+
+
 def test_a_change_that_changes_nothing_makes_no_commit(remote):
     fleetstore.use(remote)
     definitions.add("my-app", project="my-project", repo="acme/my-app")
