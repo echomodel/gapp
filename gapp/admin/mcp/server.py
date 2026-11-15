@@ -454,8 +454,9 @@ def gapp_show(deployment: str | None = None) -> dict:
 def gapp_upgrade(deployment: str | None = None) -> dict:
     """Bring one deployment's definition to this gapp's version. It takes
     no version: the target is always the gapp running it. Changes the
-    definition only; the next deploy applies it and must be given
-    `upgrade`. Refused when there is nothing to upgrade, when the
+    definition only; the next deploy applies it, given `upgrade` when an
+    earlier gapp deployed it (`deploy_needs_upgrade`: true, false when
+    nothing is on record, null when the record could not be read). Refused when there is nothing to upgrade, when the
     definition is newer than this gapp, or when it is too old for this
     gapp to upgrade from (the message names the gapp to install first).
     Check `gapp_show` first: call this only when it reports an upgrade.

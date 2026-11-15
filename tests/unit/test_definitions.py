@@ -361,6 +361,31 @@ def test_upgrade_moves_an_older_definition_to_this_gapp_and_nothing_else(my_app,
     assert fleet()["my-app"]["gapp"] == "4.0.1" and fleet()["my-app"]["settings"] == {"public": True}
 
 
+@pytest.mark.parametrize("on_record, says", [
+    ("4.0.0", "The next deploy applies it: add --upgrade to that deploy.\n"),
+    (None, "No deploy of it is on record, so the next deploy is its first: no --upgrade.\n"),
+    (RuntimeError("no login"), "gapp could not read its deploy record from here: add --upgrade to that deploy "
+                               "if an earlier gapp deployed it, and leave it out if none has.\n"),
+])
+def test_upgrade_says_whether_the_next_deploy_needs_upgrade_from_the_deploy_record(my_app, monkeypatch, on_record, says):
+    for module in (entryfile, definitions):
+        monkeypatch.setattr(module, "__version__", "4.0.1")
+    asked = []
+
+    def record(project, deployment_id):
+        asked.append((project, deployment_id))
+        if isinstance(on_record, Exception):
+            raise on_record
+        return on_record
+    monkeypatch.setattr(definitions, "last_deployed_by", record)
+    out = run("upgrade", "--deployment", "my-app")
+    assert out.exit_code == 0 and out.output.endswith(says)
+    assert asked == [("my-project", "my-app")] and fleet()["my-app"]["gapp"] == "4.0.1"
+    expected = None if isinstance(on_record, Exception) else on_record is not None
+    write_version("my-app", __version__)
+    assert definitions.upgrade("my-app")["deploy_needs_upgrade"] is expected
+
+
 def test_an_older_definition_is_shown_but_not_changed_until_upgraded(my_app, monkeypatch):
     for module in (entryfile, definitions):
         monkeypatch.setattr(module, "__version__", "4.0.1")
