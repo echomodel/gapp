@@ -85,7 +85,7 @@ def test_the_reusable_workflow_runs_gapp_with_the_deployments_name_and_nothing_e
     assert install["run"] == PIP.format(repo="${GAPP_REPO}")
     assert install["env"] == {"GAPP_REPO": "${{ inputs.gapp-repo }}", "GAPP_REF": "${{ inputs.gapp-ref }}"}
     assert run["run"] == 'gapp ci runner deploy "$DEPLOYMENT" $UPGRADE_FLAG' and run["working-directory"] == "app"
-    assert run["env"] == {"GAPP_FLEET_FILE": "${{ github.workspace }}/fleet/gapp.yaml",
+    assert run["env"] == {"GAPP_FLEET": "${{ github.workspace }}/fleet/gapp.yaml",
                           "DEPLOYMENT": "${{ inputs.deployment }}",
                           "UPGRADE_FLAG": "${{ inputs.upgrade && '--upgrade' || '' }}"}
 
@@ -136,7 +136,7 @@ def test_the_status_workflow_is_read_only_and_asks_the_project_as_the_deploy_ide
     assert install["run"] == PIP.format(repo=GAPP_REPO)
     assert install["env"] == {"GAPP_REF": "${{ needs.resolve.outputs.gapp_ref }}"}
     assert ask["run"] == 'gapp ci runner status "$DEPLOYMENT"'
-    assert ask["env"] == {"GAPP_FLEET_FILE": "${{ github.workspace }}/fleet/gapp.yaml", "DEPLOYMENT": "${{ inputs.deployment }}"}
+    assert ask["env"] == {"GAPP_FLEET": "${{ github.workspace }}/fleet/gapp.yaml", "DEPLOYMENT": "${{ inputs.deployment }}"}
 
 
 def test_no_script_interpolates_an_input_and_none_writes_to_github():

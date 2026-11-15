@@ -111,10 +111,35 @@ one, the fleet, and every command reads it: a deploy from a clone, a
 deploy on a runner, `status` and `secrets` all take the deployment's id,
 project and settings from its definition.
 
-The fleet is in exactly one place per profile: a file on the machine, or
-a git repo. There is never a second copy, so nothing syncs. Why a git
-repo, why gapp makes the commits itself and why that is separate from CI
-are in [docs/FLEET-IN-GIT.md](docs/FLEET-IN-GIT.md).
+The fleet is in exactly one place per profile: the profile's own file,
+a file the operator named, or a git repo. There is never a second copy,
+so nothing syncs. Why a git repo, why gapp makes the commits itself and
+why that is separate from CI are in
+[docs/FLEET-IN-GIT.md](docs/FLEET-IN-GIT.md).
+
+There is one way to name a fleet (`fleetstore.target`), and both places
+that name one use it: `gapp fleet use`, which records it in the profile,
+and the `GAPP_FLEET` environment variable, which names it for one process
+over the profile. A value means the same in both. `local` is the
+profile's own file; a full path ending in `.yaml` or `.yml` is a fleet
+file; anything else is a git repo, read as `fleetrepo` reads one. A
+relative path is refused in both, because it would make the fleet depend
+on the folder a command runs in, the per-folder behaviour one fleet
+replaced; an MCP server's folder is whatever its client chose. A
+`GAPP_FLEET` gapp cannot use fails every read and write and never falls
+back to the profile, and `gapp fleet use` is refused while it is set,
+since the profile's setting would not be what that process uses. Runners
+set it to the fleet file in their checkout. Tests clear it for every test
+(`tests/conftest.py`), so a value in a developer's shell never reaches one.
+
+A fleet kept in a file keeps the copy each change replaces as a new
+backup in gapp's state folder (`$XDG_STATE_HOME/gapp/backups`, one file
+per change, named by the time), never beside the fleet file. A config
+folder or a repo then holds only what was put there, so a dotfile
+manager or `git status` never sees a stray file. A comment header names
+the fleet it is a copy of, which keeps the backup a fleet file `gapp
+fleet import` takes as it is. A fleet in a repo has no backups: git is
+its history.
 
 The entry file (`gapp/admin/sdk/entryfile.py`) starts with `format`.
 A gapp reads `format` first and nothing else when it is not one it knows,
@@ -278,8 +303,9 @@ deployments/<id>/history/       one file per deploy, failed ones included
   back), and makes every command learn to skip it, for something that is
   only "still there but ignored".
 - **It writes no file and offers no recovery of its own.** The settings
-  it removed are in the fleet repo's history, or in the local fleet's
-  one-step copy, and its output gives the command that shows them.
+  it removed are in the fleet repo's history, or in the backup a fleet
+  kept in a file takes on every change, and its output gives the command
+  that shows them.
   Finding and rebuilding what is deployed belongs to a lost or stale
   fleet, which is a different moment from a removal, and is designed for
   that case (see Open questions).
@@ -760,7 +786,7 @@ For development, use an editable install: `pipx install -e .`
 
 ## Accepted limits
 
-- A local fleet has a one-step backup and no history.
+- Backups of a fleet kept in a file are never pruned or capped.
 - With the fleet in a repo, every fleet command needs git access to it.
 - `gapp ci` works with a fleet repo and app repos on github.com.
 - Moving the fleet to another repo means `gapp ci projects connect`

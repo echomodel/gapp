@@ -61,7 +61,7 @@ def test_init_brings_older_workflows_up_to_this_gapps(bare, monkeypatch):
 
 
 def test_init_is_refused_when_the_fleet_is_a_file_on_this_machine(bare):
-    config_mod.set_fleet_repo(None)
+    config_mod.set_fleet(repo=None)
     res = ci_mod.init_workflows()
     assert res["ok"] is False and res["refused"] is True and res["next_step"]["action"] == "fleet use"
     assert res["next_step"]["hint"].startswith("Your fleet is kept in a file on this machine (")
@@ -70,7 +70,7 @@ def test_init_is_refused_when_the_fleet_is_a_file_on_this_machine(bare):
 
 
 def test_init_is_refused_when_the_fleet_repo_is_not_on_github(bare):
-    config_mod.set_fleet_repo("git.example.com/team/fleet")
+    config_mod.set_fleet(repo="git.example.com/team/fleet")
     res = ci_mod.init_workflows()
     assert res["refused"] is True
     assert "git.example.com/team/fleet, which is not a repo on GitHub" in res["next_step"]["hint"]

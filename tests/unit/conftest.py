@@ -445,7 +445,6 @@ def fleet_repo(monkeypatch, fake_gh, tmp_path):
     from gapp.admin.sdk import config as config_mod
     from gapp.admin.sdk import entryfile, fleetrepo
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
-    monkeypatch.delenv("GAPP_FLEET_FILE", raising=False)
     monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/gh" if name == "gh" else None)
     monkeypatch.setattr(fleetrepo, "read_text", lambda repo: fake_gh.files.get((repo, entryfile.FILE_NAME)))
 
@@ -453,7 +452,7 @@ def fleet_repo(monkeypatch, fake_gh, tmp_path):
         fake_gh.files[(repo, entryfile.FILE_NAME)] = text
         return True
     monkeypatch.setattr(fleetrepo, "write_text", write_text)
-    config_mod.set_fleet_repo("acme/fleet")
+    config_mod.set_fleet(repo="acme/fleet")
     fake_gh.install("acme/fleet")
     return "acme/fleet"
 

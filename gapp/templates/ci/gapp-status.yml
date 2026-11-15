@@ -126,6 +126,6 @@ jobs:
 
       - name: Ask gapp
         env:
-          GAPP_FLEET_FILE: ${{ github.workspace }}/fleet/gapp.yaml
+          GAPP_FLEET: ${{ github.workspace }}/fleet/gapp.yaml
           DEPLOYMENT: ${{ inputs.deployment }}
         run: gapp ci runner status "$DEPLOYMENT"
