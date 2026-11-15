@@ -334,6 +334,8 @@ def deployments_list_cmd(name, repo, project, below, limit, json_out):
                 lines.append(f"  {'':<{width}}  {row['problem']}")
         if r["limited"]:
             lines.append(f"Read the first {r['read']} by name (--limit). Narrow the list or raise --limit for more.")
+        if r.get("access"):
+            lines.append(r["access"])
         return lines
     _deployments_end(lambda provider: deployments.list_deployments(
         provider, name=name, repo=repo, project=project, below=below, limit=limit), json_out, say)
@@ -356,7 +358,8 @@ def deployments_scan_cmd(project, json_out):
     def say(r):
         lines = []
         if not r["projects"]:
-            return ["No project you can see is set up for gapp."]
+            who = f"that {r['searched_as']} can see" if r.get("searched_as") else "you can see"
+            return [f"No project {who} is set up for gapp."]
         for p in r["projects"]:
             if p["problem"]:
                 lines.append(f"{p['project']}: could not be read. {p['problem']}")

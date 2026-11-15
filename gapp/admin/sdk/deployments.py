@@ -27,7 +27,7 @@ import yaml
 
 from gapp import COMPATIBLE_FROM, __version__
 from gapp.admin.sdk import definitions, record, versions
-from gapp.admin.sdk.cloud.base import CloudAccessError
+from gapp.admin.sdk.cloud.base import CloudAccessError, GcloudNotInstalled
 from gapp.admin.sdk.definitions import Refused
 from gapp.admin.sdk.entryfile import EntryFileRefusal, version_key
 
@@ -49,12 +49,18 @@ def _standing(defined: str | None, deployed: str | None) -> str:
     return "current"
 
 
-def _read(provider, project: str, deployment_id: str) -> tuple[dict | None, str | None]:
-    """A deployment's last successful deploy, or the reason it could not be read."""
+def _read(provider, project: str, deployment_id: str) -> tuple[dict | None, str | None, bool]:
+    """A deployment's last successful deploy, or the reason it could not be
+    read, and whether that reason was Google Cloud refusing or not being
+    reachable (which `access` then explains once, under the list)."""
     try:
-        return record.read_latest(provider, project, deployment_id), None
-    except (CloudAccessError, yaml.YAMLError) as e:
-        return None, str(e).strip().splitlines()[0] if str(e).strip() else type(e).__name__
+        return record.read_latest(provider, project, deployment_id), None, False
+    except GcloudNotInstalled:
+        return None, "gcloud isn't installed on this machine", True
+    except CloudAccessError as e:
+        return None, str(e).strip().splitlines()[0] if str(e).strip() else type(e).__name__, True
+    except yaml.YAMLError as e:
+        return None, str(e).strip().splitlines()[0] if str(e).strip() else type(e).__name__, False
 
 
 def _in_parallel(fn, items: list) -> list:
@@ -92,7 +98,7 @@ def list_deployments(provider, *, name: str | None = None, repo: str | None = No
     chosen = chosen[:limit] if limit is not None else chosen
     found = _in_parallel(lambda item: _read(provider, item[1].get("project"), item[1].get("id")), chosen)
     rows = []
-    for (dep_name, d), (last, problem) in zip(chosen, found):
+    for (dep_name, d), (last, problem, _) in zip(chosen, found):
         deployed = (last or {}).get("gapp")
         if below:
             older = [v for v in (d.get("gapp"), deployed) if v and version_key(v) < version_key(below)]
@@ -105,8 +111,9 @@ def list_deployments(provider, *, name: str | None = None, repo: str | None = No
         rows.append({"deployment": dep_name, "project": d.get("project"), "repo": d.get("repo"),
                      "definition": d.get("gapp"), "deployed": deployed,
                      "deployed_at": (last or {}).get("deployed_at"), "stands": stands, "problem": problem})
+    access = provider.identity_hint() if any(refused for _, _, refused in found) else None
     return {"fleet": where.describe(), "this_gapp": __version__, "compatible_from": COMPATIBLE_FROM,
-            "read": len(chosen), "limited": limited, "deployments": rows}
+            "read": len(chosen), "limited": limited, "deployments": rows, "access": access}
 
 
 @definitions._guard
@@ -134,7 +141,7 @@ def scan(provider, *, project: str | None = None) -> dict:
         found = []
         for path in paths:
             deployment_id = path.split("/")[1]
-            last, problem = _read(provider, p, deployment_id)
+            last, problem, _ = _read(provider, p, deployment_id)
             last = last or {}
             in_fleet = held.get((p, deployment_id))
             definition = last.get("definition") if isinstance(last.get("definition"), dict) else {}
@@ -146,6 +153,8 @@ def scan(provider, *, project: str | None = None) -> dict:
         return {"project": p, "problem": None, "deployments": found}
 
     scanned = _in_parallel(one_project, projects)
-    return {"fleet": where.describe(), "projects": scanned, "searched": project is None,
+    # An empty search is also what a login that can see none of gapp's projects gets, so say whose it was.
+    searched_as = provider.active_account() if project is None and not projects else None
+    return {"fleet": where.describe(), "projects": scanned, "searched": project is None, "searched_as": searched_as,
             "found": sum(len(s["deployments"]) for s in scanned),
             "not_in_fleet": sum(1 for s in scanned for d in s["deployments"] if not d["in_fleet"])}

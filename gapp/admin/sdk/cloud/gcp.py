@@ -10,7 +10,8 @@ from pathlib import Path
 from typing import Optional, List, Dict
 
 from gapp.admin.sdk.cloud.base import (
-    CloudProvider, CloudAccessError, ProjectNotFoundError, ci_identity_hint, on_ci_runner,
+    CloudProvider, CloudAccessError, GcloudNotInstalled, ProjectNotFoundError, access_hint,
+    ci_identity_hint, expired_login_hint, on_ci_runner,
 )
 
 
@@ -61,14 +62,48 @@ class GCPProvider(CloudProvider):
 
     def __init__(self, account: Optional[str] = None):
         self.account = account
+        self._login = None
 
     def _run_gcloud(self, args: List[str], **kwargs) -> subprocess.CompletedProcess:
-        """Helper to run gcloud with optional account forcing."""
+        """Helper to run gcloud with optional account forcing. A machine
+        without gcloud gets GcloudNotInstalled, never a traceback."""
         cmd = ["gcloud"] + args
         env = kwargs.pop("env", os.environ.copy())
         if self.account:
             env["CLOUDSDK_CORE_ACCOUNT"] = self.account
-        return subprocess.run(cmd, env=env, **kwargs)
+        try:
+            return subprocess.run(cmd, env=env, **kwargs)
+        except FileNotFoundError:
+            raise GcloudNotInstalled() from None
+
+    def _login_state(self) -> tuple:
+        """(the account gapp acts as, whether gcloud holds a login for it).
+
+        Read once per provider, and only when something has already failed,
+        so a working command never pays for it."""
+        if self._login is None:
+            res = self._run_gcloud(["auth", "list", "--format", "json"], capture_output=True, text=True)
+            try:
+                logins = json.loads(res.stdout or "[]") if res.returncode == 0 else []
+            except json.JSONDecodeError:
+                logins = []
+            held = {(entry.get("account") or "").lower() for entry in logins}
+            active = next((entry.get("account") for entry in logins if entry.get("status") == "ACTIVE"), None)
+            account = self.account or active
+            self._login = (account, bool(account) and account.lower() in held)
+        return self._login
+
+    @staticmethod
+    def _gcloud_installed() -> bool:
+        return shutil.which("gcloud") is not None
+
+    def identity_hint(self, project_id: Optional[str] = None) -> str:
+        if not self._gcloud_installed():
+            return GcloudNotInstalled().args[0]
+        account, signed_in = self._login_state()
+        if on_ci_runner():
+            return ci_identity_hint(account, project_id)
+        return access_hint(account, signed_in, project_id, configured=bool(self.account))
 
     # -- GCP Foundation --
 
@@ -111,14 +146,7 @@ class GCPProvider(CloudProvider):
             ], capture_output=True)
 
     def _identity_hint(self, project_id: Optional[str] = None) -> str:
-        if on_ci_runner():
-            return f"  {ci_identity_hint(self.account, project_id)}"
-        who = f" as {self.account}" if self.account else ""
-        return (
-            f"  gapp is calling Google Cloud{who}. Check `gcloud auth list`, and run "
-            f"`gcloud auth login` (or `gapp config account <email>`) if the login "
-            f"is missing, expired, or the wrong account."
-        )
+        return f"  {self.identity_hint(project_id)}"
 
     def _crm_request(self, project_id: str, args: List[str]) -> tuple[str, str]:
         """Run one Cloud Resource Manager call with curl.
@@ -453,9 +481,12 @@ class GCPProvider(CloudProvider):
     def get_auth_token(self) -> str:
         res = self._run_gcloud(["auth", "print-access-token"], capture_output=True, text=True)
         if res.returncode != 0 or not res.stdout.strip():
+            account, signed_in = self._login_state()
+            hint = (f"  {expired_login_hint(account)}" if signed_in and not on_ci_runner()
+                    else self._identity_hint())
             raise CloudAccessError(
                 f"gcloud could not produce an access token: "
-                f"{(res.stderr or '').strip() or 'empty token'}\n{self._identity_hint()}"
+                f"{(res.stderr or '').strip() or 'empty token'}\n{hint}"
             )
         return res.stdout.strip()
 

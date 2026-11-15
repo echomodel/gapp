@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from gapp.admin.sdk.cloud import get_provider
-from gapp.admin.sdk.cloud.base import CloudProvider, CloudAccessError, ci_identity_hint, on_ci_runner
+from gapp.admin.sdk.cloud.base import CloudProvider, CloudAccessError
 from gapp.admin.sdk.manifest import get_domain, get_service_config, get_public
 from gapp.admin.sdk.models import DomainStatus
 
@@ -80,18 +80,8 @@ class GappSDK:
             self.provider.write_object(project_bucket, record.latest_path(deployment_id), text)
 
     def _identity_hint(self, project_id: Optional[str] = None) -> str:
-        """What to do when no Google Cloud identity this machine holds works."""
-        from gapp.admin.sdk.util import configured_account
-        account = configured_account()
-        if on_ci_runner():
-            return ci_identity_hint(account, project_id)
-        who = f" for the configured account {account}" if account else ""
-        login = f"gcloud auth login {account}" if account else "gcloud auth login"
-        return (
-            f"No Google Cloud identity this machine can use{who}: the login is missing, expired, "
-            f"or not allowed to read the project. Sign in with `{login}` (or point gapp at another "
-            f"account with `gapp config account <email>`), then run `gapp status` again."
-        )
+        """What to do when Google Cloud refused, or could not be asked."""
+        return self.provider.identity_hint(project_id)
 
     def _domain_status(self, project_id: str, domain: str) -> DomainStatus:
         """Fill DomainStatus from the Cloud Run domain mapping's conditions."""
