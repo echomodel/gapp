@@ -516,9 +516,27 @@ def builds(sdk, cloud, monkeypatch):
     return count
 
 
-def live_domain(cloud, domain):
+def live_domain(cloud, domain, serving=True):
     last_deployed_by(cloud, __version__)
     cloud.tf_outputs[(PROJECT_BUCKET, STATE)] = {"service_url": "https://my-app.a.run.app", "custom_domain": domain}
+    ready = "True" if serving else "False"
+    cloud.domain_mappings[(PROJECT, domain)] = {"status": {"conditions": [
+        {"type": "Ready", "status": ready}, {"type": "DomainRoutable", "status": ready}]}}
+
+
+def test_a_domain_whose_mapping_never_came_up_is_changed_or_removed_without_the_flag(sdk, cloud, builds):
+    live_domain(cloud, "mcp.example.com", serving=False)
+    sdk.deploy_definition()
+    assert cloud.last_tfvars["custom_domain"] == ""
+
+
+def test_a_mapping_that_cannot_be_read_counts_as_serving(sdk, cloud, builds, monkeypatch):
+    live_domain(cloud, "mcp.example.com")
+    def unreadable(*a):
+        raise RuntimeError("denied")
+    monkeypatch.setattr(cloud, "get_domain_mapping", unreadable)
+    with pytest.raises(RuntimeError, match="remove the live domain mapping"):
+        sdk.deploy_definition()
 
 
 def test_replacing_a_live_domain_is_refused_before_anything_is_built(sdk, cloud, builds):
@@ -678,24 +696,12 @@ def test_the_list_command_names_the_fleet_and_each_deployment(sdk, monkeypatch):
 # two steps) and so refuses infrastructure this gapp does not work with.
 
 
-def _runner(fn):
-    def run(sdk):
-        out = []
-        code = fn("my-app", out=out.append)
-        if code == 2:
-            raise Refused(out[0].split("refused=", 1)[1])
-        return out
-    return run
-
-
 INFRASTRUCTURE_COMMANDS = {
     "gapp deploy": lambda sdk: sdk.deploy_definition(),
     "gapp status": lambda sdk: sdk.status_definition("my-app"),
     "gapp secrets list": lambda sdk: secrets.list_secrets("my-app"),
     "gapp secrets set": lambda sdk: secrets.set_secret("API_KEY", "x", deployment="my-app"),
     "gapp secrets get": lambda sdk: secrets.get_secret("API_KEY", deployment="my-app"),
-    "gapp ci runner deploy": _runner(lambda name, out: __import__("gapp.admin.sdk.ci_runner", fromlist=["x"]).runner_deploy(name, out=out)),
-    "gapp ci runner status": _runner(lambda name, out: __import__("gapp.admin.sdk.ci_runner", fromlist=["x"]).runner_status(name, out=out)),
 }
 
 

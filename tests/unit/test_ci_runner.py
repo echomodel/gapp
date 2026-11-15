@@ -1,69 +1,20 @@
-"""What a workflow runs on the runner: `gapp ci runner deploy|status
-<deployment>`. Each prints one line `gapp ci` finds in the run's log, and
-exits 0, 2 or 1 for done, refused or failed."""
+"""On a runner the workflows run gapp's own commands, `gapp deploy --json`
+and `gapp status --json`, with the fleet named by GAPP_FLEET. There is no
+command of gapp's that only a workflow runs."""
 
-import json
+import os
 
-import pytest
 from click.testing import CliRunner
 
-from gapp.admin.cli.main import main
-from gapp.admin.sdk import ci_runner, core, entryfile, fleetstore
-from gapp.admin.sdk.definitions import Refused
+from gapp.admin.cli.main import _json_only_on_stdout, main
+from gapp.admin.sdk import entryfile, fleetstore
 
 
-@pytest.fixture
-def seen(monkeypatch):
-    calls = []
-    monkeypatch.setattr(core.GappSDK, "deploy_definition",
-                        lambda self, deployment, upgrade=False: calls.append(("deploy", deployment, upgrade)) or {"commit": "abc"})
-    monkeypatch.setattr(core.GappSDK, "status_definition",
-                        lambda self, deployment: calls.append(("status", deployment)) or {"healthy": True})
-    return calls
-
-
-def test_deploy_prints_the_result_as_one_line_and_exits_0(seen):
-    out = []
-    assert ci_runner.runner_deploy("my-app", out=out.append) == 0
-    assert out == ['gapp-deploy: result={"commit": "abc"}'] and seen == [("deploy", "my-app", False)]
-
-
-def test_status_prints_the_result_as_one_line_and_exits_0(seen):
-    out = []
-    assert ci_runner.runner_status("my-app", out=out.append) == 0
-    assert out == ['gapp-status: result={"healthy": true}'] and seen == [("status", "my-app")]
-
-
-def test_a_refusal_is_one_line_and_exit_2(monkeypatch):
-    def refuse(self, deployment, upgrade=False):
-        raise Refused("'my-app' has an upgrade pending.\n  Deploy it with: gapp deploy --deployment my-app --upgrade")
-    monkeypatch.setattr(core.GappSDK, "deploy_definition", refuse)
-    out = []
-    assert ci_runner.runner_deploy("my-app", out=out.append) == 2
-    assert out == ["gapp-deploy: refused='my-app' has an upgrade pending. Deploy it with: gapp deploy --deployment my-app --upgrade"]
-
-
-def test_a_failure_is_its_first_line_and_exit_1_never_a_traceback(monkeypatch):
-    def fail(self, deployment, upgrade=False):
-        raise RuntimeError("Cloud Build failed\nlots of detail")
-    monkeypatch.setattr(core.GappSDK, "deploy_definition", fail)
-    out = []
-    assert ci_runner.runner_deploy("my-app", out=out.append) == 1
-    assert out == ["gapp-deploy: error=Cloud Build failed"]
-
-
-def test_the_commands_take_the_name_and_upgrade_and_exit_with_the_runners_code(seen):
-    res = CliRunner().invoke(main, ["ci", "runner", "deploy", "my-app", "--upgrade"])
-    assert res.exit_code == 0 and res.output.strip() == 'gapp-deploy: result={"commit": "abc"}'
-    assert seen == [("deploy", "my-app", True)]
-    res = CliRunner().invoke(main, ["ci", "runner", "status", "my-app"])
-    assert res.exit_code == 0 and json.loads(res.output.split("result=", 1)[1]) == {"healthy": True}
-
-
-def test_the_runner_commands_are_not_listed_for_people():
+def test_there_is_no_runner_only_command():
     listed = CliRunner().invoke(main, ["ci", "--help"]).output.split("Commands:")[1]
     names = [line.split()[0] for line in listed.splitlines() if line.strip()]
     assert names == ["deploy", "init", "projects", "status"]
+    assert "runner" not in main.commands["ci"].commands
 
 
 def test_on_a_runner_the_fleet_is_the_file_the_workflow_checked_out(monkeypatch, tmp_path):
@@ -80,24 +31,9 @@ def test_on_a_runner_the_fleet_is_the_file_the_workflow_checked_out(monkeypatch,
     assert fleetstore.read() == {"my-app": definition}
 
 
-# -- the workflows that started the run --
-
-
-@pytest.mark.parametrize("command", ["deploy", "status"])
-def test_workflows_older_than_this_gapps_compatible_from_are_refused_before_anything_runs(seen, monkeypatch, command):
-    import gapp
-    monkeypatch.setattr(gapp, "COMPATIBLE_FROM", "4.0.0rc15")
-    monkeypatch.setenv("GAPP_WORKFLOWS_VERSION", "4.0.0rc14")
-    out = []
-    run = ci_runner.runner_deploy if command == "deploy" else ci_runner.runner_status
-    assert run("my-app", out=out.append) == 2 and seen == []
-    assert out[0].startswith(f"gapp-{command}: refused=The workflows that started this run are gapp 4.0.0rc14's")
-    assert out[0].endswith("Bring them up to date: gapp ci init")
-
-
-@pytest.mark.parametrize("workflows", ["", "4.0.0rc15", "99.0.0"])
-def test_workflows_from_compatible_from_on_or_that_do_not_say_are_run(seen, monkeypatch, workflows):
-    import gapp
-    monkeypatch.setattr(gapp, "COMPATIBLE_FROM", "4.0.0rc15")
-    monkeypatch.setenv("GAPP_WORKFLOWS_VERSION", workflows)
-    assert ci_runner.runner_deploy("my-app", out=lambda line: None) == 0 and seen == [("deploy", "my-app", False)]
+def test_with_json_what_other_tools_print_goes_to_stderr(capfd):
+    with _json_only_on_stdout(True):
+        os.write(1, b"terraform says things\n")
+    os.write(1, b"the result\n")
+    out, err = capfd.readouterr()
+    assert out == "the result\n" and err == "terraform says things\n"

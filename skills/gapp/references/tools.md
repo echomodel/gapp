@@ -48,7 +48,7 @@ command that fixes it.
 | Install the workflows | `gapp ci init` | `gapp_ci_init()` | in the fleet repo; again after installing another gapp |
 | Connect a project | `gapp ci projects connect <project>` | `gapp_ci_projects("connect", project)` | once per project; gcloud as an Owner and `gh` as an admin of the fleet repo; after `gapp project setup` |
 | Connected projects | `gapp ci projects list` | `gapp_ci_projects("list")` | |
-| Deploy on a runner | `gapp ci deploy [--upgrade] [--no-watch]` | `gapp_ci_deploy(deployment=, upgrade=, watch=)` | waits for the run and reports what it said |
+| Deploy on a runner | `gapp ci deploy [--upgrade] [--replace-domain] [--no-watch]` | `gapp_ci_deploy(deployment=, upgrade=, replace_domain=, watch=)` | waits for the run and reports what it said |
 | The last run, or what is live | `gapp ci status [--live]` | `gapp_ci_status(deployment=, live=)` | `live` starts a runner |
 
 Every `gapp ci` result has `ok`. When true, `lines` is what to tell the

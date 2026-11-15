@@ -8,11 +8,11 @@
 # deployment's definition names.
 #
 # The job checks out the fleet repo and the app's repo, installs that gapp,
-# signs in to Google Cloud, and runs `gapp ci runner deploy <deployment>`
-# in the app's checkout. gapp is started with the deployment's name and
-# nothing else; everything it deploys comes from the definition. That one
-# command line is what must stay the same across gapp releases, so a
-# definition written by an earlier gapp can still be deployed by it.
+# signs in to Google Cloud, and runs `gapp deploy --deployment <name> --json`
+# in the app's checkout, the deploy a person runs from a clone. Everything
+# it deploys comes from the definition. That command line is what must stay
+# the same across gapp releases, so a definition written by an earlier gapp
+# can still be deployed by it.
 
 name: Deploy a gapp deployment
 
@@ -33,6 +33,11 @@ on:
         type: string
       upgrade:
         description: Apply a pending gapp upgrade. Refused when none is pending.
+        required: false
+        default: false
+        type: boolean
+      replace-domain:
+        description: Let the deploy replace or remove the live custom domain. The old one stops serving.
         required: false
         default: false
         type: boolean
@@ -62,13 +67,6 @@ on:
         type: string
       app-repo-app-id:
         description: Id of the GitHub App that may read the app's repo; empty for a public repo.
-        required: false
-        default: ''
-        type: string
-      workflows-version:
-        description: >-
-          The gapp version whose workflows call this one. The gapp that
-          deploys refuses workflows older than its COMPATIBLE_FROM.
         required: false
         default: ''
         type: string
@@ -174,7 +172,21 @@ jobs:
         working-directory: app
         env:
           GAPP_FLEET: ${{ github.workspace }}/fleet/gapp.yaml
-          GAPP_WORKFLOWS_VERSION: ${{ inputs.workflows-version }}
           DEPLOYMENT: ${{ inputs.deployment }}
           UPGRADE_FLAG: ${{ inputs.upgrade && '--upgrade' || '' }}
-        run: gapp ci runner deploy "$DEPLOYMENT" $UPGRADE_FLAG
+          REPLACE_FLAG: ${{ inputs.replace-domain && '--replace-domain' || '' }}
+        run: |
+          # gapp prints its result as JSON on stdout and everything else on
+          # stderr. The line below is how `gapp ci deploy` reads the result
+          # back from this log: result=, refused= or error=, and the exit code.
+          set +e
+          gapp deploy --deployment "$DEPLOYMENT" --json $UPGRADE_FLAG $REPLACE_FLAG > "$RUNNER_TEMP/gapp.json" 2> "$RUNNER_TEMP/gapp.err"
+          code=$?
+          set -e
+          cat "$RUNNER_TEMP/gapp.err" >&2
+          case "$code" in
+            0) echo "gapp-deploy: result=$(jq -c . "$RUNNER_TEMP/gapp.json")" ;;
+            2) echo "gapp-deploy: refused=$(jq -r .message "$RUNNER_TEMP/gapp.json" | tr -s '[:space:]' ' ' | sed 's/ *$//')" ;;
+            *) echo "gapp-deploy: error=$(grep -m1 'Error: ' "$RUNNER_TEMP/gapp.err" | sed 's/^ *Error: //')" ;;
+          esac
+          exit "$code"

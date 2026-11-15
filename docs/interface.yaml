@@ -46,7 +46,7 @@ commands:
   ci init: {}
   ci projects connect: {args: ["<project>"]}
   ci projects list: {}
-  ci deploy: {options: [--upgrade], one: true, runs: true}
+  ci deploy: {options: [--upgrade, --replace-domain], one: true, runs: true}
   ci status: {options: [--live], one: true}
 
   fleet: {}
@@ -60,11 +60,6 @@ commands:
   config profile remove: {args: ["<name>"]}
   config profile rename: {args: ["<old>", "<new>"]}
   config account: {args: ["[email]"]}
-
-# Commands a workflow runs on a runner. People never type them, so they
-# are not in INTERFACE.md's tables; their shape is fixed all the same.
-runner:
-  prefix: ci runner
 
 mcp_tools:
   - gapp_project_setup

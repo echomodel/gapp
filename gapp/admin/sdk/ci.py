@@ -46,7 +46,6 @@ from pathlib import Path
 from urllib.parse import quote
 
 from gapp.admin.sdk import fleet
-from gapp.admin.sdk.ci_runner import DEPLOY_LOG_PREFIX, STATUS_LOG_PREFIX
 from gapp.admin.sdk.util import run_gcloud, require_gcloud_account
 
 # The GitHub App that lets a run clone a private app repo: an Actions
@@ -60,6 +59,11 @@ APP_KEY_SECRET = "HOSTING_GITHUB_APP_PRIVATE_KEY"
 # Written by `gapp ci projects connect`, read by every run.
 ENV_WIF_PROVIDER_VAR = "GAPP_WIF_PROVIDER"
 ENV_DEPLOY_SA_VAR = "GAPP_DEPLOY_SERVICE_ACCOUNT"
+
+# The line a workflow prints from gapp's result, which these commands read
+# back from the run's log: "<prefix> result=<json>", "refused=" or "error=".
+DEPLOY_LOG_PREFIX = "gapp-deploy:"
+STATUS_LOG_PREFIX = "gapp-status:"
 
 # The workflows gapp owns in the fleet repo.
 DEPLOY_WORKFLOW = "gapp-deploy.yml"
@@ -887,8 +891,8 @@ def _last_deploy(fleet_repo: str, name: str) -> dict:
 class RunReport:
     """What a finished run said in its log.
 
-    `result`, `refused` and `error` are the one line gapp prints on the
-    runner (`ci_runner`). `said` holds the other lines a workflow printed
+    `result`, `refused` and `error` are the one line the workflow prints
+    from gapp's `--json` output on the runner. `said` holds the other lines a workflow printed
     for a person, and `errors` the errors GitHub Actions itself logged.
     """
     result: dict | None = None
@@ -962,8 +966,8 @@ def _ref_is_missing(log: str, repo: str, ref: str | None) -> bool:
     return rc != 0 and _gh_failure(err)[0] in (404, 422) and _repo_visible(repo)
 
 
-def deploy(deployment: str | None = None, *, upgrade: bool = False, watch: bool = True,
-           cwd: Path | None = None, progress=None) -> dict:
+def deploy(deployment: str | None = None, *, upgrade: bool = False, replace_domain: bool = False,
+           watch: bool = True, cwd: Path | None = None, progress=None) -> dict:
     """Deploy one deployment on a runner (`gapp ci deploy`): the same deploy `gapp deploy` does, from GitHub Actions.
 
     The run is started with the deployment's name and nothing else. It
@@ -974,13 +978,16 @@ def deploy(deployment: str | None = None, *, upgrade: bool = False, watch: bool 
     no repo on GitHub, a project the runners are not connected to, and
     workflows that are not installed. `upgrade` applies a pending gapp
     upgrade and is refused by the run when none is pending.
+    `replace_domain` lets the run replace or remove the live custom
+    domain, as `gapp deploy --replace-domain` does.
 
     With `watch`, it waits for the run and reports what the run said.
     `progress`, when given, is called with one line just before the run
     is started.
     """
     result = {"ok": True, "deployment": (deployment or "").strip() or None, "id": None, "repo": None, "project": None,
-              "ref": None, "gapp": None, "upgrade": bool(upgrade), "fleet_repo": None, "workflow": DEPLOY_WORKFLOW,
+              "ref": None, "gapp": None, "upgrade": bool(upgrade), "replace_domain": bool(replace_domain),
+              "fleet_repo": None, "workflow": DEPLOY_WORKFLOW,
               "dispatched": False, "request_id": None, "run_id": None, "run_url": None, "watched": False,
               "conclusion": None, "deployed": None, "messages": [], "next_step": None, "lines": []}
     fleet_repo, stop = _fleet_repo(result)
@@ -1004,10 +1011,13 @@ def deploy(deployment: str | None = None, *, upgrade: bool = False, watch: bool 
     if stop:
         return {**result, **stop}
 
-    again = f"gapp ci deploy --deployment {name}" + (" --upgrade" if upgrade else "")
+    again = (f"gapp ci deploy --deployment {name}" + (" --upgrade" if upgrade else "")
+             + (" --replace-domain" if replace_domain else ""))
     if progress:
         progress(f"Deploying {name}: {_builds(ref)} of {repo}, to {project}.")
     inputs = {"deployment": name, "upgrade": "true" if upgrade else "false"}
+    if replace_domain:
+        inputs["replace_domain"] = "true"
     stop = _start_run(fleet_repo, DEPLOY_WORKFLOW, inputs, result, "deploy", again)
     if stop:
         return stop

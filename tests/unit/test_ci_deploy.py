@@ -250,3 +250,10 @@ def test_workflows_older_than_this_gapp_are_named_with_init(ci):
     ci.dispatch_refusal = 'gh: HTTP 422: Unexpected inputs provided: ["upgrade"]'
     hint = ci_mod.deploy("my-app")["next_step"]["hint"]
     assert "bring the workflows up to this gapp's with `gapp ci init`" in hint
+
+
+def test_replace_domain_reaches_the_run(ci):
+    ci_mod.deploy("my-app", replace_domain=True)
+    assert ci.dispatched[-1][2]["replace_domain"] == "true"
+    ci_mod.deploy("my-app")
+    assert "replace_domain" not in ci.dispatched[-1][2]
