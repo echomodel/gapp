@@ -186,7 +186,8 @@ def gapp_ci_projects(action: str, project: str | None = None) -> dict:
 
 
 @_tool()
-def gapp_ci_deploy(deployment: str | None = None, upgrade: bool = False, watch: bool = True) -> dict:
+def gapp_ci_deploy(deployment: str | None = None, upgrade: bool = False, replace_domain: bool = False,
+                   watch: bool = True) -> dict:
     """Deploy one deployment on a GitHub Actions runner: the deploy
     gapp_deploy does, without gcloud, Terraform or a clone on this machine.
 
@@ -219,10 +220,13 @@ def gapp_ci_deploy(deployment: str | None = None, upgrade: bool = False, watch: 
             gapp_show says the next deploy applies one; the run refuses
             it otherwise, and refuses a deploy that would apply one
             without it.
+        replace_domain: Let the deploy replace or remove the live custom
+            domain; the old domain stops serving. Only when the user has
+            asked for the domain change and the run refused without it.
         watch: Wait for the run to finish (default true).
     """
     from gapp.admin.sdk import ci
-    return ci.deploy(deployment, upgrade=upgrade, watch=watch)
+    return ci.deploy(deployment, upgrade=upgrade, replace_domain=replace_domain, watch=watch)
 
 
 @_tool()

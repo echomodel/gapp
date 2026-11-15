@@ -267,7 +267,7 @@ GitHub repo.
 | `gapp ci init` | Installs the workflows in the fleet repo, as one commit | git push access to the fleet repo that can change workflows; `gh` |
 | `gapp ci projects connect <project>` | Lets the fleet repo's runners sign in to that project and deploy. Refused on a project that is not set up | gcloud as an Owner; `gh` as an admin of the fleet repo |
 | `gapp ci projects list` | The projects they can deploy to, from the fleet repo's record | `gh` |
-| `gapp ci deploy [--upgrade]` | The same deploy, on a runner | `gh` |
+| `gapp ci deploy [--upgrade] [--replace-domain]` | The same deploy, on a runner | `gh` |
 | `gapp ci status [--live]` | The last run and what it deployed | `gh` |
 
 ### The fleet

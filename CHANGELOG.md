@@ -3,6 +3,42 @@
 Notable changes to gapp. Versions are git tags (`vX.Y.Z`); the version
 source is `gapp/__init__.py`.
 
+## 4.0.0rc20 (pre-release of 4.0.0)
+
+Changed:
+
+- **Upgrade every deployment once.** `COMPATIBLE_FROM` is 4.0.0rc20: the
+  workflows run a new command on the runner (below), which earlier gapp
+  versions do not have. For each deployment: `gapp upgrade --deployment
+  <name>`, then `gapp ci deploy --deployment <name> --upgrade`. Run `gapp ci
+  init` first to install the new workflows.
+- **The workflows run `gapp deploy --json` and `gapp status --json` on the
+  runner.** The hidden `gapp ci runner deploy` and `gapp ci runner status`
+  commands are gone, and so is the runner's check of the workflows' version
+  (`GAPP_WORKFLOWS_VERSION`); `gapp ci deploy` and `ci status --live`
+  still check the workflows before starting a run.
+- **`gapp deploy --json` and `gapp status --json` print only the JSON on
+  stdout.** What Cloud Build and Terraform print goes to stderr. A failure
+  is reported as one "Error:" line, never a traceback.
+
+Added:
+
+- **`gapp ci deploy --replace-domain`** (and `replace_domain` on the
+  `gapp_ci_deploy` tool), as `gapp deploy` has: lets a deploy on a runner
+  replace or remove the live custom domain. Before, a domain could only be
+  changed or removed from a clone.
+
+Fixed:
+
+- **A failed Terraform apply says why**, in Terraform's words (such as
+  "Caller is not authorized to administer the domain …"), instead of
+  "Command terraform apply returned non-zero exit status 1".
+- **A domain whose mapping never came up no longer counts as live.** A
+  domain Cloud Run refused (unverified, say) can be unset or changed and
+  deployed again without `--replace-domain`; only a mapping that is
+  serving is guarded. When the mapping can't be read, it still counts as
+  live.
+
 ## 4.0.0rc19 (pre-release of 4.0.0)
 
 Changed:

@@ -63,7 +63,8 @@ deployment's name and nothing else. The run:
    when it names none).
 4. Installs the gapp version the definition names.
 5. Signs in to the project as its deploy identity.
-6. Runs `gapp ci runner deploy <name>`: the deploy `gapp deploy` runs.
+6. Runs `gapp deploy --deployment <name> --json`, the deploy you would
+   run from a clone, and prints its result for `gapp ci deploy` to read.
 
 Nothing about a deploy is passed to the run but the name. To build
 something else, change the definition: `gapp set ref <ref>`.

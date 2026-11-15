@@ -104,6 +104,18 @@ class GappSDK:
 
     # -- Internal helpers --
 
+    def _domain_serves(self, project_id: str, domain: str) -> bool:
+        """Whether the domain's mapping is serving. True when that cannot
+        be read: a guard against taking a domain down fails closed."""
+        try:
+            mapping = self.provider.get_domain_mapping(project_id, REGION, domain)
+        except Exception:
+            return True
+        if not mapping:
+            return False
+        state, _ = _domain_status_from_conditions((mapping.get("status") or {}).get("conditions") or [])
+        return state == "active"
+
     def _check_domain_safety(self, service_name, project_id, requested_domain,
                              bucket_name, state_prefix, replace_domain):
         """Refuse a deploy that would take a live custom domain down.
@@ -111,8 +123,10 @@ class GappSDK:
         Terraform replaces a changed `google_cloud_run_domain_mapping` by
         destroying the old one first, so a typo, a placeholder, or an omitted
         `domain:` silently removes the live mapping. So before any build or
-        apply: a live mapping exists (recorded in Terraform state) and this
-        deploy maps a different domain or none: refuse unless replace_domain.
+        apply: a live mapping exists (recorded in Terraform state, and
+        serving) and this deploy maps a different domain or none: refuse
+        unless replace_domain. A mapping that never came up serves nothing,
+        so changing or removing it needs no flag.
 
         Whether the deploying identity has verified a new domain is not
         checked here: Cloud Run refuses the mapping itself when it has not
@@ -136,6 +150,8 @@ class GappSDK:
                 f"{bucket_name} for this identity, then deploy again. ({e})"
             ) from e
         live = (outputs.get("custom_domain") or "").strip().lower()
+        if live and live != requested and not self._domain_serves(project_id, live):
+            live = ""     # a mapping that never came up (an unverified domain, say) takes nothing down
 
         if live and live != requested and not replace_domain:
             if requested:

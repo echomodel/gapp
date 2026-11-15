@@ -324,7 +324,7 @@ in one of two ways (`gapp/admin/sdk/loading.py`), never any other:
 - **`load_deployment`** (or `load_definition` then `with_infrastructure`,
   for a deploy, which checks its clone first): commands that touch the
   infrastructure: `deploy`, `status`, `secrets list`, `secrets get`,
-  `secrets set`, and `gapp ci runner deploy` and `status` on a runner.
+  `secrets set`, on a machine or on a runner.
   Checks the definition's version and the infrastructure's, from the
   deploy record. These commands already read the record, so the check
   costs a comparison, not a read.
@@ -756,8 +756,10 @@ are in [docs/CI.md](docs/CI.md). The rules to keep:
 - **`gapp ci` never changes the fleet.** There is one way to change a
   definition, and it is not a workflow run.
 - **A runner runs the same deploy.** The workflow checks out the fleet
-  and the app, installs the gapp the definition names, and runs `gapp ci
-  runner deploy <name>`. No deploy logic lives in a workflow.
+  and the app, installs the gapp the definition names, and runs `gapp
+  deploy --deployment <name> --json`, the command a person runs. gapp has
+  no command only a workflow runs. No deploy logic lives in a workflow;
+  the workflow turns gapp's JSON into the one log line `gapp ci` reads.
 - **`gapp ci` reads GitHub and starts runs through `gh api`, and writes
   to the fleet repo only with git.** Every change gapp makes to the fleet
   repo, the fleet file or the workflows, is one commit through
@@ -811,19 +813,23 @@ anything is read, and these rules keep it that way:
 A runner deploy involves two gapp versions on purpose: the workflows come
 from the gapp that ran `gapp ci init`, and the gapp they install is the
 one the definition names. What the workflows give that gapp is the
-runner hand-off: the commands `gapp ci runner deploy <name> [--upgrade]`
-and `gapp ci runner status <name>`, the `GAPP_FLEET` variable naming the
-checked-out fleet file, `GAPP_WORKFLOWS_VERSION` naming the workflows'
-gapp, and the app checkout as the working folder for a deploy. It is part
+runner hand-off: the commands `gapp deploy --deployment <name> --json
+[--upgrade] [--replace-domain]` and `gapp status --deployment <name>
+--json`, the `GAPP_FLEET` variable naming the checked-out fleet file, and
+the app checkout as the working folder for a deploy. With `--json`, stdout
+carries the result alone; what Cloud Build and Terraform print goes to
+stderr. It is part
 of what `COMPATIBLE_FROM` covers, recorded per value of it in `HANDOFF` in
 `tests/unit/test_ci_workflows.py`.
 
-Each side checks the other against the same number. The workflows carry
+Both sides are checked against the same number. The workflows carry
 their gapp's `COMPATIBLE_FROM` and refuse an older definition before
-installing anything; the gapp on the runner refuses workflows older than
-its own `COMPATIBLE_FROM`; and `gapp ci deploy` and `gapp ci status
---live` make both checks before starting a run ("upgrade it first", or
-"gapp ci init"). A release that changes the hand-off either keeps the old
+installing anything, and `gapp ci deploy` and `gapp ci status --live`
+refuse, before starting a run, a definition older than the workflows
+take and workflows older than the definition's gapp takes ("upgrade it
+first", or "gapp ci init"). The gapp on the runner does not check the
+workflows: knowing about workflows is not `gapp deploy`'s business, and a
+run started by hand from GitHub skips only that one check. A release that changes the hand-off either keeps the old
 form as well (adding a variable an older gapp ignores is fine) or raises
 `COMPATIBLE_FROM` and records the new hand-off in `HANDOFF`; the test
 fails when it does neither.

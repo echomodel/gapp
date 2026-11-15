@@ -43,12 +43,8 @@ def _shape(command: click.Command) -> tuple:
 def _built() -> dict:
     """Every visible command of the real CLI: path -> (arguments, options)."""
     found = {}
-    runner = SPEC["runner"]["prefix"]
-
     def walk(command, path):
         name = " ".join(path)
-        if name == runner or name.startswith(runner + " "):
-            return
         if isinstance(command, click.Group):
             if command.invoke_without_command and path:
                 found[name] = _shape(command)

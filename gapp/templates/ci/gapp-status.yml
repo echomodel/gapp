@@ -3,8 +3,8 @@
 # `gapp ci status --live` starts it. The first job reads the deployment's
 # project and gapp version from gapp.yaml; the second runs in the GitHub
 # Environment named after the project, signs in as a deploy does, and runs
-# `gapp ci runner status <deployment>`, which prints the answer as one line
-# the command that asked reads. Nothing is written anywhere.
+# `gapp status --deployment <deployment> --json`, and prints its answer as
+# one line the command that asked reads. Nothing is written anywhere.
 
 name: Status of a gapp deployment
 run-name: Status ${{ inputs.deployment }} ${{ inputs.request_id }}
@@ -139,6 +139,18 @@ jobs:
       - name: Ask gapp
         env:
           GAPP_FLEET: ${{ github.workspace }}/fleet/gapp.yaml
-          GAPP_WORKFLOWS_VERSION: __GAPP_VERSION__
           DEPLOYMENT: ${{ inputs.deployment }}
-        run: gapp ci runner status "$DEPLOYMENT"
+        run: |
+          # As in the deploy workflow: gapp's JSON result becomes the one
+          # line `gapp ci status --live` reads back from this log.
+          set +e
+          gapp status --deployment "$DEPLOYMENT" --json > "$RUNNER_TEMP/gapp.json" 2> "$RUNNER_TEMP/gapp.err"
+          code=$?
+          set -e
+          cat "$RUNNER_TEMP/gapp.err" >&2
+          case "$code" in
+            0) echo "gapp-status: result=$(jq -c . "$RUNNER_TEMP/gapp.json")" ;;
+            2) echo "gapp-status: refused=$(jq -r .message "$RUNNER_TEMP/gapp.json" | tr -s '[:space:]' ' ' | sed 's/ *$//')" ;;
+            *) echo "gapp-status: error=$(grep -m1 'Error: ' "$RUNNER_TEMP/gapp.err" | sed 's/^ *Error: //')" ;;
+          esac
+          exit "$code"

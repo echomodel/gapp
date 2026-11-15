@@ -1,6 +1,8 @@
 """gapp CLI — GCP App Deployer."""
 
+import contextlib
 import json as json_mod
+import os
 from pathlib import Path
 import sys
 import click
@@ -141,6 +143,26 @@ def config_profile_rename(old, new, json_out):
 
 # -- gapp deploy --
 
+
+@contextlib.contextmanager
+def _json_only_on_stdout(active: bool):
+    """With --json, stdout carries the result and nothing else: what the
+    tools gapp runs print (Cloud Build, Terraform) goes to stderr meanwhile."""
+    if not active:
+        yield
+        return
+    sys.stdout.flush()
+    saved = os.dup(1)
+    os.dup2(2, 1)
+    try:
+        yield
+    finally:
+        try:
+            sys.stdout.flush()
+        finally:
+            os.dup2(saved, 1)
+            os.close(saved)
+
 @main.command("deploy")
 @click.option("--deployment", "-d", "deployment", default=None, metavar="NAME",
               help="The deployment. Left out inside a clone: the one this repo has.")
@@ -164,15 +186,16 @@ def deploy(sdk: GappSDK, deployment, dry_run, rebuild, replace_domain, upgrade, 
     """
     from gapp.admin.sdk.definitions import Refused
     try:
-        result = sdk.deploy_definition(deployment, dry_run=dry_run, rebuild=rebuild,
-                                       replace_domain=replace_domain, upgrade=upgrade)
+        with _json_only_on_stdout(json_out):
+            result = sdk.deploy_definition(deployment, dry_run=dry_run, rebuild=rebuild,
+                                           replace_domain=replace_domain, upgrade=upgrade)
     except Refused as e:
         if json_out:
             click.echo(json_mod.dumps({"refused": True, "message": e.message}, indent=2))
         else:
             click.echo(e.message, err=True)
         raise SystemExit(2)
-    except (RuntimeError, ValueError) as e:
+    except Exception as e:  # noqa: BLE001 - a failed deploy is reported in words, never a traceback
         first, _, rest = str(e).partition("\n")
         click.echo(f"  Error: {first}", err=True)
         for line in rest.splitlines():
@@ -219,14 +242,15 @@ def status(sdk: GappSDK, deployment, json_out):
     """What is live for a deployment: its URL and health, the domain's state, and the next step."""
     from gapp.admin.sdk.definitions import Refused
     try:
-        result = sdk.status_definition(deployment)
+        with _json_only_on_stdout(json_out):
+            result = sdk.status_definition(deployment)
     except Refused as e:
         if json_out:
             click.echo(json_mod.dumps({"refused": True, "message": e.message}, indent=2))
         else:
             click.echo(e.message, err=True)
         raise SystemExit(2)
-    except (RuntimeError, ValueError) as e:
+    except Exception as e:  # noqa: BLE001
         click.echo(f"  Error: {e}", err=True)
         raise SystemExit(1)
     if json_out:
@@ -554,9 +578,11 @@ def ci_projects_list_cmd(json_out):
 @_ci_deployment
 @click.option("--upgrade", is_flag=True,
               help="Apply a pending gapp upgrade. Required when one is pending, refused when none is.")
+@click.option("--replace-domain", is_flag=True,
+              help="Allow the deploy to replace or remove the live custom domain. The old domain stops serving.")
 @click.option("--no-watch", is_flag=True, help="Return once the run is started, without waiting for it.")
 @_ci_json
-def ci_deploy_cmd(deployment, upgrade, no_watch, json_out):
+def ci_deploy_cmd(deployment, upgrade, replace_domain, no_watch, json_out):
     """Deploy a deployment on a runner: the deploy `gapp deploy` does, from GitHub Actions.
 
     The run checks out the ref the definition builds, installs the gapp
@@ -574,7 +600,7 @@ def ci_deploy_cmd(deployment, upgrade, no_watch, json_out):
     init`). Needs only `gh`; no gcloud or Terraform on this machine.
     """
     from gapp.admin.sdk import ci
-    result = ci.deploy(deployment, upgrade=upgrade, watch=not no_watch,
+    result = ci.deploy(deployment, upgrade=upgrade, replace_domain=replace_domain, watch=not no_watch,
                        progress=None if json_out else click.echo)
     _ci_end(result, json_out)
 
@@ -596,28 +622,6 @@ def ci_status_cmd(deployment, live, json_out):
     from gapp.admin.sdk import ci
     result = ci.status(deployment, live=live, progress=None if json_out else click.echo)
     _ci_end(result, json_out)
-
-
-@ci_group.group("runner", hidden=True)
-def ci_runner_group():
-    """Commands the fleet repo's workflows run on the runner (not for people)."""
-
-
-@ci_runner_group.command("deploy")
-@click.argument("deployment")
-@click.option("--upgrade", is_flag=True, help="Apply a pending gapp upgrade.")
-def ci_runner_deploy_cmd(deployment, upgrade):
-    """Deploy DEPLOYMENT from the app checkout the run stands in; the fleet file is named by GAPP_FLEET."""
-    from gapp.admin.sdk.ci_runner import runner_deploy
-    raise SystemExit(runner_deploy(deployment, upgrade=upgrade))
-
-
-@ci_runner_group.command("status")
-@click.argument("deployment")
-def ci_runner_status_cmd(deployment):
-    """Print what is live for DEPLOYMENT as one line for `gapp ci status --live`."""
-    from gapp.admin.sdk.ci_runner import runner_status
-    raise SystemExit(runner_status(deployment))
 
 
 @main.group("fleet", invoke_without_command=True)
