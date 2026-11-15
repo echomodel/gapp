@@ -3,6 +3,32 @@
 Notable changes to gapp. Versions are git tags (`vX.Y.Z`); the version
 source is `gapp/__init__.py`.
 
+## Unreleased
+
+Changed:
+
+- **One rule for which gapp versions work together.** Each release names
+  `COMPATIBLE_FROM` (the oldest definition, infrastructure and workflows
+  it works with as they are) and `UPGRADES_FROM` (the oldest `gapp
+  upgrade` and `--upgrade` can bring up). Both are 4.0.0rc15 and
+  4.0.0rc13 for this release. They replace three separate rules: a
+  definition is no longer refused for being on an older but compatible
+  gapp (`set`, `env`, `status` and the rest work on it), the workflows'
+  minimum is `COMPATIBLE_FROM`, and `gapp upgrade`'s floor is
+  `UPGRADES_FROM`.
+- **The infrastructure's version is checked too.** `deploy`, `status`,
+  `secrets` and the runner commands refuse a deployment whose last deploy
+  was by a gapp outside that range, even when its definition is in it.
+- **`gapp list` and `gapp show`** say "upgrade required" or "too old for
+  this gapp" as well as "upgrade available".
+- **Runners check the workflows that started them.** The workflows pass
+  their gapp version (`GAPP_WORKFLOWS_VERSION`), and the gapp on the
+  runner refuses workflows older than its `COMPATIBLE_FROM`. Run `gapp ci
+  init` after upgrading to install workflows that pass it.
+
+Unchanged: every version move is still `gapp upgrade` and then a deploy
+with `--upgrade`, and a deploy builds only with the definition's version.
+
 ## 4.0.0rc16 (pre-release of 4.0.0)
 
 Added:

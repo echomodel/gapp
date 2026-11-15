@@ -236,26 +236,76 @@ format, which gapp does not extend. The rules, and why:
 
 ### gapp versions
 
-A definition records the gapp version that wrote it. That is the version
-a runner installs, and the deployment's bucket records the version that
-last deployed it, written only once a deploy has succeeded.
+A deployment carries two versions: its definition's (`gapp` in the fleet,
+the gapp that deploys it and the one a runner installs) and its
+infrastructure's (the gapp of its last successful deploy, in the deploy
+record in the project). Each release sets two numbers, in
+`gapp/__init__.py`, and `gapp/admin/sdk/versions.py` is the only code that
+compares versions:
 
-- **Releases start strict.** A gapp changes or deploys a definition only
-  when the definition's version is its own. `gapp upgrade` brings one
-  definition to the installed gapp's version and changes nothing else;
-  the next deploy applies it and must be told to (`--upgrade`), and is
-  refused that flag when nothing is pending. A deploy never upgrades a
-  deployment as a side effect. The first deploy by a newer gapp can change
-  infrastructure, not just the app, so it happens only when someone asks
-  for it, and never rides along with a routine deploy.
+- **`COMPATIBLE_FROM`**: this gapp works as it is with definitions,
+  infrastructure and workflows from this version on. It stays where it is
+  while releases add without breaking, and a release that breaks
+  anything listed below raises it to its own version. A raise is listed
+  under Breaking in the CHANGELOG.
+- **`UPGRADES_FROM`**: `gapp upgrade` and a deploy with `--upgrade` can
+  carry anything from this version on up to this gapp. It matters only
+  once `COMPATIBLE_FROM` has moved: it is how far back the new release's
+  upgrade steps reach. Never above `COMPATIBLE_FROM`.
+
+The rules:
+
+- **A version move is two deliberate steps.** `gapp upgrade` moves the
+  definition to this gapp's version, and the next deploy brings the
+  infrastructure up too and must be told to (`--upgrade`). It knows from
+  the deploy record: an upgrade is pending when the definition is newer
+  than the infrastructure. `--upgrade` is refused when nothing is
+  pending. A deploy never upgrades a deployment as a side effect. The
+  first deploy by a newer gapp can change infrastructure, not just the
+  app, so it happens only when someone asks for it, and never rides along
+  with a routine deploy.
+- **A deploy builds only with the definition's version.** A runner
+  installs exactly that version; a deploy from a machine with another
+  gapp installed is refused. So the infrastructure is only ever produced
+  by the version the definition names.
+- **Within `COMPATIBLE_FROM`, a newer gapp works with an older
+  deployment.** It reads and changes the definition and reads the
+  infrastructure without an upgrade, except for a setting added after the
+  definition's version (`versions.SETTINGS_SINCE`, filled in by the
+  release that adds one), which a runner installing the older gapp would
+  not know.
+- **Both versions are checked, against the same number.** A definition
+  that was upgraded and never deployed has infrastructure on the older
+  version, and a later gapp refuses it if that is below its
+  `COMPATIBLE_FROM`, whatever the definition says.
 - **There is no fleet-wide version.** Deployments in one fleet can be on
   different gapp versions, so a new gapp can be tried on one of them.
 - **Only the newer gapp knows how to get to itself.** Upgrade steps
-  belong to the gapp being upgraded to, and a definition too old for it
-  is refused with the gapp to install first.
-- **A runner is started with the deployment's name and nothing else.**
-  Everything else comes from the definition, so the way a workflow
-  starts gapp has little reason to change between releases.
+  belong to the gapp being upgraded to, and anything below its
+  `UPGRADES_FROM` is refused with the gapp to install first.
+
+### Commands that touch a deployment's infrastructure
+
+A command checks the version of what it touches, and gets its deployment
+in one of two ways (`gapp/admin/sdk/loading.py`), never any other:
+
+- **`load_definition`**: commands that touch only the definition: `show`,
+  `set`, `unset`, `env`, `apis`, `apply`, `add --copy-of`. Checks the
+  definition's version. Never reads a cloud.
+- **`load_deployment`** (or `load_definition` then `with_infrastructure`,
+  for a deploy, which checks its clone first): commands that touch the
+  infrastructure: `deploy`, `status`, `secrets list`, `secrets get`,
+  `secrets set`, and `gapp ci runner deploy` and `status` on a runner.
+  Checks the definition's version and the infrastructure's, from the
+  deploy record. These commands already read the record, so the check
+  costs a comparison, not a read.
+
+`gapp upgrade` is the one command that reads a definition below
+`COMPATIBLE_FROM` on purpose, and applies `UPGRADES_FROM` itself.
+`INFRASTRUCTURE_COMMANDS` in `tests/unit/test_fleet_deploy.py` lists the
+second group, and a test runs each against infrastructure this gapp does
+not work with; a new command that touches infrastructure goes in this
+list, in that one, and through `load_deployment`.
 
 What counts as a breaking change between gapp and what it has deployed:
 the labels and the project mark, the bucket's name and layout, how
@@ -653,27 +703,23 @@ from the gapp that ran `gapp ci init`, and the gapp they install is the
 one the definition names. What the workflows give that gapp is the
 runner hand-off: the commands `gapp ci runner deploy <name> [--upgrade]`
 and `gapp ci runner status <name>`, the `GAPP_FLEET` variable naming the
-checked-out fleet file, and the app checkout as the working folder for a
-deploy. It is an interface between versions, recorded per minimum in
-`HANDOFF` in `tests/unit/test_ci_workflows.py`.
+checked-out fleet file, `GAPP_WORKFLOWS_VERSION` naming the workflows'
+gapp, and the app checkout as the working folder for a deploy. It is part
+of what `COMPATIBLE_FROM` covers, recorded per value of it in `HANDOFF` in
+`tests/unit/test_ci_workflows.py`.
 
-A release that changes the hand-off decides one of two things, and the
-CHANGELOG says which:
-
-- **Keep the old form too.** Pass the old name as well as the new one;
-  nothing is forced on anyone. Adding something an older gapp ignores
-  (a variable) needs nothing more.
-- **Raise the minimum.** Add the release to `RUNNER_HANDOFF_CHANGES` in
-  `ci.py` and record the new hand-off in `HANDOFF`. Workflows from then on
-  refuse a definition on an older gapp ("upgrade it first"), and `gapp ci
-  deploy` and `gapp ci status --live` refuse a definition the installed
-  workflows are too old or too new for before a run starts ("gapp ci
-  init", or "upgrade it first"). The CHANGELOG lists it under Breaking.
-
-The test fails when the hand-off changes and neither was done. Without
-the check, a runner deploy the workflows cannot run starts anyway and
-fails halfway with an error about something else (a fleet that seems
-empty), instead of being refused with what to do.
+Each side checks the other against the same number. The workflows carry
+their gapp's `COMPATIBLE_FROM` and refuse an older definition before
+installing anything; the gapp on the runner refuses workflows older than
+its own `COMPATIBLE_FROM`; and `gapp ci deploy` and `gapp ci status
+--live` make both checks before starting a run ("upgrade it first", or
+"gapp ci init"). A release that changes the hand-off either keeps the old
+form as well (adding a variable an older gapp ignores is fine) or raises
+`COMPATIBLE_FROM` and records the new hand-off in `HANDOFF`; the test
+fails when it does neither. Without these checks, a runner deploy the
+workflows cannot run starts anyway and fails halfway with an error about
+something else (a fleet that seems empty), instead of being refused with
+what to do.
 
 ## The MCP server
 

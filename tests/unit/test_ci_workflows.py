@@ -18,6 +18,7 @@ import textwrap
 import pytest
 import yaml
 
+import gapp
 from gapp.admin.sdk import ci as ci_mod
 from gapp.admin.sdk import entryfile
 
@@ -68,6 +69,7 @@ def test_the_deploy_workflow_passes_the_definition_to_the_reusable_workflow():
         "app-repo": "${{ needs.resolve.outputs.repo }}", "ref": "${{ needs.resolve.outputs.ref }}",
         "environment": "${{ needs.resolve.outputs.project }}", "gapp-repo": GAPP_REPO,
         "gapp-ref": "${{ needs.resolve.outputs.gapp_ref }}", "app-repo-app-id": "${{ needs.resolve.outputs.app_id }}",
+        "workflows-version": gapp.__version__,
     }
     assert deploy["secrets"] == {"app-repo-key": "${{ secrets.HOSTING_GITHUB_APP_PRIVATE_KEY }}"}
     assert set(deploy["with"]) == set(_reusable()[True]["workflow_call"]["inputs"])
@@ -86,6 +88,7 @@ def test_the_reusable_workflow_runs_gapp_with_the_deployments_name_and_nothing_e
     assert install["env"] == {"GAPP_REPO": "${{ inputs.gapp-repo }}", "GAPP_REF": "${{ inputs.gapp-ref }}"}
     assert run["run"] == 'gapp ci runner deploy "$DEPLOYMENT" $UPGRADE_FLAG' and run["working-directory"] == "app"
     assert run["env"] == {"GAPP_FLEET": "${{ github.workspace }}/fleet/gapp.yaml",
+                          "GAPP_WORKFLOWS_VERSION": "${{ inputs.workflows-version }}",
                           "DEPLOYMENT": "${{ inputs.deployment }}",
                           "UPGRADE_FLAG": "${{ inputs.upgrade && '--upgrade' || '' }}"}
 
@@ -136,7 +139,8 @@ def test_the_status_workflow_is_read_only_and_asks_the_project_as_the_deploy_ide
     assert install["run"] == PIP.format(repo=GAPP_REPO)
     assert install["env"] == {"GAPP_REF": "${{ needs.resolve.outputs.gapp_ref }}"}
     assert ask["run"] == 'gapp ci runner status "$DEPLOYMENT"'
-    assert ask["env"] == {"GAPP_FLEET": "${{ github.workspace }}/fleet/gapp.yaml", "DEPLOYMENT": "${{ inputs.deployment }}"}
+    assert ask["env"] == {"GAPP_FLEET": "${{ github.workspace }}/fleet/gapp.yaml",
+                          "GAPP_WORKFLOWS_VERSION": gapp.__version__, "DEPLOYMENT": "${{ inputs.deployment }}"}
 
 
 def test_no_script_interpolates_an_input_and_none_writes_to_github():
@@ -357,7 +361,7 @@ def test_status_refuses_what_deploy_refuses_about_the_file(tmp_path):
 
 # -- the runner hand-off: what the workflows give `gapp ci runner` --
 
-# What the workflows hand gapp, per minimum (ci.RUNNER_HANDOFF_CHANGES): the
+# What the workflows hand gapp, per minimum (gapp.COMPATIBLE_FROM): the
 # variables gapp reads, the command, and the folder it runs in. A change to
 # the hand-off either keeps all of this (adding to `reads` is fine) or is a
 # new minimum with its own entry here; see CONTRIBUTING, "The runner hand-off".
@@ -381,8 +385,8 @@ def _handoff_step(steps, command):
 
 
 def test_the_hand_off_is_the_one_its_minimum_promises():
-    recorded = HANDOFF.get(ci_mod.RUNNER_MIN_GAPP)
-    assert recorded, (f"The minimum is {ci_mod.RUNNER_MIN_GAPP} but HANDOFF has no entry for it: "
+    recorded = HANDOFF.get(gapp.COMPATIBLE_FROM)
+    assert recorded, (f"The minimum is {gapp.COMPATIBLE_FROM} but HANDOFF has no entry for it: "
                       f"record what the workflows hand gapp from that version on.")
     now = {"deploy": _handoff_step(_reusable()["jobs"]["deploy"]["steps"], "deploy"),
            "status": _handoff_step(_rendered(ci_mod.STATUS_WORKFLOW)["jobs"]["status"]["steps"], "status")}
@@ -390,10 +394,10 @@ def test_the_hand_off_is_the_one_its_minimum_promises():
         current = now[command]
         assert promised["reads"] <= current["reads"], (
             f"The {command} workflow no longer gives gapp {sorted(promised['reads'] - current['reads'])}, which gapp "
-            f"{ci_mod.RUNNER_MIN_GAPP} reads. Keep it as well, or raise the minimum (ci.RUNNER_HANDOFF_CHANGES).")
+            f"{gapp.COMPATIBLE_FROM} reads. Keep it as well, or raise COMPATIBLE_FROM.")
         assert (current["run"], current["working-directory"]) == (promised["run"], promised["working-directory"]), (
-            f"The {command} workflow runs gapp differently from what gapp {ci_mod.RUNNER_MIN_GAPP} expects. "
-            f"Keep the old form, or raise the minimum (ci.RUNNER_HANDOFF_CHANGES).")
+            f"The {command} workflow runs gapp differently from what gapp {gapp.COMPATIBLE_FROM} expects. "
+            f"Keep the old form, or raise COMPATIBLE_FROM.")
 
 
 def _with_gapp(tmp_path, workflow, version):
@@ -411,7 +415,7 @@ def test_a_definition_on_a_gapp_older_than_the_minimum_is_refused_before_anythin
     ok, log = runner.resolve()
     assert not ok and runner.outputs() == {}
     assert (f"{prefix}: 'my-app' is defined with gapp 4.0.0rc14, and these workflows need "
-            f"{ci_mod.RUNNER_MIN_GAPP} or later, so {what}. Upgrade it first: gapp upgrade --deployment my-app, "
+            f"{gapp.COMPATIBLE_FROM} or later, so {what}. Upgrade it first: gapp upgrade --deployment my-app, "
             f"then gapp ci deploy --deployment my-app --upgrade") in log
 
 

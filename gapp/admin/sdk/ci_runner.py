@@ -34,13 +34,44 @@ def _report(prefix: str, call, out) -> int:
     return 0
 
 
+WORKFLOWS_VERSION_ENV = "GAPP_WORKFLOWS_VERSION"
+
+
+def _check_workflows() -> None:
+    """Refuse workflows older than this gapp's COMPATIBLE_FROM. Workflows
+    that do not say their version predate this check and are taken as
+    they are."""
+    import os
+    import gapp
+    from gapp.admin.sdk.definitions import Refused
+    from gapp.admin.sdk.entryfile import EntryFileRefusal, version_key
+    theirs = (os.environ.get(WORKFLOWS_VERSION_ENV) or "").strip()
+    if not theirs:
+        return
+    try:
+        too_old = version_key(theirs) < version_key(gapp.COMPATIBLE_FROM)
+    except EntryFileRefusal:
+        return
+    if too_old:
+        raise Refused(f"The workflows that started this run are gapp {theirs}'s, and gapp {gapp.__version__} works "
+                      f"with workflows from {gapp.COMPATIBLE_FROM} on. Bring them up to date: gapp ci init")
+
+
 def runner_deploy(deployment: str, upgrade: bool = False, out=print) -> int:
     """Deploy `deployment` from the app repo checkout the run is standing in."""
     from gapp.admin.sdk.core import GappSDK
-    return _report(DEPLOY_LOG_PREFIX, lambda: GappSDK().deploy_definition(deployment, upgrade=upgrade), out)
+
+    def deploy():
+        _check_workflows()
+        return GappSDK().deploy_definition(deployment, upgrade=upgrade)
+    return _report(DEPLOY_LOG_PREFIX, deploy, out)
 
 
 def runner_status(deployment: str, out=print) -> int:
     """Report what is live for `deployment`."""
     from gapp.admin.sdk.core import GappSDK
-    return _report(STATUS_LOG_PREFIX, lambda: GappSDK().status_definition(deployment), out)
+
+    def status():
+        _check_workflows()
+        return GappSDK().status_definition(deployment)
+    return _report(STATUS_LOG_PREFIX, status, out)

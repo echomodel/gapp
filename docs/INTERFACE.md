@@ -138,18 +138,24 @@ wrote it. `gapp add` writes the version of the gapp that ran it.
 on the machine that asked. So a gapp upgrade on a workstation changes
 nothing by itself. There is no fleet-wide version.
 
-**A newer gapp and an older definition.** Within the range the newer gapp
-supports:
+**Which versions a gapp works with.** Each release names two versions:
+`COMPATIBLE_FROM`, the oldest it works with as it is, and `UPGRADES_FROM`,
+the oldest `gapp upgrade` and `--upgrade` can bring up to it. A deployment
+has two versions: its definition's, and its infrastructure's (the gapp
+of its last successful deploy, from the deploy record). Every command
+checks the version of what it touches:
 
-| Action | Allowed |
-|---|---|
-| Read it, show it, start a runner deploy | Yes |
-| Change a setting the definition's version knows | Yes |
-| Use a setting it does not know | No: `gapp upgrade` first |
-| Deploy from this machine | No: `gapp upgrade` first |
+| A version that is | Read it, show it, change it | Status, secrets, a runner deploy |
+|---|---|---|
+| This gapp's | Yes | Yes |
+| From `COMPATIBLE_FROM` up to this gapp | Yes, except a setting newer than the definition's version | Yes |
+| From `UPGRADES_FROM` up to `COMPATIBLE_FROM` | Show only; `gapp upgrade` first | No: upgrade first |
+| Older than `UPGRADES_FROM` | Show only; the refusal names a gapp to install first | No |
+| Newer than this gapp | No: install that gapp or later | No |
 
-So an upgrade can be available without being required. `gapp list` and
-`gapp show` say which.
+A deploy from this machine builds only with the definition's version: a
+runner installs exactly that one, and this machine's gapp must be it.
+`gapp list` and `gapp show` say where each definition stands.
 
 **Upgrading is two deliberate steps.**
 
@@ -158,17 +164,14 @@ So an upgrade can be available without being required. `gapp list` and
    deploy will change in the cloud, and anything to do by hand before or
    after. It never goes down, and only the gapp being upgraded to knows
    the way there, so it takes no version.
-2. The next deploy applies it. A deploy that would apply an upgrade is
+2. The next deploy applies it to the infrastructure. A deploy that would
+   apply an upgrade (the definition is newer than the infrastructure) is
    refused without `--upgrade`, and `--upgrade` is refused when no upgrade
-   is pending. `gapp show` and `gapp deploy --dry-run` say in advance
-   which it is.
+   is pending. `gapp show`, `gapp status` and `gapp deploy --dry-run` say
+   in advance which it is.
 
-Which earlier versions a gapp can upgrade from is that release's choice,
-and may be none. When a definition is too old, the refusal names a gapp
-to install first: install it, upgrade, and repeat.
-
-What this depends on: the way a workflow starts a gapp on a runner stays
-the same across releases, and a test holds it there.
+What this depends on: what the workflows hand gapp on a runner is part of
+what `COMPATIBLE_FROM` covers, and a test holds it there.
 
 ## Which deployment a command means
 

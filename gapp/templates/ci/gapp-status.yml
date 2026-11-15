@@ -67,10 +67,10 @@ jobs:
             echo "gapp-status: '$DEPLOYMENT' names gapp '${version:-none}', which is not a gapp version."
             exit 1
           fi
-          # These workflows hand gapp the fleet file and a command (CONTRIBUTING,
-          # "The runner hand-off"); a gapp older than the minimum reads them
-          # differently, so it is refused here, before anything is installed.
-          minimum="__GAPP_RUNNER_MIN__"
+          # These workflows work with a definition from their gapp's
+          # COMPATIBLE_FROM on (CONTRIBUTING, "gapp versions"); an older one
+          # is refused here, before anything is installed.
+          minimum="__GAPP_COMPATIBLE_FROM__"
           vkey() {
             [[ "$1" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)(rc([0-9]+))?$ ]] || return 1
             printf '%06d%06d%06d%06d' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}" "${BASH_REMATCH[5]:-999999}"
@@ -139,5 +139,6 @@ jobs:
       - name: Ask gapp
         env:
           GAPP_FLEET: ${{ github.workspace }}/fleet/gapp.yaml
+          GAPP_WORKFLOWS_VERSION: __GAPP_VERSION__
           DEPLOYMENT: ${{ inputs.deployment }}
         run: gapp ci runner status "$DEPLOYMENT"

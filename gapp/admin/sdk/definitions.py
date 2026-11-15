@@ -25,9 +25,6 @@ from gapp.admin.sdk.fleetstore import FleetUnavailable
 from gapp.admin.sdk.lookup import LookupRefusal
 from gapp.admin.sdk.settings import SettingsRefusal
 
-# The oldest definition version this gapp can bring up to its own.
-UPGRADES_FROM = "4.0.0rc13"
-
 OWN_SETTABLE = ("ref", "repo")
 
 
@@ -107,7 +104,8 @@ def add(name: str | None = None, *, project: str | None = None, repo: str | None
         if not name:
             raise Refused("A copy needs its own name: gapp add <name> --copy-of " + copy_of)
         source = deployments[lookup.find(deployments, name=copy_of).name]
-        entryfile.require_current(source, copy_of, "copy it")
+        from gapp.admin.sdk import versions
+        versions.check_definition(source, copy_of, "copy it")
         if repo:
             raise Refused("A copy is another deployment of the same repo, so it takes no --repo.")
         repo, project, ref = source.get("repo"), project or source.get("project"), ref or source.get("ref")
@@ -215,12 +213,10 @@ def show(deployment: str | None = None, *, cwd: Path | None = None) -> dict:
     own `app.json` is not read here: a deploy reads it, from the commit it
     builds, and `gapp deploy --dry-run` shows what it adds.
     """
-    where, deployments = _load()
-    name = which(deployments, deployment, cwd, "gapp show")
-    definition = deployments[name]
-    stands = entryfile.standing(definition, name)
-    if stands == "newer":
-        entryfile.require_current(definition, name, "read it")
+    from gapp.admin.sdk import loading, versions
+    loaded = loading.load_definition(deployment, cwd, "gapp show", "read it", read_only=True)
+    where, name, definition = loaded.where, loaded.name, loaded.definition
+    stands = versions.standing(definition["gapp"])
     own = _settings(definition)
     rows = []
     for key in settings_mod.SCALARS:
@@ -235,7 +231,7 @@ def show(deployment: str | None = None, *, cwd: Path | None = None) -> dict:
     return {
         "deployment": name, "id": definition.get("id"), "repo": definition.get("repo"),
         "project": definition.get("project"), "ref": definition.get("ref"), "gapp": definition.get("gapp"),
-        "this_gapp": __version__, "upgrade": "available" if stands == "older" else None,
+        "this_gapp": __version__, "upgrade": versions.UPGRADE_WORDS.get(stands),
         "settings": settings_mod.validate(own), "effective": rows, "fleet": where.describe(),
     }
 
@@ -267,11 +263,15 @@ def upgrade(deployment: str | None = None, *, cwd: Path | None = None) -> dict:
     only; then reads the deploy record, if it can, to say whether the next
     deploy needs --upgrade (`deploy_needs_upgrade`: true, false, or null
     when it could not be read)."""
+    from gapp import UPGRADES_FROM
+    from gapp.admin.sdk import versions
     where, deployments = _load()
     name = which(deployments, deployment, cwd, "gapp upgrade")
     definition = deployments[name]
-    stands = entryfile.standing(definition, name)
-    recorded = definition["gapp"]
+    recorded = definition.get("gapp")
+    if recorded is None:
+        versions.check_readable(definition, name, "upgrade it")
+    stands = versions.standing(recorded)
     if stands == "current":
         raise Refused(f"'{name}' is already on gapp {__version__}. There is nothing to upgrade.")
     if stands == "newer":
@@ -279,7 +279,7 @@ def upgrade(deployment: str | None = None, *, cwd: Path | None = None) -> dict:
             f"'{name}' was written by gapp {recorded}; this is gapp {__version__}. "
             f"A definition never goes back. Install gapp {recorded} or later."
         )
-    if entryfile.version_key(recorded) < entryfile.version_key(UPGRADES_FROM):
+    if stands == "too-old":
         raise Refused(
             f"'{name}' was written by gapp {recorded}, which gapp {__version__} cannot upgrade from "
             f"(the oldest it can is {UPGRADES_FROM}). Install gapp {UPGRADES_FROM}, run `gapp upgrade "
@@ -296,14 +296,15 @@ def upgrade(deployment: str | None = None, *, cwd: Path | None = None) -> dict:
 
 
 def _open(deployment: str | None, cwd: Path | None, command: str) -> tuple:
-    where, deployments = _load()
-    name = which(deployments, deployment, cwd, command)
-    definition = deployments[name]
-    entryfile.require_current(definition, name, "change it")
-    return where, deployments, name, definition
+    from gapp.admin.sdk import loading
+    loaded = loading.load_definition(deployment, cwd, command, "change it")
+    return loaded.where, loaded.deployments, loaded.name, loaded.definition
 
 
 def _close(where, deployments, name, definition, new_settings: dict, changes: list[dict]) -> dict:
+    from gapp.admin.sdk import versions
+    for change in changes:
+        versions.check_setting(definition, change["key"].split()[0], name)
     if changes:
         definition["settings"] = settings_mod.validate(new_settings)
         _save(where, deployments, "gapp: change " + ", ".join(c["key"] for c in changes) + f" on {name}")

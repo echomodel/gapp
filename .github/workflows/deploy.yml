@@ -65,6 +65,13 @@ on:
         required: false
         default: ''
         type: string
+      workflows-version:
+        description: >-
+          The gapp version whose workflows call this one. The gapp that
+          deploys refuses workflows older than its COMPATIBLE_FROM.
+        required: false
+        default: ''
+        type: string
 
 permissions: {}
 
@@ -167,6 +174,7 @@ jobs:
         working-directory: app
         env:
           GAPP_FLEET: ${{ github.workspace }}/fleet/gapp.yaml
+          GAPP_WORKFLOWS_VERSION: ${{ inputs.workflows-version }}
           DEPLOYMENT: ${{ inputs.deployment }}
           UPGRADE_FLAG: ${{ inputs.upgrade && '--upgrade' || '' }}
         run: gapp ci runner deploy "$DEPLOYMENT" $UPGRADE_FLAG

@@ -78,3 +78,26 @@ def test_on_a_runner_the_fleet_is_the_file_the_workflow_checked_out(monkeypatch,
     where = fleetstore.location()
     assert (where.kind, where.path) == ("local", checked_out)       # nothing is fetched, nothing pushed back
     assert fleetstore.read() == {"my-app": definition}
+
+
+# -- the workflows that started the run --
+
+
+@pytest.mark.parametrize("command", ["deploy", "status"])
+def test_workflows_older_than_this_gapps_compatible_from_are_refused_before_anything_runs(seen, monkeypatch, command):
+    import gapp
+    monkeypatch.setattr(gapp, "COMPATIBLE_FROM", "4.0.0rc15")
+    monkeypatch.setenv("GAPP_WORKFLOWS_VERSION", "4.0.0rc14")
+    out = []
+    run = ci_runner.runner_deploy if command == "deploy" else ci_runner.runner_status
+    assert run("my-app", out=out.append) == 2 and seen == []
+    assert out[0].startswith(f"gapp-{command}: refused=The workflows that started this run are gapp 4.0.0rc14's")
+    assert out[0].endswith("Bring them up to date: gapp ci init")
+
+
+@pytest.mark.parametrize("workflows", ["", "4.0.0rc15", "99.0.0"])
+def test_workflows_from_compatible_from_on_or_that_do_not_say_are_run(seen, monkeypatch, workflows):
+    import gapp
+    monkeypatch.setattr(gapp, "COMPATIBLE_FROM", "4.0.0rc15")
+    monkeypatch.setenv("GAPP_WORKFLOWS_VERSION", workflows)
+    assert ci_runner.runner_deploy("my-app", out=lambda line: None) == 0 and seen == [("deploy", "my-app", False)]
