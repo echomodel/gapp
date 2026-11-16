@@ -7,18 +7,37 @@ check them before relying on this page.
 
 ## Why gapp exists
 
-Every app needs the same plumbing around its container: a Terraform
-configuration for the service and what it uses, somewhere to keep the
-state, a script that runs a few steps before Terraform, and later a CI
-workflow and a way for that workflow to sign in to Google Cloud. Built
-once per app, those copies drift apart. Each one is used rarely, so
-nobody remembers where its pieces are or how it is wired, and nobody
-fully trusts it.
+Without it, every app repo grows its own ops: build and deploy scripts,
+a Terraform configuration, a CI workflow, and one particular security
+and deployment model. Three things go wrong.
 
-gapp is that plumbing written once and used for every app. Because every
-deployment goes through the same code, that code is exercised all the
-time, and a deploy of an app untouched for months behaves like a deploy
-of one changed today.
+**The copies drift.** Each repo's scripts and workflows are a little
+different, and each is used rarely, so nobody remembers where its pieces
+are, how it is wired, or which version of what last ran it. Redeploying
+an app untouched for months means finding all of that again, with no
+confidence it is safe.
+
+**The repo can't be a product.** An app meant for others to contribute
+to and run can't hold its operator's project IDs, domains, environment
+values, secrets or security choices. Kept out of the repo, they end up
+scattered, so there is never a "go here and run this", for its author
+or for anyone else.
+
+**Growing up means switching systems.** An app starts local, then
+earns a CI pipeline, then a server or service to run that pipeline,
+each one more thing to set up, move, and remember. Apps end up on
+different systems depending on when they were built, and nobody is sure
+which used what.
+
+gapp is that ops layer written once and kept outside the app. The repo
+holds only the app. Every operator choice lives in the fleet, one file
+or git repo, which the same commands read whether a deploy runs from a
+laptop or a GitHub Actions runner, so moving an app from local to CI
+changes nothing about how it is deployed. Every deployment goes through
+the same code, so that code is exercised all the time, and a deploy of
+an app untouched for months behaves like a deploy of one changed today.
+Starting needs only the CLI; there is no CI server to stand up, and
+adding the hundredth app is the same as adding the first.
 
 ## What gapp adds, strongest first
 
