@@ -27,7 +27,7 @@ of one changed today.
 | High | **No drift.** Every app is built, deployed and laid out the same way, by one tool, with no per-app scripts | Within what gapp models today: one web service per deployment (below) |
 | High | **No infrastructure code to write or keep.** The service, its data bucket, secrets, service account and access, and domain come from named settings | gapp's choices, not yours: what the settings can express is what you get |
 | High | **One CI setup for every app.** GitHub becomes the control panel for who can deploy and what ran | Repos on GitHub only |
-| High | **Come back with no context.** One CLI finds and redeploys anything you run, and rebuilds a lost fleet from the projects | Records exist only for deployments gapp has deployed |
+| High | **Come back with no context.** One CLI finds and redeploys anything you run. Lose your list of deployments and gapp finds its projects by their label and rebuilds the list from records kept in each project | Records exist only for deployments gapp has deployed |
 | High | **Apps stay products, not one operator's setup.** An app repo holds no deploy files, domains, projects or secrets, so anyone can run it in their own environment with their own tooling and their own rules on security and operations | Matters most for apps meant to be shared; an app only you will ever run gains less |
 | Medium | **A record in each project** of what was deployed, from which commit, by whom and from where | No command shows all of it yet |
 | Low | **Every command is an MCP tool,** with output written for agents | Any CLI can be wrapped |
@@ -76,8 +76,11 @@ per-app setup: without it, every app needs its own workflow file, its
 own way of signing in to Google Cloud, and its own copy of its settings,
 and those drift exactly as the Terraform copies do.
 
-With gapp, one fleet repo holds one deploy workflow for every app, and
-each project trusts that repo once (`gapp ci projects connect`). Then:
+With gapp, one fleet repo holds one deploy workflow for every app in
+every project. The only step per project is trust: each project agrees
+once to let that repo's runners deploy to it (`gapp ci projects
+connect`). That step is per project on purpose, so each project decides
+for itself who can deploy into it. Then:
 
 - **Access is managed on GitHub:** whoever can run workflows in the fleet
   repo can deploy, and nobody else. No Google Cloud keys are stored
@@ -191,8 +194,10 @@ None of these replaces gapp, and some could take over a piece of it:
   convention.
 - Find its projects by a label, and rebuild its list of deployments from
   records kept in each project.
-- Let one GitHub Actions setup per project deploy every app, with no
-  stored keys and no Google Cloud login on the caller's machine.
+- Deploy every app in every project from one GitHub Actions setup, with
+  no stored keys and no Google Cloud login on the caller's machine. The
+  only per-project step is trust, kept per project on purpose so each
+  project controls who can deploy into it.
 - Generate or check every secret a deployment reads before deploying it.
 - Mount a data bucket into every deployment by default.
 - Do all of this as a local, free, open-source CLI with no hosted control
