@@ -46,7 +46,7 @@ adding the hundredth app is the same as adding the first.
 | High | **No drift.** Every app is built, deployed and laid out the same way, by one tool, with no per-app scripts | Within what gapp models today: one web service per deployment (below) |
 | High | **No infrastructure code to write or keep.** The service, its data bucket, secrets, service account and access, and domain come from named settings | gapp's choices, not yours: what the settings can express is what you get |
 | High | **One CI setup for every app.** GitHub becomes the control panel for who can deploy and what ran | Repos on GitHub only |
-| High | **Come back with no context.** One CLI finds and redeploys anything you run. Lose your list of deployments and gapp finds its projects by their label and rebuilds the list from records kept in each project | Records exist only for deployments gapp has deployed |
+| High | **Come back with no context.** One CLI finds and redeploys anything you run, and every deployment keeps its configuration and data in the same predictable places. Lose your list of deployments and gapp finds its projects by their label and rebuilds the list from records kept in each project | Records exist only for deployments gapp has deployed; data in an outside store is found through the variable or secret that points to it |
 | High | **Apps stay products, not one operator's setup.** An app repo holds no deploy files, domains, projects or secrets, so anyone can run it in their own environment with their own tooling and their own rules on security and operations | Matters most for apps meant to be shared; an app only you will ever run gains less |
 | Medium | **A record in each project** of what was deployed, from which commit, by whom and from where | No command shows all of it yet |
 | Low | **Every command is an MCP tool,** with output written for agents | Any CLI can be wrapped |
@@ -117,6 +117,30 @@ lost, `gapp deployments scan` finds gapp's projects by their label, reads
 the deploy record each deployment left in its project, and prints the
 `gapp add` commands that bring every deployment back with its settings.
 If a project's label is gone, naming the project still works.
+
+gapp asks nothing of an app beyond what any container already does. It
+takes the ordinary ways a containerized app keeps state and settings,
+and backs each one with something durable that is named and placed the
+same way for every deployment:
+
+- **Files written to a local path** (the usual way a container keeps
+  state) land in the deployment's own bucket: the bucket is mounted into
+  the container, and the variable the app reads its path from points
+  there. They survive restarts and redeploys and can be found, backed up
+  or moved without knowing anything about the app.
+- **Settings read from environment variables** are kept in the
+  deployment's definition.
+- **Secrets read from environment variables** are kept in Secret
+  Manager, under names that start with the deployment's and carry its
+  label.
+
+An app that keeps data in an outside store reaches it the same way,
+through a variable or a secret, so even that store is named in the
+definition.
+
+So months later, operating, updating, backing up, migrating or retiring
+a deployment starts from the same places for every app, without
+remembering how that one was set up.
 
 ### Apps stay products
 
