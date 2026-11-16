@@ -1,9 +1,16 @@
 # gapp compared
 
-What gapp adds, how strong each reason is, and what else exists for
-deploying HTTP apps to Google Cloud Run. Facts about other tools were
-checked in November 2026 and link to their sources; tools change, so
-check them before relying on this page.
+**In one paragraph:** gapp lets you deploy, redeploy and move apps
+without thinking about it, securely and the same way every time, while
+asking nothing of the apps themselves. An app needs no gapp files, no
+particular framework or design, and nothing that ties it to how gapp
+runs it: it stays an ordinary container that anyone could run some
+other way.
+
+The rest of this page says what gapp adds, how strong each reason is,
+and what else exists for deploying HTTP apps to Google Cloud Run. Facts
+about other tools were checked in November 2026 and link to their
+sources; tools change, so check them before relying on this page.
 
 ## Why gapp exists
 
