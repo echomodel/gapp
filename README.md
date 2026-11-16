@@ -30,6 +30,9 @@ adds what that command leaves to you:
 An app's repo never names gapp, a project or Google Cloud, so anyone can
 deploy the same repo to their own project without changing it.
 
+[gapp compared](docs/COMPARED.md) says why gapp exists, how strong each of
+these reasons is, and what else deploys to Cloud Run.
+
 ## Install
 
 ```bash
