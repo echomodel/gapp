@@ -986,6 +986,13 @@ For development, use an editable install: `pipx install -e .`
   deploy, with Cloud Run's error, after the service is updated. One case
   costs more: `--replace-domain` to an unverified domain takes the old
   mapping down before the new one is refused.
+- **Creating the domain's DNS record during a deploy.** It would need
+  the project's deploy account to write records in the DNS zone, and
+  zone access can't be narrowed to one record: anyone who can run the
+  fleet's workflows could then change any record in the zone, mail and
+  domain verification included, for every app under that domain. The
+  record is added once per hostname by whoever runs the domain's DNS;
+  `gapp status` names it.
 - **A list of repo owners runners may deploy** (the repository variable
   `GAPP_ALLOWED_SOURCES`, checked by the deploy workflow). It guarded a
   workflow that wrote definitions with a token that could not change
